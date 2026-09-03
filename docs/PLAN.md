@@ -143,7 +143,8 @@ RLS everywhere. Service role only inside route handlers.
 interface Ruleset {
   id: 'karachi' | 'hongkong' | 'british' | ...
   tiles(): TileSetConfig            // suits, honours, flowers, seasons, jokers
-  dealing(): DealConfig             // wall, dead wall, dealer extra tile
+  shape: { handSize: 13 | 16, sets: 4 | 5 }   // Taiwanese is 16 tiles, five sets + pair
+  dealing(): DealConfig             // wall, dead wall, dealer extra tile, dealer retention
   handSchedule(game): HandSpec      // Karachi: per round + hand index (goulash, honour, no-honour, big)
   preplay(game): PreplayStep[]      // Karachi West: three-tile exchange R → F → L
   patterns: HandPattern[]           // declarative hand definitions (T&M-style), filtered by HandSpec
@@ -165,10 +166,30 @@ interprets. That is what makes Western special hands, Karachi round rules and
 HK standard hands live in one engine, and what lets the coach explain "you
 are two tiles from Pinkys".
 
-Karachi ships first as the "Karachi official" ruleset. The circles who play
-it also play something else, likely Hong Kong (Cantonese) rules, so Hong
-Kong is second. Western/British patterns arrive almost free with Karachi's
-South and North rounds and become a third selectable ruleset once scored. British/Western third as it shares
+**What varies between rulesets is more than the hand list.** Taiwanese play
+is 16-tile (five sets + pair), deals differently, makes flowers mandatory,
+scores in flat tai, and lets East keep the deal on a win. American adds
+jokers and a Charleston. So the engine parameterises hand size, set count,
+dealing, bonus tiles, claim rules, round schedule, hand patterns, and
+settlement, and never assumes 13 tiles or four sets anywhere. Cheap to do
+from day one, expensive to retrofit.
+
+Ruleset roadmap:
+
+1. **Karachi** ("Karachi official"): the reason the product exists, and the
+   only one with a written source we control.
+2. **Taiwanese 16-tile**: what Dubai's clubs and platforms default to, and
+   the group is Dubai-heavy. Simple flat scoring, quick to teach.
+3. **Hong Kong**: the most widely known Chinese-style ruleset globally;
+   cheap once Taiwanese exists.
+4. **Western/British** (Thompson–Maloney): arrives almost free with Karachi's
+   South and North rounds; needs its own scoring table.
+5. **American** (NMJL card, jokers, Charleston): out of scope. A different
+   product with an annual licensing problem.
+
+Which one a given group actually plays is settled at the table, not by
+inference. The room picker makes switching a one-tap choice, so being wrong
+about the default costs nothing. British/Western third as it shares
 Karachi's ancestry. American is out of scope.
 
 ---
