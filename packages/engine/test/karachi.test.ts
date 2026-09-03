@@ -30,8 +30,11 @@ describe('Karachi East', () => {
     const ids = wins('E', hand(['m1', 'm1', 'm1', 'm4', 'm4', 'm4', 'm7', 'm7', 'm7', 'DR', 'DR', 'DR', 'WE', 'WE']));
     expect(ids).toContain('karachi.east.pungs.clean.pungPair');
   });
-  it('rejects two chows in one suit and one in another', () => {
-    expect(wins('E', hand(['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 's7', 's8', 's9', 'WE', 'WS', 'WW', 'WN', 'WN']))).toHaveLength(0);
+  it('does not read two chows in one suit as the general three-chow form', () => {
+    const ids = wins('E', hand(['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 's7', 's8', 's9', 'WE', 'WS', 'WW', 'WN', 'WN']));
+    expect(ids.filter((id) => id.startsWith('karachi.east.chows.'))).toHaveLength(0);
+    // ...but it is a legal Karachi hand: a mixed 1-9 run plus NEWS with a wind paired is Khalida's Hand
+    expect(ids).toContain('karachi.east.khalidas');
   });
   it('rejects a mix of chows and pungs', () => {
     expect(wins('E', hand(['m1', 'm2', 'm3', 'p4', 'p4', 'p4', 's7', 's8', 's9', 'WE', 'WS', 'WW', 'WN', 'WN']))).toHaveLength(0);
@@ -44,8 +47,9 @@ describe('Karachi East', () => {
     const wrongPair = hand(['m1', 'm2', 'm3', 'p1', 'p2', 'p3', 's1', 's2', 's3', 'DW', 'DW', 'DW', 'DR', 'DR']);
     expect(wins('E', wrongPair)).not.toContain('karachi.east.appleBlossom');
   });
-  it('accepts Pinkys: three four-tile runs one per suit and an honour pair', () => {
-    expect(wins('E', hand(['m1', 'm2', 'm3', 'm4', 'p5', 'p6', 'p7', 'p8', 's2', 's3', 's4', 's5', 'DG', 'DG']))).toContain('karachi.east.pinkys');
+  it("requires Pinky's Hand to use the same four-tile run in every suit", () => {
+    expect(wins('E', hand(['m1', 'm2', 'm3', 'm4', 'p5', 'p6', 'p7', 'p8', 's2', 's3', 's4', 's5', 'WE', 'WE']))).not.toContain('karachi.east.pinkys');
+    expect(wins('E', hand(['m1', 'm2', 'm3', 'm4', 'p1', 'p2', 'p3', 'p4', 's1', 's2', 's3', 's4', 'WE', 'WE']))).toContain('karachi.east.pinkys');
   });
 });
 
@@ -72,7 +76,7 @@ describe('Karachi goulash', () => {
 
 describe('Karachi South', () => {
   it('accepts four suit pungs and a pair', () => {
-    expect(wins('S', hand(['m1', 'm1', 'm1', 'p4', 'p4', 'p4', 's7', 's7', 's7', 'm9', 'm9', 'm9', 's2', 's2']))).toContain('karachi.south.pungs');
+    expect(wins('S', hand(['m1', 'm1', 'm1', 'p4', 'p4', 'p4', 's7', 's7', 's7', 'm9', 'm9', 'm9', 's2', 's2']))).toContain('karachi.south.anyDamnHand');
   });
   it('rejects any honour tile', () => {
     expect(wins('S', hand(['m1', 'm1', 'm1', 'p4', 'p4', 'p4', 's7', 's7', 's7', 'm9', 'm9', 'm9', 'WE', 'WE']))).toHaveLength(0);
@@ -81,21 +85,23 @@ describe('Karachi South', () => {
     expect(wins('S', hand(['m1', 'p1', 's1', 'm4', 'p4', 's4', 'm7', 'p7', 's7', 'm9', 'p9', 's9', 'p2', 'p2']))).toContain('karachi.south.crochet');
     expect(wins('S', hand(['m2', 'm2', 'p3', 'p3', 's4', 's4', 'm5', 'm5', 'p6', 'p6', 's7', 's7', 'm8', 'm8']))).toContain('karachi.south.dirtyPairs');
   });
-  it('limits Knitting to two suits', () => {
-    expect(wins('S', hand(['m2', 'm2', 'p3', 'p3', 'm4', 'm4', 'm5', 'm5', 'p6', 'p6', 'p9', 'p9', 'm8', 'm8']))).toContain('karachi.south.knitting');
-    expect(wins('S', hand(['m2', 'm2', 'p3', 'p3', 's4', 's4', 'm5', 'm5', 'p6', 'p6', 'p9', 'p9', 'm8', 'm8']))).not.toContain('karachi.south.knitting');
+  it('limits Knitting to knitted pairs in two suits', () => {
+    expect(wins('S', hand(['m1', 'p1', 'm2', 'p2', 'm4', 'p4', 'm5', 'p5', 'm7', 'p7', 'm8', 'p8', 'm9', 'p9']))).toContain('karachi.south.knitting');
+    expect(wins('S', hand(['m1', 'p1', 'm2', 'p2', 'm4', 's4', 'm5', 'p5', 'm7', 'p7', 'm8', 'p8', 'm9', 'p9']))).not.toContain('karachi.south.knitting');
+    // same-kind pairs are Dirty Pairs, not Knitting
+    expect(wins('S', hand(['m2', 'm2', 'p3', 'p3', 'm4', 'm4', 'm5', 'm5', 'p6', 'p6', 'p9', 'p9', 'm8', 'm8']))).not.toContain('karachi.south.knitting');
   });
 });
 
 describe('Karachi North', () => {
   it('accepts Gates of Heaven (Wriggly Snake v2)', () => {
-    expect(wins('N', hand(['s1', 's1', 's1', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9', 's9', 's9', 's5']))).toContain('karachi.north.wrigglySnakeV2');
+    expect(wins('N', hand(['s1', 's1', 's1', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9', 's9', 's9', 's5']))).toContain('karachi.north.gatesOfHeaven');
   });
   it("accepts Gertie's Garter", () => {
     expect(wins('N', hand(['m1', 'm2', 'm3', 'm4', 'm5', 'm6', 'm7', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7']))).toContain('karachi.north.gertiesGarter');
   });
   it('accepts Numbers in Parallel', () => {
-    expect(wins('N', hand(['m5', 'm5', 'm5', 'p5', 'p5', 'p5', 's5', 's5', 's5', 'WN', 'WN', 'WN', 'DG', 'DG']))).toContain('karachi.north.numberPungs.windPung');
+    expect(wins('N', hand(['m5', 'm5', 'm5', 'p5', 'p5', 'p5', 's5', 's5', 's5', 'WN', 'WN', 'WN', 'DG', 'DG']))).toContain('karachi.north.numbersPungs.pungPair');
   });
   it('accepts Monty Unique Wonders', () => {
     expect(wins('N', hand(['m1', 'm9', 'p1', 'p9', 's1', 's9', 'WE', 'WS', 'WW', 'WN', 'DR', 'DG', 'DW', 'm1']))).toContain('karachi.north.montyUniqueWonders');

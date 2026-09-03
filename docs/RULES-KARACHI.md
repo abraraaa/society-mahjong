@@ -1,234 +1,160 @@
-# Karachi Style Mahjong — Working Rules Spec
+# Karachi Mahjong — Rules Spec
 
-Primary source: "Karachi Style Mahjong Rules" by Naila Baig-Ansari, Mahjong
-Mates, 21 Oct 2025 (https://mahjongmates.com/karachi-style-mahjong-rules/),
-read from the PDF capture dated 3 Sep 2026. Teacher credited: Mrs Mumtaz
-"Monty" Kadri, playing in Karachi for over fifty years.
+The first ruleset the engine implements, and the design muse for the product.
+13-tile play whose rules change by wind round, with chows only from the wall.
 
-Legend: ✅ confirmed by the article · ⚠ unconfirmed, needs the mapping PDF,
-Thompson–Maloney, or your table.
+## Sources and their standing
 
-## Lineage and character
+1. **Legality and round structure**: Naila Baig-Ansari, *Karachi Style Mahjong Rules*, Mahjong Mates, Oct 2025 (captured as PDF).
+2. **Names**: *Karachi ↔ Thompson & Maloney Hand Mapping*, Mahjong Mates, Mar 2026 (PDF).
+3. **Hand constructions**: *Special Hands Guide v4.2*, Mahjong Mates, Jul 2026 (captured as PDF, 3 Sep 2026). Each hand is given as one 14-tile example; the definitions below generalise those examples and say so where the generalisation is a judgement.
+4. **Scoring**: the Mahjong Mates Karachi score tracker, screenshots 3 Sep 2026.
+5. **Thompson & Maloney**, *The Mah Jong Player's Companion* (1997): the Western originals of many hands; not captured, used only through 2 and 3.
+6. Your table's practice, where the above leave gaps.
 
-- ✅ Oral tradition, "house rules on steroids". Evolved from a blend of Mumbai
-  and Western/British-style play. Nothing written down until this article.
-- ✅ Many hands overlap with Thompson & Maloney, *The Mahjong Player's
-  Companion* (T&M), under different names. T&M is the reference for hand
-  definitions the article does not spell out.
-- ✅ **The rules shift by wind round.** Each of the four rounds has its own
-  hand structure. This is the defining architectural fact for the engine.
+Guide notation: b = bamboo, d = dots, c = characters; E S W N winds; R G Wh dragons; "paired" marks the tile that is doubled.
 
-## Tiles
+## Lineage
 
-- ✅ Three suits 1–9 ×4 (108), four winds ×4 (16), three dragons ×4 (12).
-- ⚠ Flowers and seasons. Western play uses them; the article never mentions
-  them. Assume present but confirm.
-- ⚠ Jokers: assume none.
+A blend of Mumbai style and Western (British/Australian) play, taught orally
+in Karachi since at least the 1970s (Mrs Mumtaz "Monty" Kadri). First
+written down in October 2025. Several hands carry the names of the women
+who play them.
 
-## Claims
+## Tiles and seating
 
-- ✅ **Chow: never from a discard**, not even from the player on your left.
-  Chows are built only from self-drawn tiles. "My least favourite house
-  rule", and the one that makes the game deliberate and defensive.
-- ⚠ Pung: claimable from any player's discard (standard, assumed).
-- ⚠ Kong: claimable from any discard; concealed kongs allowed; replacement
-  tile from the end of the wall (assumed). Kongs are referenced in the
-  goulash conditions, so kongs exist.
-- ⚠ Mahjong on a discard: assumed allowed for any hand. Whether a "concealed
-  except last" rule applies to big hands (as in Western Wriggly Snake) is
-  unknown.
-- ⚠ Claim priority: mahjong > pung/kong. Chow priority is moot.
+- Suits 1–9 ×4 in bamboo, dots and characters; four winds ×4; three dragons ×4.
+- ⚠ Flowers and seasons: the score tracker accounts for the winner's own
+  flower and own season, so they are in play at least at the tracker's
+  tables. Assumed present.
+- Four players; seat winds rotate from the dealer. ⚠ Rotation on a win and
+  draw handling are not documented.
 
-## The four rounds
+## Round structure
 
-### East round — the honour hand ✅
+| Round | Hands | Scoring |
+|---|---|---|
+| East | Hand 1 is a **goulash**; then the **honour hand**: three chows or three pungs (one suit, or one per suit) plus five honours | Flat stake (goulash: calculator) |
+| South | **No honours.** Any four sets and a pair with no winds or dragons, or a named South hand | Flat stake |
+| West | Every hand a goulash, with a three-tile exchange right → across → left before play | Calculator |
+| North | Big hands only: the named North hands | Flat stake |
 
-- **Hand 1 is a goulash** (warm-up). Only pungs allowed. To use honours, two
-  of the three goulash conditions must be met (below).
-  ⚠ Whether East's goulash includes the three-tile exchange used in West.
-  ⚠ Goulash structure: four pungs/kongs + pair, presumably any suits.
-- **Remaining East hands** are 14 tiles built as:
-  - three chows + five honours, **or**
-  - three pungs + five honours.
-  - The three sets are either **all one suit** ("clean") **or one in each
-    suit**.
-  - **Five honours** = N, E, W, S with one wind paired, **or** a pung of
-    honours + a pair of honours.
-  - ⚠ Mixed chow/pung sets assumed illegal. ⚠ Whether kongs count as pungs
-    here. ⚠ Whether dragons can be the pair in the NEWS form.
+Five honours means either NEWS with one wind paired, or an honour pung plus an honour pair. The guide's North examples also use NEWS plus a fifth honour of any kind; the engine accepts that form where the guide shows it.
 
-### South round — no honours ✅
+**Chows never come from a discard**, in any round. Pungs and kongs may be claimed from any discard; the winning tile may be claimed.
 
-- No honour tiles in the hand.
-- Standard structure: **four pungs + a pair**.
-- Some **Western special hands** allowed: **Knitting, Crochet, Crazy Chows**
-  (T&M names). Crazy Chows = four mixed chows and a mixed pair (per Western
-  references). ⚠ Exact T&M definitions of Knitting and Crochet needed.
-- **Mixed chows** allowed (sequences across suits, which Chinese styles do
-  not recognise).
-- ⚠ Whether plain four-chows-plus-pair is allowed, or only via Crazy Chows.
+**Goulash**: four pungs or kongs and a pair. Honour pungs are allowed only when two of these hold: a dragon pung, a pung of the round wind, a pung of your own wind. ⚠ Whether the East-round goulash also has the West-round tile exchange is not stated.
 
-### West round — all goulash ✅
+## Catalogue (engine ids in `packages/engine/src/rulesets/karachi/patterns.ts`)
 
-- Every hand is a Karachi goulash hand (pungs only, honour restriction).
-- Before play, **everyone exchanges three tiles**, in order:
-  **Right → Front (opposite) → Left**.
-- ⚠ Blind or face-down exchange; whether you may pass tiles you received.
+Every example below is a golden fixture in `packages/engine/test/karachi-catalogue.test.ts`, together with a one-tile mutation that must fail.
 
-### North round — big hands only ✅
+### East
 
-- Only "big" hands: long 1–9 sequences and other larger, rarer hands. The
-  full list is in the hand catalogue below.
+| Hand | Guide example | Definition in the engine |
+|---|---|---|
+| Chow + 5 Honors | 123b 123d 123c EEE RR | The general East chow form (article) |
+| Apple Blossom | 123b 123d 123c WhWhWh GG | 123 in each suit, or three mixed chows (Sloper on T&M), white dragon pung, green dragon pair |
+| Windy Wonders | 123b 123d 123c EEE SS | Chows one per suit, wind pung, wind pair |
+| Windyfly | 111b 444d 777c E W N S(paired) | Pungs one per suit, NEWS with a wind paired (T&M Windvane) |
+| Windy Chows | 456b 234d 678c E S N W(paired) | Chows one per suit, NEWS with a wind paired (T&M Windy Chow) |
+| Hovering Angel | 456b 234d 123c NNN RR | Chows one per suit, wind pung, dragon pair (T&M Hovering Angels) |
+| The Professors | 678d 456b 234c R G Wh SS | Chows one per suit, one of each dragon, wind pair. ⚠ Sloper reports the pair as own wind; not enforced |
+| Pinky's Hand | 1234b 1234d 1234c WW | The same four-tile run in every suit, wind pair (T&M Big Robert: 4567 ×3 + EE) |
+| Monty | 1234b 1234d 1234c RR | As Pinky's with a dragon pair |
+| Khalida's Hand | 1d 2b 3d 4d 5b 6c 7c 8b 9c E S W N N | A 1–9 run with each tile from any suit, NEWS with a wind paired |
+| Naila's Hand | 123b 345b 123d 345c NN | ⚠ Generalised as 1-2-3 and 3-4-5 in one suit, 1-2-3 in a second, 3-4-5 in the third, wind pair |
+| Dragonfly | R G Wh 333b 555d 777c 44b | One of each dragon, a pung in each suit, a pair from any suit |
 
-## Hand catalogue ✅ (mapping) / ⚠ (definitions)
+### South
 
-Source: "Thompson & Maloney → Karachi Style Hand Mapping" PDF (Mahjong Mates,
-March 2026): 27 T&M hands with Karachi names, grouped by round. Page numbers
-refer to *The Mahjong Player's Companion*. Definitions come from Western
-and Australian references that describe the same named hands; T&M's own
-wording may differ, so every definition is ⚠ until checked against the
-book pages listed. "?" means no definition found yet.
+| Hand | Guide example | Definition in the engine |
+|---|---|---|
+| Any Damn Hand | 123b 456b 123d 456d 77c | Any four sets and a pair, no honours (the article's "mixed chows allowed") |
+| Dirty Pairs | 1b1b 3d3d 5c5c 7b7b 2d2d 4c4c 6b6b | Seven pairs of suit tiles. ⚠ The mapping says no terminals; the example has 1b. Terminals allowed |
+| Dirty Gertie's Garter | 1234567b 1234567d | 1–7 in two suits |
+| Knitting | 1b1d 2b2d 4b4d 5b5d 7b7d 8b8d 9b9d | Seven knitted pairs (same number, two suits), the same two suits throughout |
+| Crochet | 1b1d1c 4b4d4c 7b7d7c 7b7d7c 4b4b | Four knitted sets and a pair (T&M Triple Knitting) |
+| Crazy Chows | 2b3d4c 4b5d6c 5b6d7c 7b8d9c 3b 7d | Four mixed chows plus two suit tiles. ⚠ The example's tail 3b 7d is not a pair of any kind |
 
-### East (7 hands)
+### North
 
-| T&M hand | Page | Karachi name | Definition |
-|---|---|---|---|
-| Apple Blossom | 19 | Apple Blossom | Three mixed chows (consecutive numbers, one tile per suit, any suit order), white dragon pung, green dragon pair. ✅ per Sloper's T&M discussion |
-| Big Robert | 14 | Pinkys | Three four-tile chows, one in each suit, plus a pair of winds or dragons |
-| Dragonfly | 31 | Dragonfly | One of each dragon, a pung/kong in each of the three suits, plus a pair from any suit |
-| Hovering Angels | 17 | Chow + 5 Honors | One chow in each suit, pung of own wind, pair of white dragons; concealed except last |
-| The Professors | 19 | The Professors | ? |
-| Windy Chow | 18 | Windy Chows | One chow in each suit, E S W N, plus one extra wind (making a pair) |
-| Windyvane | 28 | Windyfly | ? |
+| Hand | Guide example | Definition in the engine |
+|---|---|---|
+| Laila's Hand | 111d 999b R G Wh N E W S(paired) | Pung of 1s in one suit, pung of 9s in another, one of each dragon, NEWS with a wind paired |
+| Easy Virgin | 123b 111b R G Wh E S N W(paired) | 1-2-3 and a pung of 1s in the same suit, one of each dragon, NEWS with a wind paired |
+| 1-9 plus 5 Honors | 1–9b E S W N R | A 1–9 run in one suit, NEWS, any fifth honour (T&M Wriggly Snake) |
+| 1-7 plus 7 Honors | 1–7b E S W N R G Wh | A 1–7 run in one suit and all seven honours |
+| Numbers Pungs | 555b 555d 555c E S W N R | Pungs of one number in all three suits, NEWS, any fifth honour. The Western form (EEE SS + three pungs) is also accepted |
+| Sind Club Hand | R G Wh E S W N 2b 5b 5d 1c 8c 7c 1c | A fixed hand; the pair is 1c |
+| Monty Wriggly Snake v2 | 111c 999c 234c 678c 5c(paired) | Gates of Heaven: one suit, pung of 1s, pung of 9s, 2–8, one of 2–8 paired |
+| Wriggly Snake v1 | 111b 999d 234c 678c 5c(paired) | Confused Gates: pung of 1s, pung of 9s, 2–8 in the third suit with one paired |
+| Four Blessings | EEE SSS WWW NNN RR | Four wind pungs and any pair |
+| All Honor Hand | 111b 999d EEE NNN RR | Pungs of terminals and honours, terminal-or-honour pair |
+| Gertie's Garter | 1234567b 1234567d | 1–7 in two suits |
+| Green Jade | GGG 111b 444b 777b 88b | Green dragon pung, three bamboo pungs, bamboo pair (the guide lists "Ruby Jade" as its Karachi alias) |
+| Imperial Jade | GGG 222b 333b 444b 66b | Green tiles only |
+| Royal Coral | RRR 333c 555c 888c 99c | Red dragon pung, three character pungs, character pair (T&M Red Coral) |
+| Royal Ruby | RRR 111b 555b 777b 99b | Red dragon pung, red bamboo (1,5,7,9) pungs and pair |
+| Ruby Jade | RRR GGG 111b 222b 66b | Red and green dragon pungs, two bamboo pungs, bamboo pair |
+| Lilly of the Valley (Monty ver) | WhWhWh 222d 666d 999d 44d | T&M White Opal: white dragon pung, three dots pungs, dots pair |
+| Lillypilly | GGG WhWh 444d 666d 999d | Green dragon pung, white dragon pair, three dots pungs |
+| Run, Pung & Pair | 1–9d 888d 22d | One suit |
+| Monty Unique Wonders | 1b 1d 9d 1c 9c E S W N R G Wh 9b(paired) | Thirteen orphans |
 
-Note how Karachi's stated East structure ("three chows or three pungs, clean
-or one per suit, plus five honours") is the generalisation of Windy Chows
-and Hovering Angels. The named hands are specific instances; the engine
-should model East as the general pattern with the named hands as scored
-sub-patterns.
+## Scoring (from the Karachi score tracker)
 
-### South (4 hands)
+**East, South and North: a flat stake per round.** Every loser pays the winner. East pays and receives double, whichever side of the win it is on. Defaults, editable per table:
 
-| T&M hand | Page | Karachi name | Definition |
-|---|---|---|---|
-| Crazy Chows | 16 | Crazy Chow | Four mixed chows plus a mixed pair. Mixed chows do not need a consistent suit order (Sloper on T&M) |
-| Knitting | 20 | Knitting | Seven pairs in any two suits, no honours (Western); some sources define knitted pairs (same number, one tile from each of two suits). ⚠ which |
-| Seven Twins | 22 | Dirty Pairs (no terminals or honours) | Seven pairs, simples only (2–8), suits mixed |
-| Triple Knitting | 20 | Crochet | Four sets of three tiles of the same number, one from each suit, plus a pair; no honours |
+| Round | Regular seat | East seat |
+|---|---|---|
+| East | 2,000 | 4,000 |
+| South | 1,000 | 2,000 |
+| North | 4,000 | 8,000 |
 
-Plus the standard South hand: four pungs and a pair, no honours, mixed chows
-allowed. ⚠ Whether four plain chows + pair (not Crazy) is legal in South.
+Example from the tracker: East wins an East-round hand, each of the three others pays 4,000, the winner takes 12,000. Named hands do not change the amount; they decide whether the hand is legal at all.
 
-### North (16 hands)
+⚠ The tracker asks for the winner's own-flower / own-season count (0, 1, 2: "own flower or own season", "both"). Its effect on the payout is not visible in the screenshots. Modelled as a multiplier table defaulting to ×1, ×2, ×4 until checked.
 
-| T&M hand | Page | Karachi name | Definition |
-|---|---|---|---|
-| All Honor Hand | 44 | All Honor Hand | Four pungs/kongs and a pair, all winds and dragons |
-| Confused Gates | 9 | Wriggly Snake v1 | Pung of 1s in one suit, run 2–8 in a second suit, pung of 9s in the third; concealed |
-| Four Blessings | 30 | Four Blessing | Four pungs of winds plus any pair |
-| Gates of Heaven | 9 | Wriggly Snake v2 | One suit: pung of 1s, pung of 9s, run 2–8, with one of 2–8 paired |
-| Gerties Garter | 14 | Gerties Garter | Run 1–7 in one suit and run 1–7 in another; no honours |
-| Green Jade | 35 | Green Jade | Pungs/kongs and/or chows of green bamboos (2,3,4,6,8) with a pair of green dragons |
-| Imperial Jade | 36 | Imperial Jade | Pungs/kongs of green dragons and green bamboos, at most one chow, pair of green bamboos |
-| Lilly Pilly | 36 | Lilly Pilly | ? |
-| Numbers in Parallel | 43 | Number Pungs | Pungs of the same number in all three suits, plus a pung of winds and a pair of dragons (or the reverse) |
-| Royal Coral | 35 | Royal Coral | Pungs/kongs (chows allowed) of 2,3,4,6,8 characters and red dragons; pair from the same tiles |
-| Royal Ruby | 37 | Royal Ruby | Pungs/kongs of red dragons and red bamboos (1,5,7,9); pair of red bamboos |
-| Ruby Jade | 37 | Ruby Jade | Pungs/kongs of red dragons, green dragons, red bamboos and green bamboos; pair of any bamboos |
-| Run, Pung, Pair | 9 | Run, Pung, Pair | One suit: run 1–9, a pung, and a pair; no honours |
-| Unique Wonder | 44 | Monty Unique Wonders (13 Orphans) | One each of the 1s and 9s of every suit, one of each wind, one of each dragon, any of them paired |
-| White Opal | 35 | Lilly of the Valley (Monty ver) | ? (Monty's version contains a pair of dragons) |
-| Wriggly Snake | 27 | 1-9 plus 5 Honors | Run 1–9 in one suit plus E S W N with one wind paired; concealed (Western). Karachi name suggests any "five honours" form qualifies |
+**False mahjong**: the offender pays 4,000 to each other player (shown the same in East and South).
 
-### Book pages to capture
+**West round, and the opening goulash of East: the Cantonese-style calculation**, as the tracker's West form lays it out.
 
-To finish the catalogue and get T&M's exact wording and values, capture
-these pages of *The Mahjong Player's Companion*: 9, 14, 16, 17, 18, 19, 20,
-22, 27, 28, 30, 31, 35, 36, 37, 43, 44. Also the book's scoring pages, which
-the Karachi values are presumably based on.
+Base points:
 
-## Goulash conditions ✅
+| Item | Points |
+|---|---|
+| Mahjong | 20 |
+| Pung, basic (2–8): revealed / concealed | 2 / 4 |
+| Pung, terminal or honour: revealed / concealed | 4 / 8 |
+| Kong, basic: revealed / concealed | 8 / 16 |
+| Kong, terminal or honour: revealed / concealed | 16 / 32 |
+| Pair of dragons, of own wind, of round wind, of terminals | 2 each |
+| Each flower or season | 4 ⚠ (not shown in the tracker) |
 
-To use honour pungs (pungs or kongs of winds or dragons) in a goulash hand,
-you must meet **any two** of:
+Doublers, each doubling the base:
 
-1. A pung/kong of any dragon
-2. A pung/kong of the wind of the round
-3. A pung/kong of your own (seat) wind
+| Doubler | Doubles |
+|---|---|
+| All honour pungs | 3 |
+| Three or more kongs | 2 |
+| All three dragon pungs | 2 |
+| All four wind pungs | 2 |
+| One suit with honours | 1 |
+| One suit, no honours | 1 |
+| Self-drawn win | 1 |
+| Three or more concealed sets | 1 |
+| All pungs | 1 |
+| Round wind pung or kong | 1 |
+| Seat wind pung or kong | 1 |
+| Each dragon pung or kong (when not all three) | 1 |
+| Own flower or season | 1 each |
 
-Example from the article: East seat in a South round with pungs of red
-dragons and south winds satisfies two conditions and may use honour pungs
-freely.
+Final = base × 2^doublers; every loser pays the final amount (the tracker's West example: base 22, no doublers, each loser pays 22; no East doubling shown in West).
 
-⚠ Whether a single honour pung is allowed if it is itself one of the two
-conditions (e.g. a dragon pung alone meets condition 1 only, so no). Reading:
-you need two qualifying pungs before any *other* honour pung is legal.
+## Still open
 
-## Rounds, seating, game length
-
-- ✅ A full game is one cycle: East, South, West, North.
-- ⚠ How many hands per round (until each player has been East once is the
-  Western norm), whether East retains the deal on a win, and wash-out rules.
-
-## Scoring ⚠
-
-Not covered by the article at all. Working assumption, from the T&M lineage:
-**fixed values per hand** (standard win, half-limit, full limit) rather than
-stacked doubles. Needs: the value table, whether non-winners score, dealer
-doubling, flower/season bonuses, kong bonuses, and how a goulash win scores.
-
-## Source hierarchy
-
-1. **Karachi legality**: the Mahjong Mates article (Naila Baig-Ansari, Oct 2025).
-2. **Karachi ↔ T&M hand mapping**: the Mahjong Mates mapping PDF (Mar 2026), in hand.
-3. **Concrete hand constructions**: the Mahjong Mates Special Hands Guide
-   (announced Jun 2026, "Five Styles, One App"), which has a Karachi
-   category with Karachi-only names. **Not yet captured.** Second-hand
-   transcriptions of it circulated via an LLM were rejected: 7 of 21
-   constructions had 13, 15 or 20 tiles, and several contradicted the
-   mapping PDF (Gertie's Garter placed in South, hands absent from the
-   27-hand mapping). Only a first-hand capture of the guide, or the hand
-   checker's source, goes into the catalogue.
-4. **T&M definitions and scoring**: *The Mah Jong Player's Companion*,
-   Thompson & Maloney, Kangaroo Press 1997, ISBN 978-0-86417-891-6, 120+
-   hands; 2025 reissue available. Copyrighted; capture the pages listed
-   above rather than a scan.
-5. **Your table's practice**: only where the above leave ambiguity.
-
-### Candidate constructions (relayed second-hand, NOT in the engine)
-
-Reported from the Special Hands Guide via an LLM, counted to 14, but not
-seen first-hand. They stay here until the guide is captured. Several
-reinterpret the jade/ruby/coral family as "dragon pung + suit pungs +
-suit pair" (jade = bamboo, coral = characters) rather than by tile colour,
-which would change three existing definitions.
-
-| Name | Round | Reported construction | Reading |
-|---|---|---|---|
-| The Professors | East | 678d 456b 234c R G Wh + SS | three mixed chows, one of each dragon, pair of own wind (Sloper's T&M transcription, relayed) |
-| Windy Wonders | East | 123b 123d 123c EEE SS | three chows + wind pung + wind pair; instance of the general East rule |
-| Windyfly | East | 111b 444d 777c E W N S + one | three pungs one per suit + NEWS + paired; instance of the general East rule |
-| Pinky's Hand | East | 1234b 1234d 1234c WW | three four-tile runs one per suit + **wind** pair |
-| Monty | East | 1234b 1234d 1234c RR | as Pinky's with a **dragon** pair; the article's comments confirm Monty's hand has a dragon pair |
-| Khalida's Hand | East | 1d 2b 3d 4d 5b 6c 7c 8b 9c E S W N N | a mixed 1–9 run (any suit per tile) + NEWS + wind pair |
-| Naila's Hand | East | not reported | |
-| Any Damn Hand | South | 123456b 123456d 77c | two 1–6 runs in two suits + pair in the third; not in the mapping PDF |
-| Dirty Gertie's Garter | South | 1234567b 1234567d | mapping PDF places Gertie's Garter in North; conflict |
-| Laila's Hand | North | 111d 999b R G Wh N E W + paired | reported at 13 tiles; ambiguous |
-| Easy Virgin | North | 123b 111b R G Wh E S N W + one | |
-| 1–7 plus 7 Honors | North | 1234567b E S W N R G Wh | |
-| Numbers Pungs | North | 555b 555d 555c E S W N R | NEWS + a dragon, which is not a "five honours" form; conflicts with the Western definition |
-| Sind Club Hand | North | R G Wh E S W N 2b 5b 5d 1c 8c 7c 1c | a fixed 14-tile hand; pair is 1c |
-| Green Jade | North | GGG 111b 444b 777b 88b | green dragon pung + three bamboo pungs + bamboo pair (any bamboo) |
-| Imperial Jade | North | GGG 222b 333b 444b 66b | same, green tiles only; consistent with the current definition |
-| Royal Coral | North | RRR 333c 555c 888c 99c | red dragon pung + three character pungs + character pair (any character); current definition restricts to 2,3,4,6,8 |
-| Royal Ruby | North | RRR 111b 555b 777b 99b | consistent with the current definition |
-| Ruby Jade | North | RRR GGG 111b 222b 66b | consistent with the current definition |
-
-## Sources still needed
-
-1. First-hand capture of the Mahjong Mates Special Hands Guide, Karachi
-   category (print to PDF, as with the article).
-2. T&M book pages listed above for exact definitions and values.
-3. Your table's scoring sheet, or whatever Monty's students use to settle up.
-4. The mahjongmates.com hand checker source, which may encode all of this.
+- Own-flower multiplier on flat payouts, and flower points in the calculator.
+- Whether the East-round goulash has the tile exchange.
+- Kongs in East "pung" slots (accepted), exposure requirements for named hands (none enforced), and overlapping named hands (flat scoring makes this moot outside West).
+- Draw handling, dealer rotation on a win, and whether flowers and seasons are in play at every table.

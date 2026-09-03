@@ -26,8 +26,10 @@ export interface TileFilter {
 export type Component =
   | { readonly c: 'set'; readonly of: 'chow' | 'pung' | 'kong' | 'pungOrKong' | 'any'; readonly n?: number; readonly filter?: TileFilter; readonly concealed?: boolean }
   | { readonly c: 'pair'; readonly n?: number; readonly filter?: TileFilter }
-  /** consecutive run of `len` tiles in one suit, any start */
-  | { readonly c: 'seq'; readonly len: number; readonly suit?: SuitRef; readonly n?: number }
+  /** consecutive run of `len` tiles in one suit; `start` pins or binds the first number */
+  | { readonly c: 'seq'; readonly len: number; readonly suit?: SuitRef; readonly start?: NumRef; readonly n?: number }
+  /** one tile of each number from..to, each from any suit ("mixed run") */
+  | { readonly c: 'mixedRun'; readonly from: number; readonly to: number }
   /** fixed run from..to in one suit */
   | { readonly c: 'run'; readonly from: number; readonly to: number; readonly suit: SuitRef }
   /** exactly one of each listed kind */

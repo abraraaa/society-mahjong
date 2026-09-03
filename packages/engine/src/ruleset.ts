@@ -67,6 +67,8 @@ export interface WinInput {
   readonly ctx: MatchCtx;
   readonly bonus: readonly TileKind[];
   readonly wallRemaining: number;
+  /** hand index within the game, 0 for the first hand */
+  readonly handIndex: number;
   readonly flags: {
     readonly lastWallTile: boolean;
     readonly robbedKong: boolean;
