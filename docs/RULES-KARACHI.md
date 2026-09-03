@@ -177,9 +177,33 @@ Not covered by the article at all. Working assumption, from the T&M lineage:
 stacked doubles. Needs: the value table, whether non-winners score, dealer
 doubling, flower/season bonuses, kong bonuses, and how a goulash win scores.
 
+## Source hierarchy
+
+1. **Karachi legality**: the Mahjong Mates article (Naila Baig-Ansari, Oct 2025).
+2. **Karachi ↔ T&M hand mapping**: the Mahjong Mates mapping PDF (Mar 2026), in hand.
+3. **Concrete hand constructions**: the Mahjong Mates Special Hands Guide
+   (announced Jun 2026, "Five Styles, One App"), which has a Karachi
+   category with Karachi-only names. **Not yet captured.** Second-hand
+   transcriptions of it circulated via an LLM were rejected: 7 of 21
+   constructions had 13, 15 or 20 tiles, and several contradicted the
+   mapping PDF (Gertie's Garter placed in South, hands absent from the
+   27-hand mapping). Only a first-hand capture of the guide, or the hand
+   checker's source, goes into the catalogue.
+4. **T&M definitions and scoring**: *The Mah Jong Player's Companion*,
+   Thompson & Maloney, Kangaroo Press 1997, ISBN 978-0-86417-891-6, 120+
+   hands; 2025 reissue available. Copyrighted; capture the pages listed
+   above rather than a scan.
+5. **Your table's practice**: only where the above leave ambiguity.
+
+Karachi-only names reported for the guide, to look for when it is
+captured (unverified): Windy Wonders, Khalida's Hand, Monty, Naila's Hand
+(East); Any Damn Hand (South); Laila's Hand, Easy Virgin, 1–7 plus 7
+Honors, Sind Club Hand (North).
+
 ## Sources still needed
 
-1. ~~Karachi–T&M Hand Mapping PDF~~ received; catalogue above.
+1. First-hand capture of the Mahjong Mates Special Hands Guide, Karachi
+   category (print to PDF, as with the article).
 2. T&M book pages listed above for exact definitions and values.
 3. Your table's scoring sheet, or whatever Monty's students use to settle up.
 4. The mahjongmates.com hand checker source, which may encode all of this.
