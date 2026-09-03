@@ -36,6 +36,14 @@ describe('Karachi East', () => {
   it('rejects a mix of chows and pungs', () => {
     expect(wins('E', hand(['m1', 'm2', 'm3', 'p4', 'p4', 'p4', 's7', 's8', 's9', 'WE', 'WS', 'WW', 'WN', 'WN']))).toHaveLength(0);
   });
+  it('accepts Apple Blossom and rejects it with the wrong dragon pair', () => {
+    const blossom = hand(['m1', 'm2', 'm3', 'p1', 'p2', 'p3', 's1', 's2', 's3', 'DW', 'DW', 'DW', 'DG', 'DG']);
+    expect(wins('E', blossom)).toContain('karachi.east.appleBlossom');
+    const mixed = hand(['m1', 'p2', 's3', 'p4', 's5', 'm6', 's7', 'm8', 'p9', 'DW', 'DW', 'DW', 'DG', 'DG']);
+    expect(wins('E', mixed)).toContain('karachi.east.appleBlossom');
+    const wrongPair = hand(['m1', 'm2', 'm3', 'p1', 'p2', 'p3', 's1', 's2', 's3', 'DW', 'DW', 'DW', 'DR', 'DR']);
+    expect(wins('E', wrongPair)).not.toContain('karachi.east.appleBlossom');
+  });
   it('accepts Pinkys: three four-tile runs one per suit and an honour pair', () => {
     expect(wins('E', hand(['m1', 'm2', 'm3', 'm4', 'p5', 'p6', 'p7', 'p8', 's2', 's3', 's4', 's5', 'DG', 'DG']))).toContain('karachi.east.pinkys');
   });

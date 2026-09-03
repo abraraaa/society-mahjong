@@ -117,7 +117,20 @@ export const EAST_NAMED: readonly Pattern[] = [
     distinct: [XYZ],
     tags: ['east', 'named'],
   },
-  // TODO(rules): Apple Blossom (T&M p19), The Professors (p19), Windyvane / Windyfly (p28) — definitions unknown.
+  {
+    id: 'karachi.east.appleBlossom',
+    name: 'Apple Blossom',
+    localName: 'Apple Blossom',
+    source: 'T&M p19 via Sloper (T&M mixed-chow discussion)',
+    notes: 'Three mixed chows (consecutive numbers, one tile from each suit, any suit order), pung or kong of white dragons, pair of green dragons.',
+    components: [
+      { c: 'mixedSeq', n: 3 },
+      { c: 'set', of: 'pungOrKong', filter: { kinds: ['DW'] } },
+      { c: 'pair', filter: { kinds: ['DG'] } },
+    ],
+    tags: ['east', 'named'],
+  },
+  // TODO(rules): The Professors (T&M p19), Windyvane / Windyfly (p28) — see docs/RULES-KARACHI.md candidates.
 ];
 
 export const SOUTH: readonly Pattern[] = [
@@ -141,8 +154,8 @@ export const SOUTH: readonly Pattern[] = [
     name: 'Crazy Chows',
     localName: 'Crazy Chow',
     source: 'T&M p16',
-    notes: 'Four mixed chows in a consistent suit order plus a mixed pair.',
-    components: [{ c: 'mixedSeq', n: 4, order: '$O' }, { c: 'mixedPair' }],
+    notes: 'Four mixed chows plus a mixed pair. Per Sloper on T&M, mixed chows need not share a suit order.',
+    components: [{ c: 'mixedSeq', n: 4 }, { c: 'mixedPair' }],
     tags: ['south', 'named'],
   },
   {

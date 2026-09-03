@@ -93,7 +93,7 @@ book pages listed. "?" means no definition found yet.
 
 | T&M hand | Page | Karachi name | Definition |
 |---|---|---|---|
-| Apple Blossom | 19 | Apple Blossom | ? |
+| Apple Blossom | 19 | Apple Blossom | Three mixed chows (consecutive numbers, one tile per suit, any suit order), white dragon pung, green dragon pair. ✅ per Sloper's T&M discussion |
 | Big Robert | 14 | Pinkys | Three four-tile chows, one in each suit, plus a pair of winds or dragons |
 | Dragonfly | 31 | Dragonfly | One of each dragon, a pung/kong in each of the three suits, plus a pair from any suit |
 | Hovering Angels | 17 | Chow + 5 Honors | One chow in each suit, pung of own wind, pair of white dragons; concealed except last |
@@ -111,7 +111,7 @@ sub-patterns.
 
 | T&M hand | Page | Karachi name | Definition |
 |---|---|---|---|
-| Crazy Chows | 16 | Crazy Chow | Four mixed chows (each tile from a different suit, in the same suit order) plus a mixed pair |
+| Crazy Chows | 16 | Crazy Chow | Four mixed chows plus a mixed pair. Mixed chows do not need a consistent suit order (Sloper on T&M) |
 | Knitting | 20 | Knitting | Seven pairs in any two suits, no honours (Western); some sources define knitted pairs (same number, one tile from each of two suits). ⚠ which |
 | Seven Twins | 22 | Dirty Pairs (no terminals or honours) | Seven pairs, simples only (2–8), suits mixed |
 | Triple Knitting | 20 | Crochet | Four sets of three tiles of the same number, one from each suit, plus a pair; no honours |
@@ -195,10 +195,35 @@ doubling, flower/season bonuses, kong bonuses, and how a goulash win scores.
    above rather than a scan.
 5. **Your table's practice**: only where the above leave ambiguity.
 
-Karachi-only names reported for the guide, to look for when it is
-captured (unverified): Windy Wonders, Khalida's Hand, Monty, Naila's Hand
-(East); Any Damn Hand (South); Laila's Hand, Easy Virgin, 1–7 plus 7
-Honors, Sind Club Hand (North).
+### Candidate constructions (relayed second-hand, NOT in the engine)
+
+Reported from the Special Hands Guide via an LLM, counted to 14, but not
+seen first-hand. They stay here until the guide is captured. Several
+reinterpret the jade/ruby/coral family as "dragon pung + suit pungs +
+suit pair" (jade = bamboo, coral = characters) rather than by tile colour,
+which would change three existing definitions.
+
+| Name | Round | Reported construction | Reading |
+|---|---|---|---|
+| The Professors | East | 678d 456b 234c R G Wh + SS | three mixed chows, one of each dragon, pair of own wind (Sloper's T&M transcription, relayed) |
+| Windy Wonders | East | 123b 123d 123c EEE SS | three chows + wind pung + wind pair; instance of the general East rule |
+| Windyfly | East | 111b 444d 777c E W N S + one | three pungs one per suit + NEWS + paired; instance of the general East rule |
+| Pinky's Hand | East | 1234b 1234d 1234c WW | three four-tile runs one per suit + **wind** pair |
+| Monty | East | 1234b 1234d 1234c RR | as Pinky's with a **dragon** pair; the article's comments confirm Monty's hand has a dragon pair |
+| Khalida's Hand | East | 1d 2b 3d 4d 5b 6c 7c 8b 9c E S W N N | a mixed 1–9 run (any suit per tile) + NEWS + wind pair |
+| Naila's Hand | East | not reported | |
+| Any Damn Hand | South | 123456b 123456d 77c | two 1–6 runs in two suits + pair in the third; not in the mapping PDF |
+| Dirty Gertie's Garter | South | 1234567b 1234567d | mapping PDF places Gertie's Garter in North; conflict |
+| Laila's Hand | North | 111d 999b R G Wh N E W + paired | reported at 13 tiles; ambiguous |
+| Easy Virgin | North | 123b 111b R G Wh E S N W + one | |
+| 1–7 plus 7 Honors | North | 1234567b E S W N R G Wh | |
+| Numbers Pungs | North | 555b 555d 555c E S W N R | NEWS + a dragon, which is not a "five honours" form; conflicts with the Western definition |
+| Sind Club Hand | North | R G Wh E S W N 2b 5b 5d 1c 8c 7c 1c | a fixed 14-tile hand; pair is 1c |
+| Green Jade | North | GGG 111b 444b 777b 88b | green dragon pung + three bamboo pungs + bamboo pair (any bamboo) |
+| Imperial Jade | North | GGG 222b 333b 444b 66b | same, green tiles only; consistent with the current definition |
+| Royal Coral | North | RRR 333c 555c 888c 99c | red dragon pung + three character pungs + character pair (any character); current definition restricts to 2,3,4,6,8 |
+| Royal Ruby | North | RRR 111b 555b 777b 99b | consistent with the current definition |
+| Ruby Jade | North | RRR GGG 111b 222b 66b | consistent with the current definition |
 
 ## Sources still needed
 

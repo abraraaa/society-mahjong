@@ -74,8 +74,12 @@ describe('named patterns', () => {
   it('matches Crazy Chows with a consistent suit order', () => {
     expect(matchPattern(crazyChows, hand(['m1', 'p2', 's3', 'm4', 'p5', 's6', 'm2', 'p3', 's4', 'm7', 'p8', 's9', 'm5', 's5']), ctx).length).toBeGreaterThan(0);
   });
-  it('rejects Crazy Chows with inconsistent suit order', () => {
+  it('rejects Crazy Chows with inconsistent suit order when the pattern pins the order', () => {
     expect(matchPattern(crazyChows, hand(['m1', 'p2', 's3', 'p4', 'm5', 's6', 'm2', 'p3', 's4', 'm7', 'p8', 's9', 'm5', 's5']), ctx)).toHaveLength(0);
+  });
+  it('accepts mixed chows in any suit order when the pattern does not pin it', () => {
+    const loose: Pattern = { id: 'loose', name: 'loose', components: [{ c: 'mixedSeq', n: 4 }, { c: 'mixedPair' }] };
+    expect(matchPattern(loose, hand(['m1', 'p2', 's3', 'p4', 'm5', 's6', 'm2', 'p3', 's4', 'm7', 'p8', 's9', 'm5', 's5']), ctx).length).toBeGreaterThan(0);
   });
 
   const runPungPair: Pattern = {
