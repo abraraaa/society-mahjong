@@ -13,3 +13,7 @@ pnpm install
 pnpm test          # engine tests
 pnpm dev           # web app on http://localhost:3000
 ```
+
+## Licence
+
+Proprietary, all rights reserved. Public on GitHub for development convenience only; see `LICENSE`.

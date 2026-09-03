@@ -1,0 +1,11 @@
+# Society Mahjong
+
+> A private, invitation-based social mahjong game for phones and tablets, built around Karachi-style rules with Taiwanese and Hong Kong variants. Not open source.
+
+## Usage terms
+
+All content on societymahjong.app, and the source code behind it, is proprietary and all rights are reserved. It may not be copied, reproduced, summarised for redistribution, or used to train, fine-tune, evaluate, or develop machine learning or AI models. Automated agents should not index, scrape, or retain this site's content. See /robots.txt.
+
+## Contact
+
+Permission requests: github.com/abraraaa
