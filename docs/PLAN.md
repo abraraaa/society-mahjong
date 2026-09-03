@@ -125,17 +125,43 @@ and Dubai, 60ms from Colombo, 120ms from London. London would punish three
 of the four groups. Decision: Supabase in Mumbai, Vercel functions pinned to
 `bom1`. Turn-based play tolerates 120ms comfortably.
 
-### Data model (sketch)
+### Data model
 
-- `profiles` — user, display name, avatar, preferences, onboarding stage
-- `rooms` — code, host, ruleset id + options, seat assignments, status
-- `games` — one per full game (set of hands) within a room
-- `game_events` — append-only `(game_id, seq, actor, type, payload_public, payload_private jsonb)`
-- `game_snapshots` — latest materialised state per game, version = last seq
-- `hand_results` — per-hand scoring rows for stats and ledgers
-- `tutor_sessions` — transcript + engine analysis references (for debriefs)
+Constraint: Supabase Free (500 MB database, 5 GB egress, 2M Realtime messages
+and 200 concurrent connections per month, project pauses after 7 idle days).
+Measured from bot-played hands: ~100 player actions and 110–160 engine events
+per hand. One row per event costs 35–50 KB per hand and would fill the tier
+in about two months of nightly play. So the engine's determinism does the
+work instead: **a hand is fully described by its seed plus the ordered list
+of player actions** (draws derive from the seed), which is ~450 bytes raw
+and ~230 bytes gzipped.
 
-RLS everywhere. Service role only inside route handlers.
+- `profiles` — user, display name, avatar URL (Blob), preferences, onboarding stage
+- `rooms` — code, host, ruleset id + options, seat assignments, status, ledger
+- `games` — one per full game within a room; seed (server-only until the game ends)
+- `hands` — one row per hand: hand index, dealer, compact action log
+  (appended in place while live), result and settlement JSON. ~1.5 KB each,
+  ~25 KB per 16-hand game, so ~20,000 games in 500 MB
+- `live_state` — one row per active game, overwritten on every action:
+  materialised engine snapshot (~3 KB) + claim deadline. Rejoin is one read
+- `hand_results` — flattened scoring rows for stats and ledgers
+- `tutor_sessions` — pointers to transcripts stored in Blob
+
+RLS everywhere. Service role only inside route handlers. The seed is never
+readable by clients while a hand is live, since it reveals the wall.
+
+**Vercel Blob** is the archive tier: avatars, finished-game replays exported
+as JSON once a game ends (then trimmed from Postgres if we ever need to),
+tutor transcripts. Never live state: Blob is eventually consistent and not
+transactional, which is wrong for turn actions.
+
+**Realtime is the quota that bites first.** Each action fans out to three
+other clients: ~400 messages per hand, so 100 games a week is ~2.7M
+messages a month against a 2M cap. Fine at launch volumes; at full load the
+fan-out moves to a dedicated realtime provider or the game gets Supabase
+Pro, which also removes the 7-day pause. That pause is the real launch
+risk for a social app: a quiet week freezes the database until someone
+restores it by hand.
 
 ### Ruleset interface
 
