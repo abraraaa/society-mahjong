@@ -1,0 +1,268 @@
+# Society Mahjong — Plan v0.1
+
+A browser-led social mahjong game for Karachi-style play. Mobile and tablet first
+(iOS 26+ Safari guaranteed), up to ~100 concurrent players (~25 tables),
+beautiful, fast, persistent, with a tutor that sits beside first-timers.
+
+Status: **draft for discussion**. Nothing here is built yet.
+
+---
+
+## 1. Product shape
+
+**Who it's for.** Karachi socialites and their diaspora (London, Dubai, Toronto)
+who play at home and at the club, plus the wave of first-timers who want to keep
+up. Most of them have never touched a mahjong app. Many have never played.
+
+**What it is.** A private-table game you open in Safari, sign in with Apple or a
+magic link, and play with three friends (or bots) in a room you share by link.
+Karachi rules by default, other rulesets selectable per room. A tutor sits in
+your first rounds and explains what to do and why.
+
+**What it is not (v1).** Not a public matchmaking lobby, not a ranked ladder,
+not a real-money product, not American (NMJL card) mahjong, not video chat.
+
+### Comparison to mahjong4friends
+
+Mahjong 4 Friends proves the functional baseline: create room → invite link →
+fill seats with friends or bots → play, with in-game hint bubbles and a linked
+tutorial. It supports HK, Chinese, British, American and Panama variants. It is
+ugly, dense, desktop-born and squeezed onto phones. We take the flow and drop
+everything else.
+
+| Baseline (M4F) | Ours |
+|---|---|
+| Room code + link | Same, plus Apple/Google/magic-link accounts and guest seats |
+| Bots fill seats | Same, plus difficulty and a "tutor" personality |
+| Yellow hint bubbles | Contextual coach layer driven by the engine, plus a conversational tutor |
+| Many rulesets | Karachi first, ruleset interface so others plug in |
+| Desktop-first UI | Portrait phone and landscape tablet, designed from the tile up |
+| Session persists while tab open | Event-sourced games; close Safari, come back tomorrow |
+
+---
+
+## 2. Karachi rules — what we know and what we don't
+
+Source of truth is https://mahjongmates.com/karachi-style-mahjong-rules/ which
+the build environment cannot reach (egress blocked). What follows comes from
+search excerpts of that page and adjacent Mumbai/Western sources. **Everything
+marked ⚠ must be confirmed before the engine is finalised.** See
+`docs/RULES-KARACHI.md` for the working spec.
+
+Established:
+
+- Karachi style is an oral tradition, a blend of **Mumbai style and Western
+  style**, passed teacher to student (Mrs Mumtaz "Monty" Kadri credited, 50 years).
+- **First hand is a "goulash" warm-up**: only pungs allowed. To use honours, two
+  of three "goulash conditions" must be met. ⚠ conditions unknown.
+- **All other hands**: three chows + five honours, **or** three pungs + five
+  honours. The three sets are either all one suit ("clean") or one per suit.
+- **Five honours** = N, E, W, S with one wind paired, **or** a pung of honours
+  plus a pair of honours.
+- **You can never chow from a discard**, not even from the player on your left.
+  Chows are built only from self-drawn tiles. Pungs presumably claimable from
+  any discard. ⚠ confirm pung/kong claim rules and priority.
+
+Unknown (⚠ all of these):
+
+- Tile set: flowers and seasons in play? Kongs? Jokers? (Mumbai style uses
+  flowers/seasons and kongs; Western does too.)
+- Scoring: base points, doubles, limit hands, whether all four players settle
+  on every hand (Western) or only the winner is paid (HK). Dealer doubling.
+- Goulash specifics beyond "pungs only": Mumbai goulash is "all pungs/kongs and
+  a pair in one suit; with honours, three doubles and minimum count 20". Is
+  Karachi's the same? Is there a tile exchange (charleston) in the goulash?
+- Wind/seat rotation, number of rounds in a "game", draw (wash-out) rules.
+- Common house rules the Karachi tables actually use.
+
+**Ask:** paste the full text of the mahjongmates page (and any house rules your
+group plays) into the thread or into `docs/RULES-KARACHI.md`. The engine is the
+one thing we cannot fudge.
+
+---
+
+## 3. Architecture
+
+Guiding constraints: Vercel, serverless, one database vendor, small team, ~25
+concurrent tables, turn-based (no twitch latency), sessions that survive
+Safari being killed.
+
+### Stack
+
+| Layer | Choice | Why |
+|---|---|---|
+| Framework | Next.js (App Router, React 19) on Vercel, Fluid Compute | RSC for lobby/profile pages, route handlers for game actions, one deploy target |
+| Data + auth + realtime | **Supabase** (Postgres, Auth, Realtime Broadcast/Presence) | One vendor covers all three. Neon would need Ably/Pusher and Auth.js bolted on |
+| Rules engine | Pure TypeScript package `packages/engine`, zero deps | Runs on server (authoritative) and in the browser (instant legality hints, optimistic UI) |
+| Styling | Tailwind v4 + CSS custom properties for tokens | Same approach as the workout app |
+| Motion | Motion (framer-motion) | Tile dealing, claims, wins deserve real choreography |
+| State (client) | Zustand store fed by realtime events + engine reducer | Small, testable, no Redux ceremony |
+| Tutor LLM | Claude via Vercel AI SDK, grounded in engine analysis | Only for "why" and debriefs; never decides legality |
+| Testing | Vitest for engine (property tests on hand validation), Playwright for table flows | Engine correctness is the product |
+
+### Realtime and authority on serverless
+
+Vercel functions cannot hold websockets or timers, so the design is:
+
+1. **Server is authoritative.** Every action (draw, discard, claim, pass,
+   declare) is a POST to a route handler. It loads the table snapshot, runs the
+   engine reducer, appends events to `game_events`, updates the snapshot, and
+   returns the acting player's private view.
+2. **Fan-out via Supabase Broadcast from the database.** A trigger on
+   `game_events` broadcasts the public payload to the private channel
+   `table:{id}`. Clients subscribe with RLS-authorised channels. Public events
+   never carry another player's concealed tiles.
+3. **Private state** (your hand, your drawn tile) comes back in the HTTP
+   response or via an RLS-scoped query on reconnect. Nothing secret crosses
+   the broadcast channel.
+4. **Timers without a server clock.** Claim windows and turn limits are
+   deadlines stored on the snapshot. Any request after a deadline resolves it
+   first (lazy advancement). A one-minute Vercel Cron sweeps stalled tables so
+   an abandoned claim window never wedges a game.
+5. **Bots run inline.** When a human's action leaves the turn with a bot, the
+   same request plays bot turns until a human is up again, emitting events
+   with staggered `reveal_at` timestamps so the client animates them at human
+   pace rather than all at once.
+6. **Reconnect** = fetch snapshot + events since your last sequence number,
+   replay through the engine reducer. Presence shows who is at the table.
+
+**Upgrade path if it bites.** If claim-window latency or bot pacing ever feels
+wrong at scale, the table becomes a Cloudflare Durable Object (PartyKit) with
+real websockets and alarms, and the engine package moves unchanged. Not for v1.
+
+### Regions
+
+Players split between Karachi and London. Supabase in `ap-south-1` (Mumbai) is
+~40ms from Karachi and ~120ms from London; the reverse is true for `eu-west-2`.
+Turn-based play tolerates either. Default: Mumbai, Vercel functions pinned to
+`bom1`. ⚠ Confirm where the first 100 players actually are.
+
+### Data model (sketch)
+
+- `profiles` — user, display name, avatar, preferences, onboarding stage
+- `rooms` — code, host, ruleset id + options, seat assignments, status
+- `games` — one per full game (set of hands) within a room
+- `game_events` — append-only `(game_id, seq, actor, type, payload_public, payload_private jsonb)`
+- `game_snapshots` — latest materialised state per game, version = last seq
+- `hand_results` — per-hand scoring rows for stats and ledgers
+- `tutor_sessions` — transcript + engine analysis references (for debriefs)
+
+RLS everywhere. Service role only inside route handlers.
+
+### Ruleset interface
+
+```ts
+interface Ruleset {
+  id: 'karachi' | 'hongkong' | 'british' | ...
+  tiles(): TileSetConfig            // suits, honours, flowers, seasons, jokers
+  dealing(): DealConfig             // wall, dead wall, dealer extra tile
+  handSchedule(game): HandKind      // e.g. Karachi: hand 1 = goulash
+  claims: {
+    canChow(ctx): boolean           // Karachi: never from discard
+    canPung(ctx): boolean
+    canKong(ctx): boolean
+    priority: ClaimPriority
+  }
+  isWinning(hand, ctx): WinResult   // pattern matcher: 3 sets + five honours etc.
+  score(win, ctx): Settlement       // who pays whom, doubles, limits
+  analyse(hand, ctx): Analysis      // for coach: what you're building, distance to win, safe discards
+}
+```
+
+Karachi ships first. Hong Kong (well documented, faan-based) second as the
+proof the interface isn't Karachi-shaped. British/Western third as it shares
+Karachi's ancestry. American is out of scope.
+
+---
+
+## 4. Experience
+
+### Design direction
+
+The workout app taught us: one strong material metaphor, restrained palette,
+motion that explains state changes, and never a spinner where a transition will
+do. Here the material is the tile.
+
+- **Palette**: warm ivory tiles with deep engraved glyphs; a felt in dark jade
+  or Arabian Sea blue; brass accents for gold-state moments (a win, a kong).
+  Dark mode is the default at the table; light mode for lobby and learning.
+- **Type**: a humanist sans for UI, a display serif with a nod to Nastaliq
+  rhythm for headings. Tile numerals rendered as SVG, not fonts.
+- **Layout**: portrait phone = your hand as a bottom rail, discards as a
+  compact river in the centre, opponents as three slim edges. Landscape tablet
+  = the full square table. One codebase, two compositions, not one stretched.
+- **Motion**: deal animates from the wall; a claimed tile slides from the
+  river to the claimant's melds; a win fans the hand and holds. Motion tokens
+  (durations, easings) shared with sound and haptic cues.
+- **Sound + haptics**: tile clack, wall shuffle, a soft chime on claim window.
+  iOS Safari haptics via the `input[type=switch]` trick; respect reduced motion.
+- **PWA**: installable, standalone, home-screen icon, web push for "your turn"
+  and "table is ready" (iOS 26 supports both).
+
+### Onboarding and the tutor
+
+Three layers, cheapest first:
+
+1. **Learn by doing, no lecture.** First launch offers "Play your first hand"
+   against three bots with the tutor on. No rules screen up front.
+2. **Coach (deterministic, engine-driven).** Always-on, toggleable per player.
+   Highlights legal moves, explains the claim window ("You can pung this
+   3-bamboo. In Karachi you can never chow a discard, so don't wait for one"),
+   shows what hand you're closest to ("Three pungs, one suit, 4 tiles away"),
+   flags dangerous discards late in the wall. All from `ruleset.analyse()`,
+   so it is never wrong about the rules.
+3. **Tutor (conversational, Claude).** Tap the tutor, ask "why did she win with
+   that?" or "what should I be aiming for?". The prompt gets the engine's
+   structured analysis and the ruleset text, answers in plain English, and
+   offers a 30-second debrief at the end of each hand. Personality: warm,
+   direct, a bit of a Karachi auntie.
+
+Progression: tutor intensity drops as the player wins hands unaided; the app
+notices ("You've won three on your own, want me to just watch?").
+
+### Social
+
+- Rooms with a 6-character code and share sheet link; host controls ruleset,
+  bots, timers, whether the tutor is allowed for guests.
+- Quick reactions and short chat, no free-for-all video.
+- Ledger per room: running score across sessions, optional "stakes" as a
+  number the host sets (we never move money).
+- Spectator seats so the auntie can watch and heckle.
+
+---
+
+## 5. Performance and persistence budgets
+
+- First table render on a mid iPhone over 4G: < 2.0s. Engine + table client
+  chunk under 150KB gzipped. Tiles as one SVG sprite.
+- Action round-trip (POST to broadcast received by others): p95 < 400ms
+  intra-region, < 600ms cross-region.
+- A player can kill Safari mid-hand and rejoin within one tap; rejoin
+  completes in < 1s from cache.
+- A game abandoned for a week is still there, with a "resume" or "dissolve"
+  choice for the host.
+
+---
+
+## 6. Milestones
+
+| # | Milestone | Outcome |
+|---|---|---|
+| M0 | Foundation | Monorepo, tokens, Supabase project, Auth (Apple/Google/magic link/guest), CI. Engine package with tiles, wall, dealing, Karachi validator + scorer with test suite from the confirmed rules |
+| M1 | Solo table | Full hand vs three bots in the browser, no network. Every animation and interaction designed here first |
+| M2 | Multiplayer | Rooms, invites, authoritative server, realtime, reconnect, timers, cron sweeper, ledger |
+| M3 | Tutor | Coach layer, conversational tutor, first-hand onboarding, progression |
+| M4 | Polish + rulesets | Sound, haptics, PWA, push, stats; Hong Kong ruleset to prove the interface |
+
+M0's engine work is blocked on §2. Everything else can start.
+
+---
+
+## 7. Open questions (need answers to proceed)
+
+1. Full Karachi rules text, and your table's house rules. Flowers? Kongs? Scoring?
+2. Where are the first 100 players, Karachi or London or both equally?
+3. Scoring display: points only, or a stakes ledger with a host-set unit value?
+4. Turn timers: social (30s, nudges) or strict (10s, auto-discard)?
+5. Guests without accounts: allowed to play, or must sign in to sit?
+6. Workout app: add its repo to this session so the tokens and patterns carry over, or describe the ones that matter?
