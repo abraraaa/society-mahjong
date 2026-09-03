@@ -4,7 +4,7 @@ A browser-led social mahjong game for Karachi-style play. Mobile and tablet firs
 (iOS 26+ Safari guaranteed), up to ~100 concurrent players (~25 tables),
 beautiful, fast, persistent, with a tutor that sits beside first-timers.
 
-Status: **draft for discussion**. Nothing here is built yet.
+Status: **draft v0.2 for discussion**. Nothing here is built yet.
 
 ---
 
@@ -43,43 +43,30 @@ everything else.
 
 ## 2. Karachi rules — what we know and what we don't
 
-Source of truth is https://mahjongmates.com/karachi-style-mahjong-rules/ which
-the build environment cannot reach (egress blocked). What follows comes from
-search excerpts of that page and adjacent Mumbai/Western sources. **Everything
-marked ⚠ must be confirmed before the engine is finalised.** See
-`docs/RULES-KARACHI.md` for the working spec.
+Source of truth is the Mahjong Mates article (PDF capture in hand). Full
+working spec in `docs/RULES-KARACHI.md`. The headline that reshapes the build:
+**the rules change by wind round.**
 
-Established:
+| Round | Hand structure |
+|---|---|
+| East | Hand 1 is a goulash (pungs only, honours gated by the goulash conditions). Then three chows or three pungs, clean or one per suit, plus "five honours" |
+| South | No honours. Four pungs + pair, plus Western special hands (Knitting, Crochet, Crazy Chows) and mixed chows |
+| West | Every hand a goulash, with a three-tile exchange Right → Front → Left before play |
+| North | Big hands only: long 1–9 runs and rare hands mapped to Thompson–Maloney (Big Robert = Pinkys, Gates of Heaven = Wriggly Snake v2, Unique Wonder = Monty Unique Wonders …) |
 
-- Karachi style is an oral tradition, a blend of **Mumbai style and Western
-  style**, passed teacher to student (Mrs Mumtaz "Monty" Kadri credited, 50 years).
-- **First hand is a "goulash" warm-up**: only pungs allowed. To use honours, two
-  of three "goulash conditions" must be met. ⚠ conditions unknown.
-- **All other hands**: three chows + five honours, **or** three pungs + five
-  honours. The three sets are either all one suit ("clean") or one per suit.
-- **Five honours** = N, E, W, S with one wind paired, **or** a pung of honours
-  plus a pair of honours.
-- **You can never chow from a discard**, not even from the player on your left.
-  Chows are built only from self-drawn tiles. Pungs presumably claimable from
-  any discard. ⚠ confirm pung/kong claim rules and priority.
+Across all rounds: **you can never chow from a discard.** Chows come only
+from self-drawn tiles.
 
-Unknown (⚠ all of these):
+Still missing, and blocking the engine:
 
-- Tile set: flowers and seasons in play? Kongs? Jokers? (Mumbai style uses
-  flowers/seasons and kongs; Western does too.)
-- Scoring: base points, doubles, limit hands, whether all four players settle
-  on every hand (Western) or only the winner is paid (HK). Dealer doubling.
-- Goulash specifics beyond "pungs only": Mumbai goulash is "all pungs/kongs and
-  a pair in one suit; with honours, three doubles and minimum count 20". Is
-  Karachi's the same? Is there a tile exchange (charleston) in the goulash?
-- Wind/seat rotation, number of rounds in a "game", draw (wash-out) rules.
-- Common house rules the Karachi tables actually use.
-
-**Ask:** paste the full text of the mahjongmates page (and any house rules your
-group plays) into the thread or into `docs/RULES-KARACHI.md`. The engine is the
-one thing we cannot fudge.
-
----
+1. The **Karachi–T&M Hand Mapping PDF** (free download on mahjongmates.com)
+   which lists every hand by round. North is undefined without it.
+2. **Thompson–Maloney definitions** for each named hand.
+3. **Scoring.** The article has none. T&M uses fixed values per hand
+   (standard / half-limit / full limit); assume Karachi does the same until
+   told otherwise.
+4. Mechanics the article skips: flowers/seasons, kong handling, hands per
+   round, dealer retention, wash-outs, blind vs open exchange in West.
 
 ## 3. Architecture
 
@@ -156,21 +143,30 @@ interface Ruleset {
   id: 'karachi' | 'hongkong' | 'british' | ...
   tiles(): TileSetConfig            // suits, honours, flowers, seasons, jokers
   dealing(): DealConfig             // wall, dead wall, dealer extra tile
-  handSchedule(game): HandKind      // e.g. Karachi: hand 1 = goulash
+  handSchedule(game): HandSpec      // Karachi: per round + hand index (goulash, honour, no-honour, big)
+  preplay(game): PreplayStep[]      // Karachi West: three-tile exchange R → F → L
+  patterns: HandPattern[]           // declarative hand definitions (T&M-style), filtered by HandSpec
   claims: {
     canChow(ctx): boolean           // Karachi: never from discard
     canPung(ctx): boolean
     canKong(ctx): boolean
     priority: ClaimPriority
   }
-  isWinning(hand, ctx): WinResult   // pattern matcher: 3 sets + five honours etc.
+  isWinning(hand, ctx): WinResult   // matches hand against allowed patterns for this round
   score(win, ctx): Settlement       // who pays whom, doubles, limits
   analyse(hand, ctx): Analysis      // for coach: what you're building, distance to win, safe discards
 }
 ```
 
-Karachi ships first. Hong Kong (well documented, faan-based) second as the
-proof the interface isn't Karachi-shaped. British/Western third as it shares
+Hand definitions are **data, not code**: a pattern language (sets, runs,
+pairs, suit constraints, honour constraints, round gating) that the validator
+interprets. That is what makes Western special hands, Karachi round rules and
+HK standard hands live in one engine, and what lets the coach explain "you
+are two tiles from Pinkys".
+
+Karachi ships first. British/Western (Thompson–Maloney) is now the natural
+second, since Karachi's South and North rounds already need its hand
+patterns. Hong Kong third. British/Western third as it shares
 Karachi's ancestry. American is out of scope.
 
 ---
@@ -260,7 +256,7 @@ M0's engine work is blocked on §2. Everything else can start.
 
 ## 7. Open questions (need answers to proceed)
 
-1. Full Karachi rules text, and your table's house rules. Flowers? Kongs? Scoring?
+1. The Karachi–T&M Hand Mapping PDF, T&M hand definitions, and how your table scores. Flowers? Kongs? Hands per round?
 2. Where are the first 100 players, Karachi or London or both equally?
 3. Scoring display: points only, or a stakes ledger with a host-set unit value?
 4. Turn timers: social (30s, nudges) or strict (10s, auto-discard)?
