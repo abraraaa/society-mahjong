@@ -2,13 +2,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   SEATS,
+  acrossFrom,
   initialProgress,
   karachi,
+  leftOf,
   legalActions,
   nextHand,
   reduce,
+  rightOf,
   simpleBot,
   startHand,
+  tileName,
   viewFor,
   type Action,
   type HandState,
@@ -16,9 +20,15 @@ import {
   type TileKind,
 } from '@society/engine';
 import { Tile } from '@/components/tile';
+import { SeatPill } from '@/components/seat-pill';
+import { ClaimSheet } from '@/components/claim-sheet';
+import { Coach } from '@/components/coach';
+import { suggestDiscard } from '@/lib/tutor';
 
 const ME: Seat = 0;
 const ruleset = karachi;
+/** Local flavour only — the engine knows seats, not names. */
+const NAMES: Record<Seat, string> = { 0: 'You', 1: 'Bilal', 2: 'Sana', 3: 'Ayesha' };
 
 function botStep(state: HandState): HandState {
   let s = state;
@@ -31,12 +41,22 @@ function botStep(state: HandState): HandState {
 }
 
 export function SoloTable() {
-  const [seed] = useState(() => `solo-${Date.now()}`);
-  const [state, setState] = useState<HandState>(() => startHand(ruleset, { seed, progress: initialProgress, dealer: 0 }));
+  // A fixed seed for the first render so server and client agree (Date.now() would
+  // mismatch during hydration); re-seeded for real randomness right after mount.
+  const [seed, setSeed] = useState('solo-ssr');
+  const [state, setState] = useState<HandState>(() => startHand(ruleset, { seed: 'solo-ssr', progress: initialProgress, dealer: 0 }));
   const [selected, setSelected] = useState<TileKind | null>(null);
+  const [tutorOn, setTutorOn] = useState(true);
   const me = state.players[ME];
   const legal = useMemo(() => legalActions(state, ruleset, ME), [state]);
   const myMove = legal.discard || legal.claims || legal.exchange || legal.win;
+
+  useEffect(() => {
+    const fresh = `solo-${Date.now()}`;
+    setSeed(fresh);
+    setState(startHand(ruleset, { seed: fresh, progress: initialProgress, dealer: 0 }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Let bots act whenever it is not our move, paced so the table reads as a conversation.
   useEffect(() => {
@@ -51,130 +71,215 @@ export function SoloTable() {
   };
 
   const spec = ruleset.handSpec(state.progress);
+  const tip = tutorOn && state.phase === 'turn' && state.turn === ME ? suggestDiscard(me.concealed) : null;
+  const hasActions = !!legal.win || !!(legal.kong && legal.kong.length > 0) || (state.phase === 'turn' && state.turn === ME);
+  // stable sort means duplicates of a newly-drawn kind land last, so this always resolves the tile just drawn
+  const drawnIndex = state.drawn ? me.concealed.lastIndexOf(state.drawn) : -1;
+
+  const left = state.players[leftOf(ME)];
+  const across = state.players[acrossFrom(ME)];
+  const right = state.players[rightOf(ME)];
+
+  const header = (
+    <>
+      <h1 className="font-display text-xl">{spec.label}</h1>
+      <div className="flex items-center gap-2">
+        <span className="text-ivory-200/60 text-sm whitespace-nowrap">Wall {state.wall.live.length}</span>
+        <button type="button" className={`chip${tutorOn ? ' chip-gold' : ''}`} onClick={() => setTutorOn((v) => !v)}>
+          Tutor {tutorOn ? 'on' : 'off'}
+        </button>
+      </div>
+    </>
+  );
+
+  const river = (
+    <div className="river">
+      {state.players.flatMap((p) =>
+        p.discards.map((k, i) => (
+          <Tile key={`${p.seat}-${i}`} kind={k} size="sm" claimable={state.phase === 'claim' && state.lastDiscard?.from === p.seat && i === p.discards.length - 1} />
+        )),
+      )}
+    </div>
+  );
+
+  const actions = (
+    <>
+      {legal.win && (
+        <button className="btn btn-gold" onClick={() => act({ type: 'declareWin', seat: ME })}>
+          Mahjong!
+        </button>
+      )}
+      {legal.kong?.map((k) => (
+        <button key={k} className="btn btn-ghost" onClick={() => act({ type: 'declareKong', seat: ME, tile: k })}>
+          Kong {tileName(k)}
+        </button>
+      ))}
+      {state.phase === 'turn' &&
+        state.turn === ME &&
+        (selected ? (
+          <button className="btn btn-primary" onClick={() => act({ type: 'discard', seat: ME, tile: selected })}>
+            Discard {tileName(selected)}
+          </button>
+        ) : tip ? (
+          <button className="btn btn-primary" onClick={() => act({ type: 'discard', seat: ME, tile: tip.tile })}>
+            Discard {tileName(tip.tile)}
+          </button>
+        ) : null)}
+    </>
+  );
+
+  const handTiles = (size: 'md' | 'lg') =>
+    me.concealed.map((k, i) => {
+      const isDrawn = i === drawnIndex && state.turn === ME && state.phase === 'turn';
+      return (
+        <Tile
+          key={`${k}-${i}`}
+          kind={k}
+          size={size}
+          selectable={state.phase === 'turn' && state.turn === ME}
+          selected={selected === k}
+          fresh={isDrawn}
+          coached={!!tip && tip.tile === k && selected !== k}
+          className={isDrawn ? 'drawn' : undefined}
+          onClick={() => setSelected(selected === k ? null : k)}
+        />
+      );
+    });
+
+  const myMelds = <div className="meld">{me.melds.flatMap((m, i) => m.tiles.map((k, j) => <Tile key={`${i}-${j}`} kind={k} size="xs" />))}</div>;
 
   return (
-    <div className="mx-auto flex min-h-dvh max-w-lg flex-col gap-4 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-6">
-      <header className="flex items-baseline justify-between">
-        <h1 className="font-display text-2xl">{spec.label}</h1>
-        <span className="text-ivory-200/60 text-sm">Wall {state.wall.live.length}</span>
-      </header>
+    <>
+      {/* Portrait phone: hand rail bottom, compact river centre, opponents as slim strips. */}
+      <div className="mx-auto flex min-h-dvh max-w-lg flex-col gap-4 px-4 pt-11 pb-[max(1rem,env(safe-area-inset-bottom))] md:landscape:hidden">
+        <header className="flex items-baseline justify-between">{header}</header>
 
-      <section className="grid grid-cols-3 gap-2 text-xs text-ivory-200/70">
-        {([1, 2, 3] as const).map((seat) => {
-          const p = state.players[seat];
-          return (
-            <div key={seat} className="rounded-xl bg-felt-800/60 p-2">
-              <div className="mb-1 flex justify-between">
-                <span>Seat {p.seatWind}</span>
-                <span>{state.turn === seat && state.phase === 'turn' ? '●' : ''}</span>
-              </div>
-              <div className="flex flex-wrap gap-0.5">
-                {p.melds.map((m, i) => (
-                  <span key={i} className="rounded bg-ivory-50/90 px-1 text-ink-900">
-                    {m.tiles.join(' ')}
-                  </span>
-                ))}
-                {p.concealed.map((_, i) => (
-                  <span key={i} className="inline-block h-3 w-2 rounded-sm bg-felt-700" />
-                ))}
-              </div>
+        <div className="flex flex-wrap justify-center gap-2">
+          {[left, across, right].map((p) => (
+            <SeatPill key={p.seat} wind={p.seatWind} name={NAMES[p.seat]} concealedCount={p.concealed.length} melds={p.melds} isTurn={state.turn === p.seat} />
+          ))}
+        </div>
+
+        <section className="felt flex-1 rounded-2xl p-3">
+          <p className="label mb-2 text-center">River</p>
+          {river}
+        </section>
+
+        {tip && <Coach>{tip.message}</Coach>}
+
+        {hasActions && <div className="flex flex-wrap gap-2">{actions}</div>}
+
+        <section>
+          {me.melds.length > 0 && <div className="mb-1">{myMelds}</div>}
+          <div className="hand-rail">{handTiles('md')}</div>
+          {me.bonus.length > 0 && (
+            <div className="mt-1 flex gap-1">
+              {me.bonus.map((k, i) => (
+                <Tile key={i} kind={k} size="xs" />
+              ))}
             </div>
-          );
-        })}
-      </section>
-
-      <section className="flex-1 rounded-2xl bg-felt-800/40 p-3">
-        <p className="text-ivory-200/50 mb-2 text-xs uppercase tracking-widest">River</p>
-        <div className="flex flex-wrap gap-1">
-          {state.players.flatMap((p) => p.discards.map((k, i) => <Tile key={`${p.seat}-${i}`} kind={k} />))}
-        </div>
-      </section>
-
-      {state.phase === 'claim' && legal.claims && (
-        <div className="flex flex-wrap gap-2">
-          {legal.claims.map((c, i) => (
-            <button key={i} className="rounded-full bg-brass-400 px-4 py-2 font-medium text-ink-900" onClick={() => act({ type: 'claim', seat: ME, claim: c })}>
-              {c.type === 'win' ? 'Mahjong!' : c.type[0]!.toUpperCase() + c.type.slice(1)}
-            </button>
-          ))}
-          <button className="rounded-full bg-ivory-50/10 px-4 py-2" onClick={() => act({ type: 'pass', seat: ME })}>
-            Pass
-          </button>
-        </div>
-      )}
-
-      {state.phase === 'turn' && state.turn === ME && (
-        <div className="flex flex-wrap gap-2">
-          {legal.win && (
-            <button className="rounded-full bg-brass-400 px-4 py-2 font-medium text-ink-900" onClick={() => act({ type: 'declareWin', seat: ME })}>
-              Mahjong!
-            </button>
           )}
-          {legal.kong?.map((k) => (
-            <button key={k} className="rounded-full bg-ivory-50/10 px-4 py-2" onClick={() => act({ type: 'declareKong', seat: ME, tile: k })}>
-              Kong {k}
-            </button>
-          ))}
-          {selected && (
-            <button className="rounded-full bg-ivory-50 px-4 py-2 font-medium text-ink-900" onClick={() => act({ type: 'discard', seat: ME, tile: selected })}>
-              Discard
-            </button>
-          )}
+        </section>
+      </div>
+
+      {/* Landscape tablet: the full square table. */}
+      <div className="mx-auto hidden h-dvh max-w-5xl grid-cols-[120px_1fr_120px] grid-rows-[auto_1fr_auto] gap-3 p-6 box-border md:landscape:grid">
+        <div className="col-span-3 flex items-center justify-between">{header}</div>
+
+        <SeatPill wind={left.seatWind} name={NAMES[left.seat]} concealedCount={left.concealed.length} melds={left.melds} isTurn={state.turn === left.seat} orientation="column" meldTileSize="sm" rotateMelds />
+
+        <div className="flex min-h-0 flex-col gap-3">
+          <div className="flex justify-center">
+            <SeatPill wind={across.seatWind} name={NAMES[across.seat]} concealedCount={across.concealed.length} melds={across.melds} isTurn={state.turn === across.seat} />
+          </div>
+          <section className="felt flex flex-1 flex-col items-center justify-center gap-3 rounded-2xl p-4">
+            <p className="label">River</p>
+            {river}
+          </section>
         </div>
+
+        <SeatPill wind={right.seatWind} name={NAMES[right.seat]} concealedCount={right.concealed.length} melds={right.melds} isTurn={state.turn === right.seat} orientation="column" meldTileSize="sm" rotateMelds />
+
+        {tip && (
+          <div className="col-span-3">
+            <Coach>{tip.message}</Coach>
+          </div>
+        )}
+
+        <div className="col-span-3 flex items-end justify-between gap-6 pt-2">
+          {myMelds}
+          <div className="hand-rail flex-1 justify-center">{handTiles('lg')}</div>
+          {hasActions && <div className="flex flex-none flex-wrap justify-end gap-2">{actions}</div>}
+        </div>
+      </div>
+
+      {state.phase === 'claim' && legal.claims && state.lastDiscard && (
+        <ClaimSheet
+          discardKind={state.lastDiscard.kind}
+          discarderName={NAMES[state.lastDiscard.from]}
+          heldCount={me.concealed.filter((k) => k === state.lastDiscard!.kind).length}
+          options={legal.claims}
+          onClaim={(claim) => act({ type: 'claim', seat: ME, claim })}
+          onPass={() => act({ type: 'pass', seat: ME })}
+        />
       )}
 
-      {state.phase === 'preplay' && legal.exchange && (
-        <ExchangePicker hand={me.concealed} count={legal.exchange.count} onDone={(tiles) => act({ type: 'exchange', seat: ME, tiles })} />
-      )}
+      {state.phase === 'preplay' && legal.exchange && <ExchangeSheet hand={me.concealed} count={legal.exchange.count} onDone={(tiles) => act({ type: 'exchange', seat: ME, tiles })} />}
 
       {state.phase === 'finished' && (
-        <div className="rounded-2xl bg-ivory-50 p-4 text-ink-900">
-          {state.result?.type === 'win' ? (
-            <p>
-              Seat {state.players[state.result.winner].seatWind} wins with <strong>{state.result.patternId}</strong>
-              {state.result.selfDrawn ? ' (self-drawn)' : ''}.
-            </p>
-          ) : (
-            <p>Wall exhausted. No winner.</p>
-          )}
-          <button
-            className="mt-3 rounded-full bg-ink-900 px-4 py-2 text-ivory-50"
-            onClick={() => {
-              const n = nextHand(state, ruleset);
-              setState(n ? startHand(ruleset, { seed, ...n }) : startHand(ruleset, { seed: `${seed}-again`, progress: initialProgress, dealer: 0 }));
-            }}
-          >
-            Next hand
-          </button>
-        </div>
+        <ResultSheet
+          state={state}
+          onNext={() => {
+            const n = nextHand(state, ruleset);
+            setState(n ? startHand(ruleset, { seed, ...n }) : startHand(ruleset, { seed: `${seed}-again`, progress: initialProgress, dealer: 0 }));
+          }}
+        />
       )}
-
-      <section>
-        <div className="mb-1 flex gap-1">{me.melds.map((m, i) => m.tiles.map((k, j) => <Tile key={`${i}-${j}`} kind={k} />))}</div>
-        <div className="flex flex-wrap gap-1">
-          {me.concealed.map((k, i) => (
-            <Tile key={`${k}-${i}`} kind={k} selectable={state.phase === 'turn' && state.turn === ME} selected={selected === k} onClick={() => setSelected(selected === k ? null : k)} />
-          ))}
-        </div>
-        {me.bonus.length > 0 && <div className="mt-1 flex gap-1">{me.bonus.map((k, i) => <Tile key={i} kind={k} />)}</div>}
-      </section>
-    </div>
+    </>
   );
 }
 
-function ExchangePicker({ hand, count, onDone }: { hand: readonly TileKind[]; count: number; onDone: (tiles: TileKind[]) => void }) {
+function ExchangeSheet({ hand, count, onDone }: { hand: readonly TileKind[]; count: number; onDone: (tiles: TileKind[]) => void }) {
   const [picked, setPicked] = useState<number[]>([]);
   return (
-    <div className="rounded-2xl bg-ivory-50 p-3 text-ink-900">
-      <p className="mb-2 text-sm">Goulash: choose {count} tiles to pass.</p>
-      <div className="flex flex-wrap gap-1">
-        {hand.map((k, i) => (
-          <Tile key={i} kind={k} selectable selected={picked.includes(i)} onClick={() => setPicked((p) => (p.includes(i) ? p.filter((x) => x !== i) : p.length < count ? [...p, i] : p))} />
-        ))}
+    <>
+      <div className="scrim" />
+      <div className="sheet">
+        <div className="grabber" />
+        <h2 className="font-display mb-1 text-xl">Goulash exchange</h2>
+        <p className="text-ivory-200/70 mb-3 text-sm">Choose {count} tiles to pass.</p>
+        <div className="flex flex-wrap gap-1">
+          {hand.map((k, i) => (
+            <Tile key={i} kind={k} size="md" selectable selected={picked.includes(i)} onClick={() => setPicked((p) => (p.includes(i) ? p.filter((x) => x !== i) : p.length < count ? [...p, i] : p))} />
+          ))}
+        </div>
+        <button className="btn btn-primary btn-block mt-3" disabled={picked.length !== count} onClick={() => onDone(picked.map((i) => hand[i]!))}>
+          Pass tiles
+        </button>
       </div>
-      <button className="mt-2 rounded-full bg-ink-900 px-4 py-2 text-ivory-50 disabled:opacity-40" disabled={picked.length !== count} onClick={() => onDone(picked.map((i) => hand[i]!))}>
-        Pass tiles
-      </button>
-    </div>
+    </>
+  );
+}
+
+function ResultSheet({ state, onNext }: { state: HandState; onNext: () => void }) {
+  const result = state.result;
+  return (
+    <>
+      <div className="scrim" />
+      <div className="sheet">
+        <div className="grabber" />
+        {result?.type === 'win' ? (
+          <p className="text-lg">
+            Seat {state.players[result.winner].seatWind} wins with <strong className="font-medium">{result.patternId}</strong>
+            {result.selfDrawn ? ' (self-drawn)' : ''}.
+          </p>
+        ) : (
+          <p className="text-lg">Wall exhausted. No winner.</p>
+        )}
+        <button className="btn btn-primary btn-block mt-4" onClick={onNext}>
+          Next hand
+        </button>
+      </div>
+    </>
   );
 }
