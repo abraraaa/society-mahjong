@@ -1,0 +1,63 @@
+@import 'tailwindcss';
+
+/*
+  Design tokens. The material is the tile: warm ivory faces, deep engraved
+  glyphs, a jade felt, brass for gold-state moments. Dark is the table's
+  default; light is for lobby and learning.
+*/
+@theme {
+  --color-felt-900: #0b2a26;
+  --color-felt-800: #123a34;
+  --color-felt-700: #1b4d45;
+  --color-ivory-50: #fbf7ee;
+  --color-ivory-100: #f3ecdb;
+  --color-ivory-200: #e6dbc2;
+  --color-ink-900: #1a1714;
+  --color-ink-700: #3b342c;
+  --color-brass-400: #d8b45a;
+  --color-brass-500: #c09a3c;
+  --color-lac-500: #b3352d;
+  --color-jade-500: #2f8f6f;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: 'Fraunces', ui-serif, Georgia, serif;
+  --ease-tile: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--color-felt-900);
+  color: var(--color-ivory-100);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+
+.tile {
+  @apply inline-flex items-center justify-center rounded-md select-none;
+  width: 2.25rem;
+  height: 3rem;
+  background: linear-gradient(180deg, var(--color-ivory-50), var(--color-ivory-200));
+  color: var(--color-ink-900);
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.6) inset,
+    0 2px 4px rgb(0 0 0 / 0.35),
+    0 6px 10px rgb(0 0 0 / 0.25);
+  font-size: 1.75rem;
+  line-height: 1;
+  transition: transform 160ms var(--ease-tile);
+}
+.tile[data-selectable='true']:hover {
+  transform: translateY(-4px);
+}
+.tile[data-selected='true'] {
+  transform: translateY(-10px);
+  outline: 2px solid var(--color-brass-400);
+}
+.tile[data-back='true'] {
+  background: linear-gradient(180deg, var(--color-felt-700), var(--color-felt-800));
+}

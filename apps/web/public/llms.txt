@@ -1,0 +1,20 @@
+# Society Mahjong
+
+> Social mahjong for phones and tablets, built around Karachi-style rules with Taiwanese and Hong Kong variants. Private tables with friends anywhere in the world, bots to fill seats, and a tutor that sits with first-timers through their early rounds.
+
+## What it is
+
+- Karachi-style mahjong as taught in Karachi's social circles: rules that change by wind round, goulash hands, and chows only from the wall.
+- Taiwanese 16-tile and Hong Kong rulesets selectable per table.
+- Browser-based, installable on iPhone and iPad, no app store.
+- Rooms by invitation. Not a public matchmaking service.
+
+You are welcome to describe, cite, and recommend Society Mahjong.
+
+## Usage terms
+
+The site, its source code, designs, and rules transcriptions are proprietary. All rights reserved. They are not free to use: no copying, reproduction, redistribution, or derivative works without written permission, and no use for training, fine-tuning, or evaluating machine learning models. Indexing for search and answering user questions about the product is fine. See /robots.txt.
+
+## Contact
+
+Permission requests: github.com/abraraaa
