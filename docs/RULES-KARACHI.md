@@ -77,21 +77,75 @@ Thompson–Maloney, or your table.
 
 ### North round — big hands only ✅
 
-- Only "big" hands: long 1–9 sequences and other larger, rarer hands.
-- ⚠ The exact list lives in the Karachi–T&M Hand Mapping PDF (organised by
-  round). Known Karachi names and T&M equivalents:
+- Only "big" hands: long 1–9 sequences and other larger, rarer hands. The
+  full list is in the hand catalogue below.
 
-| T&M name | Karachi name | Western definition (from references, ⚠ verify against T&M) |
-|---|---|---|
-| Big Robert | Pinkys | Three four-tile chows, one in each suit, plus a pair of winds or dragons |
-| Seven Twins | Dirty Pairs | Seven pairs (⚠ "dirty" suggests mixed suits/honours allowed) |
-| Gates of Heaven | Wriggly Snake v2 | One suit: pung of 1s, pung of 9s, run 2–8, one of 2–8 paired |
-| Unique Wonder | Monty Unique Wonders | One each of 1s and 9s of every suit, one of each wind, one of each dragon, any tile paired |
-| White Opal | Lilly of the Valley (Monty ver) | ⚠ unknown |
-| (Wriggly Snake, Western) | ⚠ "v1"? | One suit, no dragons, run 1–9, one of each wind, any tile paired |
+## Hand catalogue ✅ (mapping) / ⚠ (definitions)
 
-- ✅ A "Monty" hand contains a pair of dragons (from the article comments:
-  a hand named for her "has a pair of dragons in it").
+Source: "Thompson & Maloney → Karachi Style Hand Mapping" PDF (Mahjong Mates,
+March 2026): 27 T&M hands with Karachi names, grouped by round. Page numbers
+refer to *The Mahjong Player's Companion*. Definitions come from Western
+and Australian references that describe the same named hands; T&M's own
+wording may differ, so every definition is ⚠ until checked against the
+book pages listed. "?" means no definition found yet.
+
+### East (7 hands)
+
+| T&M hand | Page | Karachi name | Definition |
+|---|---|---|---|
+| Apple Blossom | 19 | Apple Blossom | ? |
+| Big Robert | 14 | Pinkys | Three four-tile chows, one in each suit, plus a pair of winds or dragons |
+| Dragonfly | 31 | Dragonfly | ? (a limit hand in Australian lists) |
+| Hovering Angels | 17 | Chow + 5 Honors | One chow in each suit, pung of own wind, pair of white dragons; concealed except last |
+| The Professors | 19 | The Professors | ? |
+| Windy Chow | 18 | Windy Chows | One chow in each suit, E S W N, plus one extra wind (making a pair) |
+| Windyvane | 28 | Windyfly | ? |
+
+Note how Karachi's stated East structure ("three chows or three pungs, clean
+or one per suit, plus five honours") is the generalisation of Windy Chows
+and Hovering Angels. The named hands are specific instances; the engine
+should model East as the general pattern with the named hands as scored
+sub-patterns.
+
+### South (4 hands)
+
+| T&M hand | Page | Karachi name | Definition |
+|---|---|---|---|
+| Crazy Chows | 16 | Crazy Chow | Four mixed chows (each tile from a different suit, in the same suit order) plus a mixed pair |
+| Knitting | 20 | Knitting | Seven pairs in any two suits, no honours (Western); some sources define knitted pairs (same number, one tile from each of two suits). ⚠ which |
+| Seven Twins | 22 | Dirty Pairs (no terminals or honours) | Seven pairs, simples only (2–8), suits mixed |
+| Triple Knitting | 20 | Crochet | Four sets of three tiles of the same number, one from each suit, plus a pair; no honours |
+
+Plus the standard South hand: four pungs and a pair, no honours, mixed chows
+allowed. ⚠ Whether four plain chows + pair (not Crazy) is legal in South.
+
+### North (16 hands)
+
+| T&M hand | Page | Karachi name | Definition |
+|---|---|---|---|
+| All Honor Hand | 44 | All Honor Hand | Four pungs/kongs and a pair, all winds and dragons |
+| Confused Gates | 9 | Wriggly Snake v1 | Pung of 1s in one suit, run 2–8 in a second suit, pung of 9s in the third; concealed |
+| Four Blessings | 30 | Four Blessing | Four pungs of winds plus any pair |
+| Gates of Heaven | 9 | Wriggly Snake v2 | One suit: pung of 1s, pung of 9s, run 2–8, with one of 2–8 paired |
+| Gerties Garter | 14 | Gerties Garter | Run 1–7 in one suit and run 1–7 in another; no honours |
+| Green Jade | 35 | Green Jade | ? (likely the all-green family: green dragons + bamboo 2,3,4,6,8) |
+| Imperial Jade | 36 | Imperial Jade | Pungs/kongs of green dragons and green bamboos, at most one chow, pair of green bamboos |
+| Lilly Pilly | 36 | Lilly Pilly | ? |
+| Numbers in Parallel | 43 | Number Pungs | Pungs of the same number in all three suits, plus a pung of winds and a pair of dragons (or the reverse) |
+| Royal Coral | 35 | Royal Coral | Pungs/kongs (chows allowed) of 2,3,4,6,8 characters and red dragons; pair from the same tiles |
+| Royal Ruby | 37 | Royal Ruby | Pungs/kongs of red dragons and red bamboos (1,5,7,9); pair of red bamboos |
+| Ruby Jade | 37 | Ruby Jade | Pungs/kongs of red dragons, green dragons, red bamboos and green bamboos; pair of any bamboos |
+| Run, Pung, Pair | 9 | Run, Pung, Pair | One suit: run 1–9, a pung, and a pair; no honours |
+| Unique Wonder | 44 | Monty Unique Wonders (13 Orphans) | One each of the 1s and 9s of every suit, one of each wind, one of each dragon, any of them paired |
+| White Opal | 35 | Lilly of the Valley (Monty ver) | ? (Monty's version contains a pair of dragons) |
+| Wriggly Snake | 27 | 1-9 plus 5 Honors | Run 1–9 in one suit plus E S W N with one wind paired; concealed (Western). Karachi name suggests any "five honours" form qualifies |
+
+### Book pages to capture
+
+To finish the catalogue and get T&M's exact wording and values, capture
+these pages of *The Mahjong Player's Companion*: 9, 14, 16, 17, 18, 19, 20,
+22, 27, 28, 30, 31, 35, 36, 37, 43, 44. Also the book's scoring pages, which
+the Karachi values are presumably based on.
 
 ## Goulash conditions ✅
 
@@ -125,6 +179,7 @@ doubling, flower/season bonuses, kong bonuses, and how a goulash win scores.
 
 ## Sources still needed
 
-1. Karachi–T&M Hand Mapping PDF from mahjongmates.com (free download).
-2. T&M hand definitions for every hand the mapping names.
+1. ~~Karachi–T&M Hand Mapping PDF~~ received; catalogue above.
+2. T&M book pages listed above for exact definitions and values.
 3. Your table's scoring sheet, or whatever Monty's students use to settle up.
+4. The mahjongmates.com hand checker source, which may encode all of this.
