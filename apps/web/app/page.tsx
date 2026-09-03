@@ -6,7 +6,7 @@ export default function Home() {
       <header className="space-y-3">
         <p className="text-brass-400 text-xs font-medium tracking-[0.3em] uppercase">Society</p>
         <h1 className="font-display text-5xl leading-none text-ivory-50">Mahjong</h1>
-        <p className="text-ivory-200/80">Mahjong with your friends, wherever they are. Any table's rules, and a tutor who sits with you for your first rounds.</p>
+        <p className="text-ivory-200/80">Mahjong with your friends, wherever they are. Any table&rsquo;s rules, and a tutor who sits with you for your first rounds.</p>
       </header>
       <nav className="space-y-3">
         <Link
