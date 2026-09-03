@@ -7,7 +7,7 @@ export default function Home() {
         <p className="eyebrow">Society</p>
         <h1 className="font-display text-5xl leading-none text-ivory-50">Mahjong</h1>
         <p className="text-ivory-200/80 text-base leading-normal">
-          Karachi rules, played with friends wherever they are. A tutor sits with you for your first rounds.
+          Mahjong with your friends, wherever they are. Any table&rsquo;s rules, and a tutor who sits with you for your first rounds.
         </p>
       </header>
       <nav className="space-y-3">

@@ -1,7 +1,8 @@
-import { FULL_SET, isDragonTile, isWindTile, windOf, windTile } from '../../tiles';
+import { FULL_SET, isDragonTile, isWindTile, windOf } from '../../tiles';
 import type { Guard, Guards } from '../../patterns/types';
 import type { GameProgress, HandSpec, Ruleset, Settlement, WinInput } from '../../ruleset';
 import { EAST_GENERAL, EAST_NAMED, GOULASH, NORTH, SOUTH } from './patterns';
+import { scoreKarachi } from './scoring';
 
 /**
  * Goulash honour gate: a hand containing any honour pung must satisfy two of
@@ -26,12 +27,8 @@ const goulashHonours: Guard = (sol, _hand, ctx) => {
   return honourPungs === 0 || conditions >= 2;
 };
 
-const ownWindPung: Guard = (sol, _hand, ctx) =>
-  sol.groups.some((g) => (g.type === 'pung' || g.type === 'kong') && g.tiles[0] === windTile(ctx.seatWind));
-
 export const karachiGuards: Guards = {
   'karachi.goulashHonours': goulashHonours,
-  'karachi.ownWindPung': ownWindPung,
 };
 
 const GOULASH_SPEC: HandSpec = {
@@ -74,22 +71,9 @@ export function karachiHandSpec(p: GameProgress): HandSpec {
   }
 }
 
-/**
- * Karachi scoring is not yet documented (see docs/RULES-KARACHI.md). Until it
- * is, a win is worth one unit and settlements are flagged provisional.
- */
 export function karachiScore(win: WinInput): Settlement {
-  const best = win.matches[0];
-  const lines = best ? [{ id: best.pattern.id, name: best.pattern.localName ?? best.pattern.name, value: 1 }] : [];
-  const payers = win.selfDrawn || win.discarder === undefined ? ([0, 1, 2, 3] as const).filter((s) => s !== win.seat) : [win.discarder];
-  return {
-    winner: win.seat,
-    unit: 'provisional',
-    total: 1,
-    lines,
-    transfers: payers.map((from) => ({ from, to: win.seat, amount: 1 })),
-    provisional: true,
-  };
+  const handKind = karachiHandSpec(win.ctx.roundWind === 'E' && win.handIndex === 0 ? { roundWind: 'E', roundIndex: 0, handInRound: 0, handIndex: 0 } : { roundWind: win.ctx.roundWind, roundIndex: 0, handInRound: 1, handIndex: 1 }).kind;
+  return scoreKarachi(win, handKind);
 }
 
 export const karachi: Ruleset = {
@@ -109,3 +93,4 @@ export const karachi: Ruleset = {
 };
 
 export * from './patterns';
+export * from './scoring';

@@ -155,14 +155,37 @@ function candidatesFor(comp: Comp, counts: Counts, b: Bindings): Candidate[] {
     }
     case 'seq': {
       for (const s of suitsFor(comp.suit, b)) {
-        for (let i = 1; i + comp.len - 1 <= 9; i++) {
+        for (const i of numsFor(comp.start, b)) {
+          if (i + comp.len - 1 > 9) continue;
           const tiles: TileKind[] = [];
           for (let j = 0; j < comp.len; j++) tiles.push(suitTile(s, i + j));
           if (!has(counts, tiles)) continue;
-          const nb = isVar(comp.suit) ? bind(b, comp.suit, s) : b;
+          let nb: Bindings | null = isVar(comp.suit) ? bind(b, comp.suit, s) : b;
+          if (nb && isVar(comp.start)) nb = bind(nb, comp.start, i);
           if (nb) out.push({ tiles, bindings: nb });
         }
       }
+      return out;
+    }
+    case 'mixedRun': {
+      // one tile per number, each from any suit that still has it
+      const pick = (n: number, chosen: TileKind[], remaining: Counts): void => {
+        if (n > comp.to) {
+          out.push({ tiles: [...chosen], bindings: b });
+          return;
+        }
+        for (const s of SUITS) {
+          const k = suitTile(s, n);
+          if ((remaining.get(k) ?? 0) <= 0) continue;
+          const next = new Map(remaining);
+          next.set(k, next.get(k)! - 1);
+          chosen.push(k);
+          pick(n + 1, chosen, next);
+          chosen.pop();
+          if (out.length > 64) return;
+        }
+      };
+      pick(comp.from, [], counts);
       return out;
     }
     case 'run': {
@@ -244,7 +267,8 @@ function candidatesFor(comp: Comp, counts: Counts, b: Bindings): Candidate[] {
 function expand(components: readonly Comp[]): Comp[] {
   const out: Comp[] = [];
   for (const comp of components) {
-    const n = 'n' in comp && comp.n !== undefined ? comp.n : 1;
+    // `n` is a repeat count, except on `tiles` where it is the number of tiles
+    const n = comp.c !== 'tiles' && 'n' in comp && comp.n !== undefined ? comp.n : 1;
     for (let i = 0; i < n; i++) out.push(comp);
   }
   return out;
@@ -257,6 +281,7 @@ function specificity(c: Comp): number {
       return 0;
     case 'knit':
     case 'mixedSeq':
+    case 'mixedRun':
     case 'tiles':
       return 1;
     case 'set':
