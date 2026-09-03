@@ -4,60 +4,442 @@
   Design tokens. The material is the tile: warm ivory faces, deep engraved
   glyphs, a jade felt, brass for gold-state moments. Dark is the table's
   default; light is for lobby and learning.
+
+  Mirrors the Society Mahjong design guide (Design Guide.dc.html). Token
+  names keep this file's own scale (felt-900/800/700/600, ivory-50/100/200,
+  ink-900/700, brass-400/500) rather than the guide's shorter aliases
+  (felt-950, gold, cream, ink) — same hex values, so every existing
+  `bg-felt-800`, `text-brass-400` etc. utility keeps working.
 */
 @theme {
-  --color-felt-900: #0b2a26;
-  --color-felt-800: #123a34;
-  --color-felt-700: #1b4d45;
-  --color-ivory-50: #fbf7ee;
-  --color-ivory-100: #f3ecdb;
-  --color-ivory-200: #e6dbc2;
-  --color-ink-900: #1a1714;
+  --color-felt-900: #0b2a26; /* app background */
+  --color-felt-800: #123a34; /* seat cards */
+  --color-felt-700: #1b4d45; /* table surface, tile backs */
+  --color-felt-600: #256359; /* hover on felt */
+  --color-ivory-50: #fbf7ee; /* tile face, primary buttons */
+  --color-ivory-100: #f3ecdb; /* text on felt */
+  --color-ivory-200: #e6dbc2; /* tile face shade */
+  --color-ink-900: #1a1714; /* glyphs, text on ivory */
   --color-ink-700: #3b342c;
-  --color-brass-400: #d8b45a;
+  --color-brass-400: #d8b45a; /* attention only, never a fill */
   --color-brass-500: #c09a3c;
-  --color-lac-500: #b3352d;
-  --color-jade-500: #2f8f6f;
-  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-display: 'Fraunces', ui-serif, Georgia, serif;
+  --color-lac-500: #b3352d; /* 萬, 中, dots */
+  --color-jade-500: #2f8f6f; /* bamboo, 發 */
+  --color-azure-500: #2d4f8a; /* dot rings, 白 */
+  --color-danger: #c9553f;
+
+  /* --font-inter / --font-fraunces come from next/font (see app/layout.tsx) */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: var(--font-fraunces), ui-serif, Georgia, serif;
   --ease-tile: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  --radius-tile-sm: 3px;
+  --radius-tile: 5px;
+  --radius-tile-lg: 7px;
+  --radius-card: 16px;
+  --radius-pill: 999px;
 }
 
 :root {
   color-scheme: light dark;
+
+  /* Tile sizes: width / height, 60:84 in the source SVGs. */
+  --tile-xs-w: 24px;
+  --tile-xs-h: 34px; /* opponent melds, wall pips */
+  --tile-sm-w: 36px;
+  --tile-sm-h: 50px; /* river */
+  --tile-md-w: 44px;
+  --tile-md-h: 62px; /* hand rail, phone */
+  --tile-lg-w: 56px;
+  --tile-lg-h: 78px; /* hand rail, tablet / claim sheet */
+  --tile-xl-w: 88px;
+  --tile-xl-h: 123px; /* coach spotlight */
+  --hand-gap: 4px;
+  --river-gap: 4px;
+  --claim-seconds: 8s;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 html,
 body {
   height: 100%;
+}
+body {
+  margin: 0;
   background: var(--color-felt-900);
   color: var(--color-ivory-100);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
 }
+a {
+  color: var(--color-brass-400);
+}
+a:hover {
+  color: var(--color-ivory-50);
+}
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  margin: 0;
+}
 
+/* Felt table surface */
+.felt {
+  background:
+    radial-gradient(120% 80% at 50% 30%, rgb(255 255 255 / 0.06), transparent 60%),
+    var(--color-felt-700);
+}
+
+/* Tile faces. <Tile kind="m1" size="md" /> renders <button class="tile tile-md"><img src="/tiles/m1.svg"></button> */
 .tile {
-  @apply inline-flex items-center justify-center rounded-md select-none;
-  width: 2.25rem;
-  height: 3rem;
+  position: relative;
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  border-radius: var(--radius-tile);
   background: linear-gradient(180deg, var(--color-ivory-50), var(--color-ivory-200));
-  color: var(--color-ink-900);
   box-shadow:
     0 1px 0 rgb(255 255 255 / 0.6) inset,
     0 2px 4px rgb(0 0 0 / 0.35),
     0 6px 10px rgb(0 0 0 / 0.25);
-  font-size: 1.75rem;
-  line-height: 1;
-  transition: transform 160ms var(--ease-tile);
+  transition:
+    transform 0.15s var(--ease-tile),
+    box-shadow 0.15s var(--ease-tile),
+    opacity 0.15s ease;
+  touch-action: manipulation;
+  cursor: pointer;
+}
+.tile > img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+}
+.tile-xs {
+  width: var(--tile-xs-w);
+  height: var(--tile-xs-h);
+  border-radius: 2px;
+}
+.tile-sm {
+  width: var(--tile-sm-w);
+  height: var(--tile-sm-h);
+  border-radius: var(--radius-tile-sm);
+}
+.tile-md {
+  width: var(--tile-md-w);
+  height: var(--tile-md-h);
+}
+.tile-lg {
+  width: var(--tile-lg-w);
+  height: var(--tile-lg-h);
+}
+.tile-xl {
+  width: var(--tile-xl-w);
+  height: var(--tile-xl-h);
+  border-radius: var(--radius-tile-lg);
 }
 .tile[data-selectable='true']:hover {
   transform: translateY(-4px);
 }
 .tile[data-selected='true'] {
   transform: translateY(-10px);
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.6) inset,
+    0 6px 10px rgb(0 0 0 / 0.4),
+    0 14px 24px rgb(0 0 0 / 0.3);
   outline: 2px solid var(--color-brass-400);
+  outline-offset: 1px;
+}
+.tile[data-dim='true'] {
+  opacity: 0.38;
+}
+.tile[data-claimable='true'] {
+  outline: 2px solid var(--color-brass-400);
+  outline-offset: 1px;
+  animation: tile-pulse 1.2s ease-in-out infinite;
+}
+.tile[data-coached='true']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow:
+    0 0 0 2px var(--color-brass-400) inset,
+    0 0 18px rgb(216 180 90 / 0.7);
+}
+.tile[data-fresh='true'] {
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.6) inset,
+    0 2px 4px rgb(0 0 0 / 0.35),
+    0 6px 10px rgb(0 0 0 / 0.25),
+    0 0 0 2px rgb(216 180 90 / 0.55);
 }
 .tile[data-back='true'] {
-  background: linear-gradient(180deg, var(--color-felt-700), var(--color-felt-800));
+  background: var(--color-felt-700) url('/tiles/back.svg') center / cover;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+}
+.tile[data-back='true'][data-rotate='true'] {
+  transform: rotate(90deg);
+}
+@keyframes tile-pulse {
+  0%,
+  100% {
+    outline-color: var(--color-brass-400);
+  }
+  50% {
+    outline-color: rgb(216 180 90 / 0.35);
+  }
+}
+
+/* Hand rail: horizontal, snaps, never wraps */
+.hand-rail {
+  display: flex;
+  gap: var(--hand-gap);
+  align-items: flex-end;
+  padding: 14px 16px calc(8px + var(--safe-bottom));
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+}
+.hand-rail::-webkit-scrollbar {
+  display: none;
+}
+.hand-rail > .tile {
+  flex: 0 0 auto;
+  scroll-snap-align: center;
+}
+.hand-rail > .drawn {
+  margin-left: 12px;
+}
+
+/* River grid */
+.river {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, var(--tile-sm-w));
+  gap: var(--river-gap);
+  justify-content: center;
+}
+
+/* Meld group */
+.meld {
+  display: inline-flex;
+  gap: 1px;
+  padding: 2px;
+  border-radius: 4px;
+  background: rgb(0 0 0 / 0.18);
+}
+
+/* Seat strip (opponents) */
+.seat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-card);
+  background: rgb(18 58 52 / 0.6);
+  font-size: 12px;
+  color: rgb(243 236 219 / 0.7);
+}
+.seat.is-turn {
+  box-shadow: 0 0 0 1.5px var(--color-brass-400) inset;
+  color: var(--color-ivory-100);
+}
+.seat.is-column {
+  flex-direction: column;
+  padding: 12px 0;
+  gap: 10px;
+}
+.seat .wind {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: var(--color-ivory-50);
+  color: var(--color-ink-900);
+  font: 500 12px var(--font-sans);
+}
+.seat .pips {
+  display: flex;
+  gap: 1px;
+}
+.seat.is-column .pips {
+  flex-direction: column;
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 20px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  font: 500 16px var(--font-sans);
+  cursor: pointer;
+  transition:
+    transform 0.1s,
+    background 0.15s;
+}
+.btn:active {
+  transform: scale(0.97);
+}
+.btn-primary {
+  background: var(--color-ivory-50);
+  color: var(--color-ink-900);
+}
+.btn-primary:hover {
+  background: #fff;
+}
+.btn-gold {
+  background: var(--color-brass-400);
+  color: var(--color-ink-900);
+}
+.btn-ghost {
+  background: rgb(251 247 238 / 0.1);
+  color: var(--color-ivory-100);
+}
+.btn-ghost:hover {
+  background: rgb(251 247 238 / 0.16);
+}
+.btn-quiet {
+  background: transparent;
+  color: rgb(243 236 219 / 0.6);
+}
+.btn:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+.btn-block {
+  width: 100%;
+}
+
+/* Chips / labels */
+.eyebrow {
+  font: 500 12px var(--font-sans);
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--color-brass-400);
+}
+.label {
+  font: 500 11px var(--font-sans);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgb(243 236 219 / 0.5);
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--radius-pill);
+  background: rgb(251 247 238 / 0.1);
+  font: 500 13px var(--font-sans);
+}
+.chip-gold {
+  background: rgb(216 180 90 / 0.18);
+  color: var(--color-brass-400);
+}
+
+/* Bottom sheet (claims) */
+.sheet {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 30;
+  max-width: 480px;
+  margin-inline: auto;
+  padding: 20px 16px calc(20px + var(--safe-bottom));
+  border-radius: 24px 24px 0 0;
+  background: var(--color-felt-900);
+  box-shadow: 0 -12px 40px rgb(0 0 0 / 0.45);
+  animation: sheet-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.sheet .grabber {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgb(243 236 219 / 0.25);
+  margin: 0 auto 16px;
+}
+.timer {
+  height: 3px;
+  border-radius: 2px;
+  background: rgb(243 236 219 / 0.15);
+  overflow: hidden;
+}
+.timer > i {
+  display: block;
+  height: 100%;
+  background: var(--color-brass-400);
+  animation: timer-drain var(--claim-seconds) linear forwards;
+}
+@keyframes sheet-in {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes timer-drain {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0;
+  }
+}
+
+/* Coach bubble */
+.coach {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border-radius: var(--radius-card);
+  background: var(--color-ivory-50);
+  color: var(--color-ink-900);
+  font-size: 15px;
+  line-height: 1.45;
+}
+.coach .avatar {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--color-brass-400);
+  display: grid;
+  place-items: center;
+  font: 500 13px var(--font-display);
+}
+.coach b {
+  font-weight: 500;
+}
+
+/* Scrim */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgb(11 42 38 / 0.55);
+  backdrop-filter: blur(2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
