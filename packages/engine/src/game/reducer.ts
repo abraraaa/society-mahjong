@@ -165,7 +165,8 @@ export function startHand(ruleset: Ruleset, opts: StartHandOptions): HandState {
         {
           ...state,
           wall: d.wall,
-          players: withPlayer(state.players, seat, { bonus: [...p.bonus, b], concealed: removeOne(p.concealed, b).concat(isBonusTile(d.tile.kind) ? [d.tile.kind] : [d.tile.kind]) }),
+          // the replacement may itself be a bonus tile; the loop replaces it on the next pass
+          players: withPlayer(state.players, seat, { bonus: [...p.bonus, b], concealed: [...removeOne(p.concealed, b), d.tile.kind] }),
         },
         { type: 'bonus', seat, tile: b },
       );
