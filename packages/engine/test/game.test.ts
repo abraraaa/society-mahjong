@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SEATS, createTaiwanese, initialProgress, karachi, legalActions, nextHand, reduce, simpleBot, startHand, type HandState, type Ruleset } from '../src/index';
+import { SEATS, createTaiwanese, initialProgress, karachi, legalActions, nextHand, publicView, reduce, simpleBot, startHand, viewFor, type HandState, type Ruleset } from '../src/index';
 
 function totalTiles(s: HandState): number {
   let n = s.wall.live.length + s.wall.dead.length;
@@ -15,7 +15,7 @@ function playHand(ruleset: Ruleset, state: HandState): HandState {
     let acted = false;
     for (const seat of SEATS) {
       if (s.phase === 'finished') break;
-      const a = simpleBot(s, ruleset, seat);
+      const a = simpleBot(viewFor(s, ruleset, seat));
       if (a) {
         s = reduce(s, a, ruleset);
         acted = true;
@@ -92,5 +92,30 @@ describe('bots play whole hands', () => {
       if (hands > 60) throw new Error('game did not end');
     }
     expect(hands).toBeGreaterThanOrEqual(16);
+  });
+});
+
+describe('redacted views', () => {
+  it('never exposes the seed, the wall or other hands', () => {
+    const s = startHand(karachi, { seed: 'secret-seed', progress: initialProgress, dealer: 0 });
+    const pub = JSON.stringify(publicView(s));
+    expect(pub).not.toContain('secret-seed');
+    expect(pub).not.toContain('"live"');
+    expect(pub).not.toContain('"concealed"');
+    const mine = viewFor(s, karachi, 1);
+    expect(mine.concealed).toEqual(s.players[1].concealed);
+    expect(mine.players[0].concealedCount).toBe(14);
+    expect(JSON.stringify(mine)).not.toContain('secret-seed');
+    for (const seat of [0, 2, 3] as const) {
+      expect(JSON.stringify(mine.players[seat])).not.toContain(s.players[seat].concealed.join('","'));
+    }
+    expect(mine.drawn).toBeNull(); // not seat 1's turn
+    expect(viewFor(s, karachi, 0).drawn).toBe(s.drawn);
+  });
+  it('reveals every hand once the hand is finished', () => {
+    const tw = createTaiwanese({ sheet: 'house' });
+    const s = playHand(tw, startHand(tw, { seed: 'tw-0', progress: initialProgress, dealer: 0 }));
+    const v = publicView(s);
+    expect(Object.keys(v.revealed)).toHaveLength(4);
   });
 });

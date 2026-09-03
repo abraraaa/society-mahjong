@@ -1,6 +1,6 @@
 # Society Mahjong — Plan v0.1
 
-A browser-led social mahjong game for Karachi-style play. Mobile and tablet first
+A browser-led social mahjong game. Karachi rules ship first because that is the craze we are answering, and Karachi's tables are the design muse, but the product is multi-ruleset and is not called "Karachi style" anywhere a player sees it. Mobile and tablet first
 (iOS 26+ Safari guaranteed), up to ~100 concurrent players (~25 tables),
 beautiful, fast, persistent, with a tutor that sits beside first-timers.
 
@@ -14,9 +14,9 @@ Status: **draft v0.2 for discussion**. Nothing here is built yet.
 who play at home and at the club, plus the wave of first-timers who want to keep
 up. Most of them have never touched a mahjong app. Many have never played.
 
-**What it is.** A private-table game you open in Safari, sign in with Apple or a
+**What it is.** A private-table game you open in Safari, sign in with a
 magic link, and play with three friends (or bots) in a room you share by link.
-Karachi rules by default, other rulesets selectable per room. A tutor sits in
+The host picks the table's rules; Karachi is the first ruleset built. A tutor sits in
 your first rounds and explains what to do and why.
 
 **What it is not (v1).** Not a public matchmaking lobby, not a ranked ladder,
@@ -133,8 +133,13 @@ Measured from bot-played hands: ~100 player actions and 110–160 engine events
 per hand. One row per event costs 35–50 KB per hand and would fill the tier
 in about two months of nightly play. So the engine's determinism does the
 work instead: **a hand is fully described by its seed plus the ordered list
-of player actions** (draws derive from the seed), which is ~450 bytes raw
-and ~230 bytes gzipped.
+of validated player actions** (draws derive from the seed), which is ~450
+bytes raw and ~230 bytes gzipped. To be precise about the pattern: this is
+a **deterministic game log with materialised state**, not event sourcing.
+Player actions are the canonical input; the reducer derives state and the
+events the UI animates. Invariant: `seed + actions = the game`. `live_state`
+is a cache of that and is never patched by hand; if it ever disagrees with
+the log it is thrown away and rebuilt by replay.
 
 - `profiles` — user, display name, avatar URL (Blob), preferences, onboarding stage
 - `rooms` — code, host, ruleset id + options, seat assignments, status, ledger
@@ -182,8 +187,13 @@ interface Ruleset {
   }
   isWinning(hand, ctx): WinResult   // matches hand against allowed patterns for this round
   score(win, ctx): Settlement       // who pays whom, doubles, limits
-  analyse(hand, ctx): Analysis      // for coach: what you're building, distance to win, safe discards
 }
+
+// Not on the ruleset: analysis (distance to a hand, safe discards, what you
+// are building) is a separate layer that consumes the engine's legal moves
+// and pattern data. The engine says what is legal; the analysis layer says
+// what is good; the tutor says why. Bots and the coach both sit on the
+// analysis layer, and bots only ever see a PrivatePlayerView, never HandState.
 ```
 
 Hand definitions are **data, not code**: a pattern language (sets, runs,

@@ -1,6 +1,6 @@
 # Society Mahjong
 
-Social mahjong for phones and tablets. Karachi rules first, Taiwanese and Hong Kong to follow, with a tutor for first-timers.
+Social mahjong for phones and tablets: the rules your table plays, friends anywhere, bots to fill seats, and a tutor for first-timers. Karachi rules ship first because that is where the current craze is; the product is not tied to one style.
 
 - `docs/PLAN.md` — product, architecture, milestones
 - `docs/RULES-KARACHI.md`, `docs/RULES-TAIWANESE.md` — rules specs the engine is built from

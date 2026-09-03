@@ -1,7 +1,5 @@
 import { isHonourTile, isSuitTile, numOf, suitOf, suitTile, tileOrder, type TileKind } from '../tiles';
-import type { Seat } from '../hand';
-import type { Ruleset } from '../ruleset';
-import { legalActions, type Action, type HandState } from '../game/index';
+import type { Action, PrivatePlayerView } from '../game/index';
 
 /** How much a tile contributes to the rest of the hand; low means discard first. */
 export function tileUtility(kind: TileKind, hand: readonly TileKind[]): number {
@@ -36,11 +34,14 @@ function leastUseful(hand: readonly TileKind[], n: number): TileKind[] {
   return out;
 }
 
-/** A deterministic bot good enough to fill a seat and finish a hand. */
-export function simpleBot(state: HandState, ruleset: Ruleset, seat: Seat): Action | null {
-  const legal = legalActions(state, ruleset, seat);
-  const p = state.players[seat];
-  if (legal.exchange) return { type: 'exchange', seat, tiles: leastUseful(p.concealed, legal.exchange.count) };
+/**
+ * A deterministic bot good enough to fill a seat and finish a hand. It sees
+ * exactly what a human in that seat sees: a PrivatePlayerView, never the
+ * full HandState, so it cannot act on the wall or other players' tiles.
+ */
+export function simpleBot(view: PrivatePlayerView): Action | null {
+  const { legal, me: seat, concealed } = view;
+  if (legal.exchange) return { type: 'exchange', seat, tiles: leastUseful(concealed, legal.exchange.count) };
   if (legal.claims) {
     const win = legal.claims.find((c) => c.type === 'win');
     if (win) return { type: 'claim', seat, claim: win };
@@ -52,6 +53,6 @@ export function simpleBot(state: HandState, ruleset: Ruleset, seat: Seat): Actio
   }
   if (legal.win) return { type: 'declareWin', seat };
   if (legal.kong && legal.kong.length > 0) return { type: 'declareKong', seat, tile: legal.kong[0]! };
-  if (legal.discard && legal.discard.length > 0) return { type: 'discard', seat, tile: leastUseful(p.concealed, 1)[0]! };
+  if (legal.discard && legal.discard.length > 0) return { type: 'discard', seat, tile: leastUseful(concealed, 1)[0]! };
   return null;
 }
