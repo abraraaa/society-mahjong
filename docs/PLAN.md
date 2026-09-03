@@ -119,10 +119,11 @@ real websockets and alarms, and the engine package moves unchanged. Not for v1.
 
 ### Regions
 
-Players split between Karachi and London. Supabase in `ap-south-1` (Mumbai) is
-~40ms from Karachi and ~120ms from London; the reverse is true for `eu-west-2`.
-Turn-based play tolerates either. Default: Mumbai, Vercel functions pinned to
-`bom1`. ⚠ Confirm where the first 100 players actually are.
+The first players are spread across London, Karachi, Dubai and Sri Lanka.
+Mumbai (`ap-south-1`) is the centre of that map: roughly 40ms from Karachi
+and Dubai, 60ms from Colombo, 120ms from London. London would punish three
+of the four groups. Decision: Supabase in Mumbai, Vercel functions pinned to
+`bom1`. Turn-based play tolerates 120ms comfortably.
 
 ### Data model (sketch)
 
@@ -164,9 +165,10 @@ interprets. That is what makes Western special hands, Karachi round rules and
 HK standard hands live in one engine, and what lets the coach explain "you
 are two tiles from Pinkys".
 
-Karachi ships first. British/Western (Thompson–Maloney) is now the natural
-second, since Karachi's South and North rounds already need its hand
-patterns. Hong Kong third. British/Western third as it shares
+Karachi ships first as the "Karachi official" ruleset. The circles who play
+it also play something else, likely Hong Kong (Cantonese) rules, so Hong
+Kong is second. Western/British patterns arrive almost free with Karachi's
+South and North rounds and become a third selectable ruleset once scored. British/Western third as it shares
 Karachi's ancestry. American is out of scope.
 
 ---
@@ -257,7 +259,7 @@ M0's engine work is blocked on §2. Everything else can start.
 ## 7. Open questions (need answers to proceed)
 
 1. The Karachi–T&M Hand Mapping PDF, T&M hand definitions, and how your table scores. Flowers? Kongs? Hands per round?
-2. Where are the first 100 players, Karachi or London or both equally?
+2. ~~Where are the first 100 players?~~ London, Karachi, Dubai, Sri Lanka. Mumbai region chosen.
 3. Scoring display: points only, or a stakes ledger with a host-set unit value?
 4. Turn timers: social (30s, nudges) or strict (10s, auto-discard)?
 5. Guests without accounts: allowed to play, or must sign in to sit?
