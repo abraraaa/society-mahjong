@@ -1,32 +1,30 @@
 import type { MetadataRoute } from 'next';
 
-/** Crawlers that harvest content for model training. Advisory, like all of robots.txt. */
-const AI_CRAWLERS = [
+/**
+ * Discoverable, not free to use. Search engines and answer/recommendation
+ * agents may index everything. Crawlers that exist only to harvest training
+ * data are refused. Advisory, like all of robots.txt; the licence is the law.
+ */
+const TRAINING_ONLY_CRAWLERS = [
   'GPTBot',
-  'ChatGPT-User',
-  'OAI-SearchBot',
-  'ClaudeBot',
-  'Claude-Web',
-  'anthropic-ai',
   'Google-Extended',
+  'ClaudeBot',
+  'anthropic-ai',
   'CCBot',
-  'PerplexityBot',
   'Bytespider',
-  'Amazonbot',
   'Applebot-Extended',
-  'FacebookBot',
   'Meta-ExternalAgent',
+  'FacebookBot',
   'cohere-ai',
   'Diffbot',
   'omgili',
-  'YouBot',
 ];
 
 export default function robots(): MetadataRoute.Robots {
   return {
     rules: [
-      ...AI_CRAWLERS.map((userAgent) => ({ userAgent, disallow: '/' })),
-      { userAgent: '*', allow: '/', disallow: ['/play/', '/api/'] },
+      ...TRAINING_ONLY_CRAWLERS.map((userAgent) => ({ userAgent, disallow: '/' })),
+      { userAgent: '*', allow: '/', disallow: ['/api/'] },
     ],
     sitemap: 'https://societymahjong.app/sitemap.xml',
     host: 'https://societymahjong.app',
