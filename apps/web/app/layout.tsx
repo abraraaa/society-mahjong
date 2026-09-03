@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
+  metadataBase: new URL('https://societymahjong.app'),
   title: 'Society Mahjong',
   description: 'Karachi-style social mahjong for phones and tablets.',
   appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'Mahjong' },
