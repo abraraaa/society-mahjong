@@ -8,32 +8,24 @@ tolerate sign-up friction.
 ## 1. Authentication
 
 **Supabase Auth**, cookie sessions via `@supabase/ssr`, refreshed in Next.js
-middleware. Decision: **passkeys, not Sign in with Apple.** Same Face ID
-moment on iPhone, no Apple Developer account.
+middleware. Decision: **no Sign in with Apple** (no Apple Developer account
+needed) and **passkeys parked** until Supabase's passkey support leaves
+beta; it shipped as experimental in May 2026 with an API that may change,
+which is the wrong foundation for the sign-in path. The auth module keeps a
+seam for it so enabling later is a config change plus one enrolment prompt.
 
-A passkey is a credential, not an identity, so the first sign-in still needs
-something to bind it to. The flow:
-
-1. First visit: email → magic link (or Google, if we enable it). One time.
-2. On that first successful sign-in, offer a passkey: "Use Face ID next
-   time?" Enrolment is one tap on iOS 26.
-3. Every return: passkey. No email, no link, no password ever.
-
-Supabase Auth shipped passkeys as a beta in May 2026 (WebAuthn; relying
-party id is the bare domain `societymahjong.app`, origins include the
-production and preview hosts). Beta means the API may shift before M2; we
-verify against the docs when we build it, and magic link remains the
-fallback either way. Anonymous guests stay as below.
+v1 flow: email → magic link (or Google). Sessions are long-lived, so on a
+phone this happens roughly once. Anonymous guests as below.
 
 | Provider | Role | Prerequisite |
 |---|---|---|
-| Magic link (email) | Bootstraps an identity | none |
-| Passkey | Every subsequent sign-in | Supabase passkeys enabled, RP id + origins configured |
-| Google | Optional bootstrap for Android and desktop friends | Google Cloud OAuth client |
+| Magic link (email) | Primary sign-in | none |
+| Google | Android and desktop friends | Google Cloud OAuth client |
+| Passkey | Parked until GA; then "Use Face ID next time?" after first sign-in | Supabase passkeys GA, RP id + origins configured |
 | Anonymous (guest) | Play from an invite without any of the above | enable in Supabase Auth |
 
-Not in v1: Sign in with Apple (passkeys cover the same moment for free),
-phone OTP (SMS cost, Twilio setup).
+Not in v1: Sign in with Apple, passkeys (see above), phone OTP (SMS cost,
+Twilio setup).
 
 **Guest policy.** A room code or link is enough to sit down. Guests are
 anonymous Supabase users bound to the device, shown as "Guest" plus a
