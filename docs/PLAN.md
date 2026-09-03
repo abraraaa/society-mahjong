@@ -179,7 +179,8 @@ Ruleset roadmap:
 1. **Karachi** ("Karachi official"): the reason the product exists, and the
    only one with a written source we control.
 2. **Taiwanese 16-tile**: what Dubai's clubs and platforms default to, and
-   the group is Dubai-heavy. Simple flat scoring, quick to teach.
+   the group is Dubai-heavy. Additive points scoring, quick to teach. The
+   Dubai house scoring table is captured in `docs/RULES-TAIWANESE.md`.
 3. **Hong Kong**: the most widely known Chinese-style ruleset globally;
    cheap once Taiwanese exists.
 4. **Western/British** (Thompson–Maloney): arrives almost free with Karachi's
