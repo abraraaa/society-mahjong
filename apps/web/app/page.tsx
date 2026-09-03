@@ -3,10 +3,12 @@ import Link from 'next/link';
 export default function Home() {
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-between px-6 py-10">
-      <header className="space-y-3">
-        <p className="text-brass-400 text-xs font-medium tracking-[0.3em] uppercase">Society</p>
+      <header className="space-y-3 pt-11">
+        <p className="eyebrow">Society</p>
         <h1 className="font-display text-5xl leading-none text-ivory-50">Mahjong</h1>
-        <p className="text-ivory-200/80">Mahjong with your friends, wherever they are. Any table&rsquo;s rules, and a tutor who sits with you for your first rounds.</p>
+        <p className="text-ivory-200/80 text-base leading-normal">
+          Mahjong with your friends, wherever they are. Any table&rsquo;s rules, and a tutor who sits with you for your first rounds.
+        </p>
       </header>
       <nav className="space-y-3">
         <Link
@@ -15,7 +17,7 @@ export default function Home() {
         >
           Play your first hand
         </Link>
-        <p className="text-center text-sm text-ivory-200/60">Three bots, no sign-in needed.</p>
+        <p className="text-center text-sm text-ivory-200/60">Three bots, Karachi rules, no sign-in needed.</p>
       </nav>
     </main>
   );

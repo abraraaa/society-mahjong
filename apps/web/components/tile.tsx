@@ -1,43 +1,63 @@
 'use client';
-import { isSuitTile, numOf, suitOf, tileName, type TileKind } from '@society/engine';
+import { tileName, type TileKind } from '@society/engine';
 
-/** Unicode mahjong glyphs as placeholder art until the SVG tile set lands. */
-const GLYPH: Partial<Record<TileKind, string>> = {
-  WE: '🀀', WS: '🀁', WW: '🀂', WN: '🀃', DR: '🀄', DG: '🀅', DW: '🀆',
-  F1: '🀢', F2: '🀣', F3: '🀤', F4: '🀥', S1: '🀦', S2: '🀧', S3: '🀨', S4: '🀩',
-};
-const SUIT_BASE: Record<'m' | 'p' | 's', number> = { m: 0x1f007, s: 0x1f010, p: 0x1f019 };
+export type TileSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 
-export function glyphFor(kind: TileKind): string {
-  if (isSuitTile(kind)) return String.fromCodePoint(SUIT_BASE[suitOf(kind)] + numOf(kind) - 1);
-  return GLYPH[kind] ?? '🀫';
-}
-
+/**
+ * A physical tile. Faces are the SVG glyph set in `/public/tiles`; a tile
+ * with no `kind` (or `back`) renders the felt-and-back-pattern face used for
+ * opponents' concealed tiles and the wall.
+ */
 export function Tile({
   kind,
+  size = 'md',
   selectable,
   selected,
   back,
+  dim,
+  claimable,
+  coached,
+  fresh,
+  rotate,
   onClick,
+  className,
 }: {
-  kind?: TileKind;
-  selectable?: boolean;
-  selected?: boolean;
-  back?: boolean;
-  onClick?: () => void;
+  kind?: TileKind | undefined;
+  size?: TileSize | undefined;
+  selectable?: boolean | undefined;
+  selected?: boolean | undefined;
+  back?: boolean | undefined;
+  /** faded, e.g. a coach bubble greying out tiles that aren't part of the tip */
+  dim?: boolean | undefined;
+  /** outlined and gently pulsing — a discard you can act on */
+  claimable?: boolean | undefined;
+  /** gold glow — the tile the coach is pointing at */
+  coached?: boolean | undefined;
+  /** just-drawn tile, offset from the rest of the rail */
+  fresh?: boolean | undefined;
+  /** rotate 90° for a tablet opponent's melds */
+  rotate?: boolean | undefined;
+  onClick?: (() => void) | undefined;
+  className?: string | undefined;
 }) {
+  const showFace = !back && kind;
   return (
     <button
       type="button"
-      className="tile"
+      className={`tile tile-${size}${className ? ` ${className}` : ''}`}
       data-selectable={selectable ? 'true' : undefined}
       data-selected={selected ? 'true' : undefined}
       data-back={back ? 'true' : undefined}
+      data-dim={dim ? 'true' : undefined}
+      data-claimable={claimable ? 'true' : undefined}
+      data-coached={coached ? 'true' : undefined}
+      data-fresh={fresh ? 'true' : undefined}
+      data-rotate={rotate ? 'true' : undefined}
       aria-label={kind ? tileName(kind) : 'hidden tile'}
       onClick={onClick}
       disabled={!selectable}
     >
-      {back || !kind ? '' : glyphFor(kind)}
+      {showFace && <img src={`/tiles/${kind}.svg`} alt="" />}
     </button>
   );
 }
