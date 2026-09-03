@@ -95,7 +95,7 @@ book pages listed. "?" means no definition found yet.
 |---|---|---|---|
 | Apple Blossom | 19 | Apple Blossom | ? |
 | Big Robert | 14 | Pinkys | Three four-tile chows, one in each suit, plus a pair of winds or dragons |
-| Dragonfly | 31 | Dragonfly | ? (a limit hand in Australian lists) |
+| Dragonfly | 31 | Dragonfly | One of each dragon, a pung/kong in each of the three suits, plus a pair from any suit |
 | Hovering Angels | 17 | Chow + 5 Honors | One chow in each suit, pung of own wind, pair of white dragons; concealed except last |
 | The Professors | 19 | The Professors | ? |
 | Windy Chow | 18 | Windy Chows | One chow in each suit, E S W N, plus one extra wind (making a pair) |
@@ -128,7 +128,7 @@ allowed. ⚠ Whether four plain chows + pair (not Crazy) is legal in South.
 | Four Blessings | 30 | Four Blessing | Four pungs of winds plus any pair |
 | Gates of Heaven | 9 | Wriggly Snake v2 | One suit: pung of 1s, pung of 9s, run 2–8, with one of 2–8 paired |
 | Gerties Garter | 14 | Gerties Garter | Run 1–7 in one suit and run 1–7 in another; no honours |
-| Green Jade | 35 | Green Jade | ? (likely the all-green family: green dragons + bamboo 2,3,4,6,8) |
+| Green Jade | 35 | Green Jade | Pungs/kongs and/or chows of green bamboos (2,3,4,6,8) with a pair of green dragons |
 | Imperial Jade | 36 | Imperial Jade | Pungs/kongs of green dragons and green bamboos, at most one chow, pair of green bamboos |
 | Lilly Pilly | 36 | Lilly Pilly | ? |
 | Numbers in Parallel | 43 | Number Pungs | Pungs of the same number in all three suits, plus a pung of winds and a pair of dragons (or the reverse) |
