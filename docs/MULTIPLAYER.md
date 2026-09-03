@@ -8,23 +8,40 @@ tolerate sign-up friction.
 ## 1. Authentication
 
 **Supabase Auth**, cookie sessions via `@supabase/ssr`, refreshed in Next.js
-middleware. Providers, in order of importance:
+middleware. Decision: **passkeys, not Sign in with Apple.** Same Face ID
+moment on iPhone, no Apple Developer account.
 
-| Provider | Why | Prerequisite |
+A passkey is a credential, not an identity, so the first sign-in still needs
+something to bind it to. The flow:
+
+1. First visit: email → magic link (or Google, if we enable it). One time.
+2. On that first successful sign-in, offer a passkey: "Use Face ID next
+   time?" Enrolment is one tap on iOS 26.
+3. Every return: passkey. No email, no link, no password ever.
+
+Supabase Auth shipped passkeys as a beta in May 2026 (WebAuthn; relying
+party id is the bare domain `societymahjong.app`, origins include the
+production and preview hosts). Beta means the API may shift before M2; we
+verify against the docs when we build it, and magic link remains the
+fallback either way. Anonymous guests stay as below.
+
+| Provider | Role | Prerequisite |
 |---|---|---|
-| Sign in with Apple | iOS-first audience; one tap on iPhone | Apple Developer account, a Services ID and key configured in Supabase |
-| Google | Android and desktop friends | Google Cloud OAuth client |
-| Magic link (email) | Zero-vendor fallback; works everywhere | none |
-| Anonymous (guest) | Join a table from an invite link without an account | enable in Supabase Auth |
+| Magic link (email) | Bootstraps an identity | none |
+| Passkey | Every subsequent sign-in | Supabase passkeys enabled, RP id + origins configured |
+| Google | Optional bootstrap for Android and desktop friends | Google Cloud OAuth client |
+| Anonymous (guest) | Play from an invite without any of the above | enable in Supabase Auth |
 
-Not in v1: phone OTP (SMS costs, Twilio setup) and passkeys (not supported
-natively by Supabase Auth). Revisit if the WhatsApp crowd asks.
+Not in v1: Sign in with Apple (passkeys cover the same moment for free),
+phone OTP (SMS cost, Twilio setup).
 
-**Guest policy.** Anyone with an invite link may sit and play as a guest.
-Hosting a room requires a full account. A guest is a real `auth.users` row
-with `is_anonymous = true`, so history accrues under their id; linking an
-email or Apple identity later upgrades in place with nothing lost. Guests
-who never upgrade are pruned after 30 idle days.
+**Guest policy.** A room code or link is enough to sit down. Guests are
+anonymous Supabase users bound to the device, shown as "Guest" plus a
+colour unless they choose a display name, which needs no account. They can
+stay fully anonymous for as long as they like; the ledger records them by
+seat. Adding an email or passkey later links in place and keeps their
+history. Hosting a room requires a full account. Guests who never upgrade
+are pruned after 30 idle days.
 
 **Authority.** Every game route handler resolves the caller's seat from the
 session. Clients never write to game tables. The service role is used only
@@ -115,12 +132,30 @@ Deadlines live on `live_state`: `claim_deadline` and `turn_deadline`.
 - Clients render the countdown from the deadline timestamp, so a phone that
   went to sleep shows the right remaining time on wake.
 
-**Recommended policy ("social")**: claim window 7 seconds, shortened to 3
-when only one player can claim and they respond; turn limit 60 seconds
-with a nudge at 20 remaining; after two expired turns the seat is handed to
-a bot stand-in and the human reclaims it on return. No auto-discard, which
-feels punitive at a friends' table. A "strict" policy (10-second turns,
-auto-discard the drawn tile) exists as a room option for the competitive.
+**Claim windows are adaptive, and rarely open.** Three things keep the
+countdown from frightening anyone:
+
+1. A window only opens when someone at the table *can* claim the discard;
+   the engine advances immediately otherwise. Most discards never pause.
+2. When everyone who could claim has responded, the window closes early.
+   Fast tables never wait out the clock.
+3. The window's length is the **longest** of the seated players' levels:
+
+   | Player level (from `onboarding_stage`) | Claim window | Turn limit |
+   |---|---|---|
+   | `new` (first three hands) | 20 s, with the coach pointing at the claim | 90 s |
+   | `learning` | 12 s | 75 s |
+   | `solid` | 7 s | 60 s |
+
+   So a table with one first-timer waits for the first-timer, and a table
+   of regulars runs at 7 seconds, which is the norm in online Hong Kong and
+   Taiwanese play and feels quick only until you've done it twice.
+
+Turn limits nudge at 20 seconds remaining. After two expired turns the seat
+is handed to a bot stand-in and the human reclaims it on return. No
+auto-discard by default, which feels punitive at a friends' table. A room
+can opt into "strict" (7 s claims for everyone, 30 s turns, auto-discard
+the drawn tile) for the competitive.
 
 ### Reconnect and presence
 
