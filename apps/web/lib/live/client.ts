@@ -42,6 +42,8 @@ export const api = {
   act: (gameId: string, action: ClientAction, expectedVersion: number) =>
     call<GameSnapshot>(`/api/games/${gameId}/act`, { method: 'POST', body: JSON.stringify({ action, expectedVersion }) }),
   tick: (gameId: string) => call<GameSnapshot>(`/api/games/${gameId}/tick`, { method: 'POST' }),
+  leave: (gameId: string) => call<{ abandoned: boolean }>(`/api/games/${gameId}/leave`, { method: 'POST' }),
+  leaveRoom: (code: string) => call<RoomSnapshot>(`/api/rooms/${encodeURIComponent(code)}/leave`, { method: 'POST' }),
 };
 
 /** Subscribe to a private broadcast topic. Returns the unsubscribe. */

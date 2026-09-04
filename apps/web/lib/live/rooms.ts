@@ -47,6 +47,16 @@ export async function joinRoom(room: RoomRow, userId: string, name: string): Pro
   return { room: { ...room, seats: seats as Seats }, seated: true };
 }
 
+/** Stand up from the lobby. The seat empties; the room stays open for the others. */
+export async function leaveRoom(room: RoomRow, userId: string): Promise<RoomRow> {
+  const me = seatOf(room.seats, userId);
+  if (me === null) return room;
+  if (room.status !== 'lobby') throw new HttpError(409, 'the table has started; leave it from the game');
+  const seats = room.seats.map((s, i) => (i === me ? null : s)) as unknown as Seats;
+  await saveSeats(room.id, seats);
+  return { ...room, seats };
+}
+
 const BOT_NAMES = ['Bilal', 'Sana', 'Ayesha', 'Hamza', 'Zara', 'Omar'];
 
 /** Fill every empty seat with a bot, named so the table reads like company. */

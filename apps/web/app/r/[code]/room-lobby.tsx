@@ -114,6 +114,15 @@ export function RoomLobby({ code }: { code: string }) {
     }
   };
 
+  const leave = async () => {
+    try {
+      await api.leaveRoom(code);
+    } catch {
+      // not seated, or the table already started: either way, home is right
+    }
+    router.replace('/');
+  };
+
   const start = async () => {
     setStarting(true);
     setError(null);
@@ -133,6 +142,7 @@ export function RoomLobby({ code }: { code: string }) {
       me={room.me}
       ruleset={RULESET_NAMES[room.rulesetId] ?? room.rulesetId}
       isHost={room.isHost}
+      onLeave={leave}
       starting={starting}
       error={error}
       onStart={start}

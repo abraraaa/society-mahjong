@@ -1,10 +1,11 @@
 import 'server-only';
+import { withBots } from './rooms';
 import { getRuleset, publicView, viewFor, type Seat } from '@society/engine';
 import type { GameSnapshot } from './snapshot';
 import type { CoachStage } from '@/lib/coach';
-import { broadcast, gamePoke } from './broadcast';
+import { broadcast, gamePoke, roomPoke } from './broadcast';
 import { policyFor } from './policy';
-import { closeHand, finishGame, gameById, loadLive, openHand, roomById, saveLive, stagesFor, appendAction, type GameRow, type RoomRow } from './store';
+import { abandonGame, appendAction, closeHand, finishGame, gameById, loadLive, openHand, roomById, saveLive, saveSeats, stagesFor, type GameRow, type RoomRow } from './store';
 import { rejectionStatus, step } from './table';
 import { seatOf, type ClientAction, type Deadlines, type Seats } from './types';
 
@@ -106,5 +107,31 @@ export async function actOnGame(gameId: string, userId: string | null, action: C
   if (result.gameOver) await finishGame(gameId, room.id);
 
   await broadcast([gamePoke(gameId, version, { phase: result.state.phase, turn: result.state.turn, seq: result.state.seq, gameOver: result.gameOver })]);
-  return snapshot({ ...game, status: result.gameOver ? 'finished' : game.status }, settledRoom, version, result.deadlines, result.state, me, now);
+  const snap = snapshot({ ...game, status: result.gameOver ? 'finished' : game.status }, settledRoom, version, result.deadlines, result.state, me, now);
+  return result.standIns.length > 0 ? { ...snap, standIns: result.standIns } : snap;
+}
+
+/**
+ * Stand up from a live table. A bot takes the seat for the rest of the game
+ * so the others can carry on; when the last human leaves, the game is
+ * abandoned and the room closes. Idempotent for someone already gone.
+ */
+export async function leaveGame(gameId: string, userId: string, now = Date.now()): Promise<{ abandoned: boolean }> {
+  const { game, room } = await loadGame(gameId);
+  const me = seatOf(room.seats, userId);
+  if (me === null) return { abandoned: game.status === 'abandoned' };
+  if (game.status !== 'active') return { abandoned: game.status === 'abandoned' };
+  const vacated = room.seats.map((s, i) => (i === me ? null : s)) as unknown as Seats;
+  const live = await loadLive(gameId);
+  if (!vacated.some((s) => s?.kind === 'human')) {
+    await abandonGame(gameId, room.id);
+    await broadcast([gamePoke(gameId, (live?.version ?? 0) + 1, { abandoned: true })]);
+    return { abandoned: true };
+  }
+  const seats = withBots(vacated);
+  await saveSeats(room.id, seats);
+  await broadcast([roomPoke(room.id, 'seats', { seats: publicSeats(seats) })]);
+  // The bot now in the seat may owe the table a move: settle it straight away.
+  await actOnGame(gameId, null, null, null, now);
+  return { abandoned: false };
 }

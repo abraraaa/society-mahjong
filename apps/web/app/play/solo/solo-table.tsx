@@ -1,5 +1,7 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { ConfirmSheet } from '@/components/confirm-sheet';
 import { SEATS, analysisBot, initialProgress, karachi, nextHand, reduce, startHand, viewFor, type Action, type BotOptions, type HandState, type Seat } from '@society/engine';
 import { NO_SCORES, applyResult, type Scores } from '@/lib/ledger';
 import { Table } from '@/components/table';
@@ -39,6 +41,8 @@ export function SoloTable({ seed }: { seed: string }) {
   const [scores, setScores] = useState<Scores>(NO_SCORES);
   const [gameOver, setGameOver] = useState(false);
   const [round, setRound] = useState(0);
+  const [leaving, setLeaving] = useState(false);
+  const router = useRouter();
 
   const view = useMemo(() => viewFor(state, ruleset, ME), [state]);
   const flow = tableFlow(state, view.legal, ME);
@@ -86,18 +90,30 @@ export function SoloTable({ seed }: { seed: string }) {
   };
 
   return (
-    <Table
-      view={view}
-      label={ruleset.handSpec(state.progress).label}
-      names={NAMES}
-      coach={coach}
-      tutorOn={tutorOn}
-      onToggleTutor={() => setTutorOn((v) => !v)}
-      onAct={act}
-      onNextHand={onNextHand}
-      scores={settled}
-      handsPerRound={ruleset.handsPerRound}
-      gameOver={over}
-    />
+    <>
+      {leaving && (
+        <ConfirmSheet
+          title="Leave the table?"
+          body="A solo game is not kept. The next one deals fresh."
+          confirmLabel="Leave"
+          onConfirm={() => router.push('/')}
+          onCancel={() => setLeaving(false)}
+        />
+      )}
+      <Table
+        view={view}
+        label={ruleset.handSpec(state.progress).label}
+        names={NAMES}
+        onLeave={() => setLeaving(true)}
+        coach={coach}
+        tutorOn={tutorOn}
+        onToggleTutor={() => setTutorOn((v) => !v)}
+        onAct={act}
+        onNextHand={onNextHand}
+        scores={settled}
+        handsPerRound={ruleset.handsPerRound}
+        gameOver={over}
+      />
+    </>
   );
 }

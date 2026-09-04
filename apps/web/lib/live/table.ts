@@ -106,26 +106,37 @@ export function deadlinesFor(state: HandState, ruleset: Ruleset, seats: Seats, p
  * player's Mahjong is not thrown away.
  */
 export function resolveExpired(game: LiveGame, ruleset: Ruleset, seats: Seats, now: number): HandState | null {
+  return resolveExpiredWith(game, ruleset, seats, now)?.state ?? null;
+}
+
+/** A move a bot made on an absent human's behalf, so the table can tell them. */
+export interface StandIn {
+  readonly seat: Seat;
+  readonly action: Action;
+}
+
+function resolveExpiredWith(game: LiveGame, ruleset: Ruleset, seats: Seats, now: number): { state: HandState; standIns: StandIn[] } | null {
   const { state, deadlines } = game;
+  const standIns: StandIn[] = [];
   if (deadlines.claim !== null && now >= deadlines.claim && state.phase === 'claim') {
     let s = state;
     for (const seat of humansPending(s, ruleset, seats)) {
       if (s.phase !== 'claim') break;
-      const a = analysisBot(viewFor(s, ruleset, seat), ruleset) ?? {
-        type: 'pass' as const,
-        seat,
-      };
+      const a = analysisBot(viewFor(s, ruleset, seat), ruleset) ?? { type: 'pass' as const, seat };
       s = reduce(s, a, ruleset);
+      standIns.push({ seat, action: a });
     }
-    return s;
+    return { state: s, standIns };
   }
   if (deadlines.turn !== null && now >= deadlines.turn && (state.phase === 'turn' || state.phase === 'preplay')) {
     let s = state;
     for (const seat of humansPending(s, ruleset, seats)) {
       const a = analysisBot(viewFor(s, ruleset, seat), ruleset);
-      if (a) s = reduce(s, a, ruleset);
+      if (!a) continue;
+      s = reduce(s, a, ruleset);
+      standIns.push({ seat, action: a });
     }
-    return s;
+    return { state: s, standIns };
   }
   return null;
 }
@@ -148,6 +159,8 @@ export interface StepResult extends LiveGame {
   readonly changed: boolean;
   /** the hand ended and no next hand exists: the game is over */
   readonly gameOver: boolean;
+  /** moves made for absent humans by expired clocks in this step */
+  readonly standIns: readonly StandIn[];
 }
 
 /**
@@ -160,9 +173,9 @@ export function step(input: StepInput): StepResult {
   let s = input.game.state;
   let changed = false;
 
-  const expired = resolveExpired(input.game, ruleset, seats, now);
+  const expired = resolveExpiredWith(input.game, ruleset, seats, now);
   if (expired) {
-    s = settle(expired, ruleset, seats);
+    s = settle(expired.state, ruleset, seats);
     changed = true;
   }
 
@@ -190,7 +203,7 @@ export function step(input: StepInput): StepResult {
   }
 
   const deadlines = changed || gameOver ? deadlinesFor(s, ruleset, seats, policy, now) : input.game.deadlines;
-  return { state: s, deadlines, changed, gameOver };
+  return { state: s, deadlines, changed, gameOver, standIns: expired?.standIns ?? [] };
 }
 
 /** A fresh hand for a game, with bots already played up to the first human decision. */

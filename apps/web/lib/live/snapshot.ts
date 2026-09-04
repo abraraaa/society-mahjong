@@ -1,4 +1,5 @@
 import type { PrivatePlayerView, PublicGameView, Seat } from '@society/engine';
+import type { StandIn } from './table';
 import type { Deadlines } from './types';
 
 /**
@@ -19,6 +20,8 @@ export interface GameSnapshot {
   readonly view: PrivatePlayerView | PublicGameView;
   readonly status: 'active' | 'finished' | 'abandoned';
   readonly now: number;
+  /** moves an expired clock had a bot make for absent humans, in the request that produced this snapshot */
+  readonly standIns?: readonly StandIn[];
 }
 
 export function isPrivate(view: GameSnapshot['view']): view is PrivatePlayerView {
