@@ -292,7 +292,9 @@ export function coachFor(input: CoachInput): CoachState {
   if (handStart) {
     const say: CoachSegment[] = quiet ? [] : [seg(goal.aim)];
     if (verbose && goal.watchOut) say.push(seg(` ${goal.watchOut}`));
-    return { ...base, moment: 'handStart', action, say, reason: goal.watchOut, highlight };
+    // No plan line here: a hand nobody has played yet has no plan worth reporting,
+    // and dropping it hands the goal all three lines of the bubble.
+    return { ...base, moment: 'handStart', plan: quiet ? plan : null, action, say, reason: goal.watchOut, highlight };
   }
 
   if (!myTurn) {
