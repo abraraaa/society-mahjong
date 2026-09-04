@@ -23,7 +23,6 @@ export function Tile({
   coached,
   fresh,
   latest,
-  rotate,
   onClick,
   className,
 }: {
@@ -42,8 +41,6 @@ export function Tile({
   fresh?: boolean | undefined;
   /** the newest tile in the river, so the eye can find the front of the queue */
   latest?: boolean | undefined;
-  /** rotate 90° for a tablet opponent's melds */
-  rotate?: boolean | undefined;
   onClick?: (() => void) | undefined;
   className?: string | undefined;
 }) {
@@ -61,7 +58,6 @@ export function Tile({
       data-coached={coached ? 'true' : undefined}
       data-fresh={fresh ? 'true' : undefined}
       data-latest={latest ? 'true' : undefined}
-      data-rotate={rotate ? 'true' : undefined}
       aria-label={kind ? tileName(kind) : 'hidden tile'}
       onClick={onClick}
       disabled={!selectable}

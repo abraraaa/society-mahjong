@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ALL_TILE_KINDS,
   analyseHand,
+  isBonusTile,
   coverPattern,
   countOf,
   isHonourTile,
   isWindTile,
   karachi,
   matchPattern,
+  sortTiles,
   standardPattern,
   type HandInput,
   type MatchCtx,
@@ -253,5 +256,127 @@ describe('performance', () => {
   it('is deterministic', () => {
     const tiles: TileKind[] = ['m1', 'm3', 'm5', 'p2', 'p4', 'p7', 's1', 's5', 's9', 'WE', 'WS', 'DR', 'DG', 'DW'];
     expect(JSON.stringify(analyse(tiles, 'E'))).toBe(JSON.stringify(analyse(tiles, 'E')));
+  });
+});
+
+describe('regressions', () => {
+  it('keeps a far-off pattern in the list instead of calling it unreachable', () => {
+    // Four Blessings wants four wind pungs; two of the winds are missing entirely.
+    // A pattern the search cannot lay out neatly is still one the hand can reach.
+    const tiles: TileKind[] = ['WE', 'WE', 'WE', 'WS', 'WS', 'm1', 'm2', 'm3', 'p4', 'p5', 'p6', 's7', 's8'];
+    const pattern = roundPatterns('N').find((p) => p.id === 'karachi.north.fourBlessings')!;
+    const cover = coverPattern(pattern, hand(tiles), ctxFor('N'), karachi.guards);
+    expect(cover.reachable).toBe(true);
+    expect(cover.covered).toBe(6); // WE pung, two of the WS pung, one tile for the pair
+    const four = find(analyse(tiles, 'N').candidates, 'karachi.north.fourBlessings');
+    expect(four.away).toBe(8);
+  });
+
+  it('applies the ruleset guard to a hand still in progress', () => {
+    // Four pungs and an m1 pair would be the shape, but WS is neither the round wind
+    // nor this seat's wind, so the goulash guard can never accept that honour pung.
+    const tiles: TileKind[] = ['WS', 'WS', 'WS', 'm2', 'm2', 'm2', 'm3', 'm3', 'm3', 'm4', 'm4', 'm4', 'm1'];
+    const goulash = roundPatterns('W')[0]!;
+    for (const k of ALL_TILE_KINDS) {
+      expect(matchPattern(goulash, hand([...tiles, k]), ctxFor('W'), karachi.guards), `${k} wins`).toHaveLength(0);
+    }
+    // Two changes away: three more m1 tiles is one plan, and the spare WS goes.
+    const candidate = find(analyse(tiles, 'W').candidates, 'karachi.goulash');
+    expect(candidate.away).toBe(2);
+    expect(candidate.needs).toEqual(['m1']);
+  });
+
+  it('does not call a dead hand one tile away', () => {
+    // Two honour pungs neither of which meets a goulash condition: no fourteenth tile wins.
+    const tiles: TileKind[] = ['m1', 'm1', 'm1', 'WN', 'WN', 'WN', 'WE', 'WE', 'WE', 'p5', 'p5', 'p5', 's3'];
+    const ctx: MatchCtx = { seatWind: 'S', roundWind: 'W' };
+    const goulash = roundPatterns('W')[0]!;
+    for (const k of ALL_TILE_KINDS) {
+      expect(matchPattern(goulash, hand([...tiles, k]), ctx, karachi.guards), `${k} wins`).toHaveLength(0);
+    }
+    const analysis = analyseHand(hand(tiles), roundPatterns('W'), ctx, karachi.guards);
+    const candidate = find(analysis.candidates, 'karachi.goulash');
+    expect(candidate.away).toBeGreaterThan(1);
+    // Every named tile has to earn its place: drawing it must bring the hand closer.
+    for (const kind of candidate.needs) {
+      const drawn = analyseHand(hand([...tiles, kind]), roundPatterns('W'), ctx, karachi.guards);
+      expect(find(drawn.candidates, 'karachi.goulash').away, kind).toBeLessThan(candidate.away);
+    }
+    expect(analysis.spare.length).toBeGreaterThan(0);
+    expect(analysis.bestDiscard).not.toBeNull();
+  });
+
+  it('names every tile of a thirteen-sided wait', () => {
+    const tiles: TileKind[] = ['m1', 'm9', 'p1', 'p9', 's1', 's9', 'WE', 'WS', 'WW', 'WN', 'DR', 'DG', 'DW'];
+    const orphans = find(analyse(tiles, 'N').candidates, 'karachi.north.montyUniqueWonders');
+    expect(orphans.away).toBe(1);
+    expect(orphans.needs).toEqual(sortTiles(tiles));
+  });
+
+  it('counts a two-suit pattern at its best pair of suits', () => {
+    // Knitting allows two suits; the dots and bamboo tiles pay for more of it than
+    // the characters do, and nothing here is truncated, so the count must be exact.
+    const tiles: TileKind[] = ['p5', 'p8', 's5', 'WN', 'm9', 's8', 's5', 'DG', 'WE', 'm3', 'WW', 'p9', 'p9', 's7'];
+    const knitting = roundPatterns('S').find((p) => p.id === 'karachi.south.knitting')!;
+    const cover = coverPattern(knitting, hand(tiles), ctxFor('S'), karachi.guards);
+    expect(cover.truncated).toBe(false);
+    expect(cover.approximate).toBe(false);
+    expect(cover.covered).toBe(8);
+  });
+
+  it('separates tiles that can be claimed from tiles that must be drawn', () => {
+    // One chow short of Windy Chows, and one wind short of the pung form. Karachi
+    // never lets a chow be claimed, so the chow tile can only come from the wall.
+    const tiles: TileKind[] = ['m1', 'm2', 'p4', 'p5', 'p6', 's7', 's8', 's9', 'WE', 'WS', 'WW', 'WN', 'WN'];
+    const analysis = analyseHand(hand(tiles), roundPatterns('E'), ctxFor('E'), karachi.guards, { claims: karachi.claims });
+    const windyChows = find(analysis.candidates, 'karachi.east.windyChows');
+    expect(windyChows.away).toBe(1);
+    expect(windyChows.needs).toEqual(['m3']);
+    // The winning tile may be claimed even though the chow itself may not.
+    expect(windyChows.needsClaimable).toEqual(['m3']);
+    expect(windyChows.needsFromWall).toEqual([]);
+
+    // Two tiles out, so no draw wins outright: the chow tile is now wall-only.
+    const further: TileKind[] = ['m1', 'm2', 'p4', 'p5', 'p6', 's7', 's8', 's9', 'WE', 'WS', 'WW', 'WN', 'DR'];
+    const wider = analyseHand(hand(further), roundPatterns('E'), ctxFor('E'), karachi.guards, { claims: karachi.claims });
+    const chows = find(wider.candidates, 'karachi.east.windyChows');
+    expect(chows.away).toBe(2);
+    expect(chows.needsFromWall).toContain('m3');
+    expect(chows.needsClaimable).not.toContain('m3');
+
+    // A pung is another matter: two dots in hand, so the third can be claimed. The
+    // winds each serve a NEWS component, which is no meld, so they must be drawn.
+    const pungs: TileKind[] = ['m1', 'm1', 'm1', 'p5', 'p5', 's9', 's9', 's9', 'WE', 'WS', 'WW', 'WN', 'm3'];
+    const building = analyseHand(hand(pungs), roundPatterns('E'), ctxFor('E'), karachi.guards, { claims: karachi.claims });
+    const windyfly = find(building.candidates, 'karachi.east.windyfly');
+    expect(windyfly.away).toBe(2);
+    expect(windyfly.needsClaimable).toEqual(['p5']);
+    expect(windyfly.needsFromWall).toEqual(['WE', 'WS', 'WW', 'WN']);
+  });
+
+  it('names every distance-reducing tile and no others', () => {
+    // The property behind `needs`: a tile belongs there exactly when drawing it moves
+    // the hand closer. Checked here against every tile in the set, pattern by pattern.
+    const cases: readonly { round: MatchCtx['roundWind']; tiles: TileKind[] }[] = [
+      { round: 'E', tiles: ['m1', 'm1', 'm1', 'p5', 'p5', 's9', 's9', 's9', 'WE', 'WS', 'WW', 'WN', 'm3'] },
+      { round: 'S', tiles: ['m1', 'm3', 'm5', 'p2', 'p4', 'p7', 's1', 's5', 's9', 'p9', 's2', 'm7', 'p3'] },
+      { round: 'W', tiles: ['m1', 'm1', 'm1', 'p5', 'p5', 's9', 's9', 's9', 'WE', 'WS', 'WW', 'WN', 'm3'] },
+      { round: 'N', tiles: ['s1', 's2', 's3', 's4', 's5', 'WE', 'WS', 'WW', 'WN', 'DR', 'DG', 'DW', 'm9'] },
+    ];
+    const kinds = ALL_TILE_KINDS.filter((k) => !isBonusTile(k));
+    for (const { round, tiles } of cases) {
+      for (const pattern of roundPatterns(round)) {
+        const cover = coverPattern(pattern, hand(tiles), ctxFor(round), karachi.guards);
+        // An approximate answer is allowed to be short; an exact one is not.
+        if (!cover.reachable || cover.approximate) continue;
+        const named = new Set(cover.needs.map((n) => n.kind));
+        for (const kind of kinds) {
+          const drawn = coverPattern(pattern, hand([...tiles, kind]), ctxFor(round), karachi.guards);
+          const closer = drawn.reachable && drawn.covered > cover.covered;
+          if (closer) expect(named.has(kind), `${pattern.id} ${kind} helps`).toBe(true);
+          else if (!drawn.approximate) expect(named.has(kind), `${pattern.id} ${kind} does not help`).toBe(false);
+        }
+      }
+    }
   });
 });

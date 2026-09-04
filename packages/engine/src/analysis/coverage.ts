@@ -6,6 +6,13 @@
  *
  * The search is a bounded depth-first assignment with branch and bound. It is
  * deterministic: candidates are always visited in the same order.
+ *
+ * Two rules the rest of the layer leans on:
+ *   - `reachable: false` means the rules shut the pattern out - a meld it cannot
+ *     use, an exposure it forbids, no lay-out the ruleset guard will accept. A
+ *     pattern that is merely far away is always reachable.
+ *   - `approximate: true` means `covered` is a lower bound, so `away` is an upper
+ *     bound. Every prune that can cost coverage sets it.
  */
 import {
   ALL_TILE_KINDS,
@@ -19,6 +26,7 @@ import {
   type TileKind,
 } from '../tiles';
 import type { HandInput, MeldType } from '../hand';
+import type { ClaimRules } from '../ruleset';
 import type { Bindings, Component, Group, Guards, MatchCtx, Pattern, Solution } from '../patterns/types';
 import {
   applyFilter,
@@ -40,7 +48,7 @@ const NKINDS = KINDS.length;
 /** Copies of a kind in a set. A target asking for more than this is unbuildable. */
 const COPIES = 4;
 
-/** Distinct assignments kept per pattern; enough to union `needs` over every wait. */
+/** Distinct assignments kept per pattern, as illustrations of the best coverage. */
 const MAX_SOLUTIONS = 24;
 
 /**
@@ -69,17 +77,24 @@ interface Target {
   readonly bindings: Bindings;
   readonly type?: MeldType;
   readonly mask: number;
-  readonly key: string;
+  /**
+   * The tiles encoded in `tileOrder`, so comparing two `ord` strings orders targets
+   * exactly as the search generates them. The canonical order imposed on repeated
+   * components has to agree with generation order, or a branch can find every
+   * remaining target ranked too low and dead-end on a pattern it could reach.
+   */
+  readonly ord: string;
 }
 
 function target(tiles: readonly TileKind[], bindings: Bindings, type?: MeldType): Target {
+  const idx = tiles.map(tileOrder);
   return {
     tiles,
-    idx: tiles.map(tileOrder),
+    idx,
     bindings,
     ...(type ? { type } : {}),
     mask: suitMask(tiles),
-    key: tiles.join(','),
+    ord: idx.map((i) => String.fromCharCode(65 + i)).join(''),
   };
 }
 
@@ -244,6 +259,51 @@ function bindingKey(b: Bindings): string {
   return out;
 }
 
+/**
+ * `bind` builds a fresh object every time, so the same set of bindings arrives as
+ * dozens of distinct objects. Interning them by key gives one object per binding,
+ * which is what makes the target cache below hit across calls as well as within one.
+ */
+const INTERNED = new Map<string, Bindings>();
+function intern(b: Bindings): Bindings {
+  const key = bindingKey(b);
+  const hit = INTERNED.get(key);
+  if (hit !== undefined) return hit;
+  INTERNED.set(key, b);
+  return b;
+}
+
+/**
+ * Target spaces depend only on the component and the bindings in force, so they are
+ * worth keeping between searches: a round asks the same questions of twenty patterns
+ * every turn, and rebuilding every chow of every suit each time dominated the cost.
+ */
+const TARGETS = new WeakMap<Component, Map<string, readonly Target[]>>();
+function targetsFor(comp: Component, b: Bindings): readonly Target[] {
+  let byBindings = TARGETS.get(comp);
+  if (!byBindings) {
+    byBindings = new Map();
+    TARGETS.set(comp, byBindings);
+  }
+  const key = bindingKey(b);
+  const hit = byBindings.get(key);
+  if (hit !== undefined) return hit;
+  const space = allTargets(comp, b).map((t) => (t.bindings === b ? t : { ...t, bindings: intern(t.bindings) }));
+  byBindings.set(key, space);
+  return space;
+}
+
+/** The expansion is cached too, so its components stay the same objects for `TARGETS`. */
+const EXPANDED = new WeakMap<Pattern, readonly Component[]>();
+function componentsFor(pattern: Pattern): readonly Component[] {
+  let hit = EXPANDED.get(pattern);
+  if (!hit) {
+    hit = expandForAnalysis(pattern.components);
+    EXPANDED.set(pattern, hit);
+  }
+  return hit;
+}
+
 /** One way of laying the pattern over the hand, at the best coverage found. */
 export interface CoverSolution {
   /** concealed tiles assigned to the pattern */
@@ -251,10 +311,24 @@ export interface CoverSolution {
   /** tiles the pattern still wants that the hand does not hold */
   readonly missing: readonly TileKind[];
   readonly bindings: Bindings;
+  /** the lay-out as groups, melds first, each concealed group holding its missing tiles too */
+  readonly groups: readonly Group[];
+}
+
+/** A tile that would bring the hand closer to a pattern, and how it can arrive. */
+export interface TileNeed {
+  readonly kind: TileKind;
+  /**
+   * True when the ruleset lets this tile come from a discard: it completes a meld
+   * that may be claimed, or it wins the hand and the winning tile may be claimed.
+   * False means the wall is the only source - in Karachi, every tile of a chow.
+   * Always false without `claims`, since only the ruleset knows.
+   */
+  readonly claimable: boolean;
 }
 
 export interface CoverResult {
-  /** false when declared melds or the exposure rule shut the pattern out for good */
+  /** false when declared melds, the exposure rule or the ruleset guard shut the pattern out for good */
   readonly reachable: boolean;
   /** hand tiles, melds included, the pattern can account for */
   readonly covered: number;
@@ -262,8 +336,20 @@ export interface CoverResult {
   readonly size: number;
   readonly meldTiles: readonly TileKind[];
   readonly solutions: readonly CoverSolution[];
+  /**
+   * Every tile kind that would raise `covered`, over every best lay-out - the whole
+   * wait, not the part one lay-out happens to name. Exact unless `approximate`.
+   */
+  readonly needs: readonly TileNeed[];
   /** the node budget ran out, so `covered` is a lower bound */
   readonly truncated: boolean;
+  /** `covered` is a lower bound and `needs` may be short: the budget ran out, or a prune could have cost coverage */
+  readonly approximate: boolean;
+}
+
+export interface CoverOptions {
+  /** the ruleset's claim rules, which decide whether a needed tile can come from a discard */
+  readonly claims?: ClaimRules;
 }
 
 const UNREACHABLE: CoverResult = {
@@ -272,49 +358,108 @@ const UNREACHABLE: CoverResult = {
   size: 0,
   meldTiles: [],
   solutions: [],
+  needs: [],
   truncated: false,
+  approximate: false,
 };
 
-export function coverPattern(pattern: Pattern, hand: HandInput, ctx: MatchCtx, guards: Guards = {}): CoverResult {
-  if (pattern.exposure === 'concealed' && hand.melds.some((m) => !m.concealed)) return UNREACHABLE;
-  if (pattern.maxSuits !== undefined && suitCount(suitMask(hand.melds.flatMap((m) => [...m.tiles]))) > pattern.maxSuits) {
-    return UNREACHABLE;
-  }
+/** What the depth-first search found, before it is dressed up as a `CoverResult`. */
+interface SearchOutcome {
+  /** false only when no meld arrangement fits the pattern at all */
+  readonly reachable: boolean;
+  /** concealed tiles covered by the best lay-out recorded, -1 when none was */
+  readonly best: number;
+  /** tiles the pattern holds once complete, melds at their real length */
+  readonly size: number;
+  readonly solutions: readonly CoverSolution[];
+  readonly needs: readonly TileNeed[];
+  readonly truncated: boolean;
+  readonly approximate: boolean;
+  /** the first pass dropped lay-outs that could only tie, so `needs` may be short */
+  readonly tiesPruned: boolean;
+  readonly meldTiles: readonly TileKind[];
+}
+
+const EMPTY_TARGETS: readonly Target[] = [];
+
+/** The tie-collecting pass answers for everything but the flags, which are cumulative. */
+function merge(first: SearchOutcome, ties: SearchOutcome): SearchOutcome {
+  const flags = { truncated: first.truncated || ties.truncated, approximate: first.approximate || ties.approximate };
+  if (ties.best < first.best) return { ...first, ...flags, approximate: true };
+  return { ...ties, ...flags };
+}
+
+/** A tile kind is either no use, wanted from the wall, or wanted and claimable. */
+const NEED_NONE = 0;
+const NEED_WALL = 1;
+const NEED_CLAIM = 2;
+
+/**
+ * Two passes make one answer. The first, with `seed` unset, hunts for the best
+ * coverage and prunes branches that can only tie it. The second is seeded with that
+ * coverage and keeps every tie, because each tying lay-out names another tile the
+ * hand can be waiting for - and a search that spends its budget on ties before it
+ * knows what the best coverage is finds neither.
+ */
+function search(
+  pattern: Pattern,
+  hand: HandInput,
+  ctx: MatchCtx,
+  guards: Guards,
+  claims?: ClaimRules,
+  seed?: number,
+): SearchOutcome {
   const guard = pattern.guard ? guards[pattern.guard] : undefined;
   if (pattern.guard && !guard) throw new Error(`pattern ${pattern.id} needs guard ${pattern.guard}`);
 
-  const comps = expandForAnalysis(pattern.components);
+  const comps = componentsFor(pattern);
   const concealed = hand.concealed.filter((k) => !isBonusTile(k));
   const meldTiles = hand.melds.flatMap((m) => [...m.tiles]);
+  const handTiles = concealed.length + meldTiles.length;
 
   const counts = new Int32Array(NKINDS);
   for (const k of concealed) counts[tileOrder(k)]!++;
   /** copies of each kind the assignment so far has spoken for, melds included */
   const claimed = new Int32Array(NKINDS);
   const scratch = new Int32Array(NKINDS);
+  /** copies of each kind already on the table or in the hand: the rest are drawable */
+  const inPlay = new Int32Array(NKINDS);
+  for (const k of concealed) inPlay[tileOrder(k)]!++;
+  for (const k of meldTiles) inPlay[tileOrder(k)]!++;
 
   let reachable = false;
   let truncated = false;
-  let best = -1;
+  let approximate = false;
+  let tiesPruned = false;
+  const collectTies = seed !== undefined;
+  let best = seed ?? -1;
+  let recorded = false;
   let bestSize = 0;
+  let fullSize = 0;
   let solutions: CoverSolution[] = [];
   let nodes = 0;
 
-  /** targets by component, then by the bindings in force */
-  const targetCache = new WeakMap<Component, WeakMap<object, Target[]>>();
   /**
-   * `bind` builds a fresh object every time, so the same set of bindings arrives as
-   * dozens of distinct objects. Interning them by key gives the caches below one
-   * object per binding and keeps the target space from being rebuilt per branch.
+   * What each kind is worth to the hand, over every lay-out at the current best
+   * coverage. Cleared whenever a better lay-out resets what "best" means.
    */
-  const interned = new Map<string, Bindings>();
-  const intern = (b: Bindings): Bindings => {
-    const key = bindingKey(b);
-    const hit = interned.get(key);
-    if (hit !== undefined) return hit;
-    interned.set(key, b);
-    return b;
+  const needKind = new Uint8Array(NKINDS);
+  const mark = (kind: TileKind, claimable: boolean): void => {
+    const j = tileOrder(kind);
+    if (inPlay[j]! >= COPIES) return; // every copy is already accounted for
+    const value = claimable ? NEED_CLAIM : NEED_WALL;
+    if (needKind[j]! < value) needKind[j] = value;
   };
+  /** A discard can be claimed for a meld the ruleset lets you claim, and never to expose a hand the pattern wants concealed. */
+  const meldClaimable = (type: MeldType | undefined, comp: Component): boolean => {
+    if (!claims || pattern.exposure === 'concealed') return false;
+    if (comp.c === 'set' && comp.concealed) return false;
+    if (type === 'chow') return claims.chowFromDiscard !== 'never';
+    if (type === 'pung') return claims.pungFromDiscard;
+    if (type === 'kong') return claims.kongFromDiscard;
+    return false; // pairs, runs and loose tiles are never melds
+  };
+
   /** `distinctOk` allocates, and target bindings are shared objects, so cache the verdict. */
   const distinctCache = new WeakMap<object, boolean>();
   const distinctAllows = (b: Bindings): boolean => {
@@ -333,6 +478,7 @@ export function coverPattern(pattern: Pattern, hand: HandInput, ctx: MatchCtx, g
     startMask: number,
     startBindings: Bindings,
   ): void => {
+    if (fullSize === 0) fullSize = size;
     const sizes = order.map(sizeOf);
     // Bound for the branch and bound: no component can cover more of the hand than
     // its best-case overlap against the whole hand, and bindings only tighten from
@@ -341,7 +487,7 @@ export function coverPattern(pattern: Pattern, hand: HandInput, ctx: MatchCtx, g
     let total = 0;
     for (let i = order.length - 1; i >= 0; i--) {
       let bestOverlap = 0;
-      for (const t of allTargets(order[i]!, startBindings)) {
+      for (const t of targetsFor(order[i]!, startBindings)) {
         let overlap = 0;
         for (const j of t.idx) {
           if (scratch[j]! < counts[j]!) {
@@ -361,74 +507,152 @@ export function coverPattern(pattern: Pattern, hand: HandInput, ctx: MatchCtx, g
     const chosen: Target[] = [];
     const usedAt: TileKind[][] = order.map(() => []);
     const missAt: TileKind[][] = order.map(() => []);
+    /** zero-overlap targets the dedup folded into `chosen[i]`, and so could stand in for it */
+    const altAt: (readonly Target[])[] = order.map(() => EMPTY_TARGETS);
+    let done = false;
+
+    const layOut = (bindings: Bindings, at = -1, instead?: Target): Solution => {
+      const groups: Group[] = [...meldGroups];
+      for (let i = 0; i < order.length; i++) {
+        const t = i === at && instead ? instead : chosen[i]!;
+        groups.push({
+          c: order[i]!.c,
+          ...(t.type ? { type: t.type } : {}),
+          tiles: t.tiles,
+          concealed: true,
+          fromMeld: false,
+        });
+      }
+      return { groups, bindings };
+    };
+
+    /** Whether the hand and the rest of the lay-out leave room for this target's tiles. */
+    const fits = (t: Target): boolean => {
+      let ok = true;
+      for (const j of t.idx) {
+        if (claimed[j]! + scratch[j]! >= COPIES) ok = false;
+        scratch[j]!++;
+      }
+      for (const j of t.idx) scratch[j] = 0;
+      return ok;
+    };
+
+    /**
+     * What this lay-out says the hand is waiting for. Its own missing tiles, plus the
+     * tiles of every zero-overlap target the dedup folded away: those are swaps that
+     * leave coverage untouched, so each one is another lay-out at the same distance,
+     * and a thirteen-sided wait is thirteen such swaps.
+     */
+    const collectNeeds = (missingTotal: number, bindings: Bindings): void => {
+      const winning = missingTotal === 1 && handTiles + 1 === size && claims?.winFromDiscard === true;
+      for (let i = 0; i < order.length; i++) {
+        const miss = missAt[i]!;
+        if (miss.length > 0) {
+          // One tile short of a meld is a tile you can claim; two short is not.
+          const claimable = winning || (miss.length === 1 && meldClaimable(chosen[i]!.type, order[i]!));
+          for (const k of miss) mark(k, claimable);
+        }
+        for (const alt of altAt[i]!) {
+          let novel = false;
+          for (const k of alt.tiles) if (needKind[tileOrder(k)]! === NEED_NONE) novel = true;
+          if (!novel || !fits(alt)) continue;
+          // The guard may well tell the swap apart from the target it stood in for.
+          if (guard && !guard(layOut(bindings, i, alt), hand, ctx)) continue;
+          for (const k of alt.tiles) mark(k, winning && alt.tiles.length === 1);
+        }
+      }
+    };
 
     const record = (coverage: number, bindings: Bindings): void => {
-      const used: TileKind[] = [];
-      const missing: TileKind[] = [];
+      if (coverage < best) return;
+      if (recorded && coverage === best && !collectTies && solutions.length >= MAX_SOLUTIONS) {
+        tiesPruned = true;
+        return;
+      }
+
+      let complete = true;
+      let merged = false;
+      let missingTotal = 0;
       for (let i = 0; i < order.length; i++) {
-        used.push(...usedAt[i]!);
-        missing.push(...missAt[i]!);
+        if (chosen[i]!.tiles.length === 0) complete = false;
+        if (altAt[i]!.length > 0) merged = true;
+        missingTotal += missAt[i]!.length;
       }
-      // A lay-out with nothing missing and nothing left over is a real win, so the
-      // ruleset's guard gets the final say on it.
-      if (guard && missing.length === 0 && used.length === concealed.length) {
-        const groups: Group[] = [...meldGroups];
-        for (let i = 0; i < order.length; i++) {
-          const t = chosen[i]!;
-          groups.push({
-            c: order[i]!.c,
-            ...(t.type ? { type: t.type } : {}),
-            tiles: t.tiles,
-            concealed: true,
-            fromMeld: false,
-          });
+
+      // The guard judges the hand this lay-out is aiming at - the tiles it holds plus
+      // the ones it still wants - so a shape the ruleset can never legalise is never
+      // reported as one tile away. A lay-out with a component nothing can fill is not
+      // a hand at all, so there is nothing there for the guard to rule on.
+      if (guard && complete && !guard(layOut(bindings), hand, ctx)) {
+        // A guard can tell the folded-away targets apart from the one that stood in
+        // for them, so this verdict may be an artefact of that prune, not the rules.
+        if (merged) approximate = true;
+        return;
+      }
+
+      if (coverage > best || !recorded) {
+        if (coverage > best) {
+          solutions = [];
+          needKind.fill(NEED_NONE);
         }
-        const sol: Solution = { groups, bindings };
-        if (!guard(sol, hand, ctx)) return;
-      }
-      if (coverage > best) {
         best = coverage;
         bestSize = size;
-        solutions = [];
-      } else if (coverage < best) {
-        return;
+        recorded = true;
       } else if (size < bestSize) {
         bestSize = size;
       }
-      if (solutions.length < MAX_SOLUTIONS) solutions.push({ used, missing, bindings });
+      collectNeeds(missingTotal, bindings);
+      if (solutions.length < MAX_SOLUTIONS) {
+        const used: TileKind[] = [];
+        const missing: TileKind[] = [];
+        for (let i = 0; i < order.length; i++) {
+          used.push(...usedAt[i]!);
+          missing.push(...missAt[i]!);
+        }
+        solutions.push({ used, missing, bindings, groups: layOut(bindings).groups });
+      }
+      // A lay-out that spends the whole hand and wants nothing is a win: there is no
+      // better coverage to find and nothing left to wait for.
+      if (coverage === perfect && missingTotal === 0) done = true;
+      else if (!collectTies && best === perfect && solutions.length >= MAX_SOLUTIONS) {
+        tiesPruned = true;
+        done = true;
+      }
     };
 
-    let done = false;
-    const step = (i: number, coverage: number, bindings: Bindings, mask: number, prevKey: string | null): void => {
+    const step = (i: number, coverage: number, bindings: Bindings, mask: number, prevOrd: string | null): void => {
       if (done) return;
-      if (nodes++ >= NODE_BUDGET) {
+      if (nodes >= NODE_BUDGET) {
+        // Unwinding on a spent budget counts as truncation too, or a search that stops
+        // between branches reports a lower bound as though it were the whole answer.
         truncated = true;
+        approximate = true;
         return;
       }
+      nodes++;
       if (i === order.length) {
         record(coverage, bindings);
-        // Nothing left to find: the hand is fully spoken for and the cap is full.
-        if (best === perfect && solutions.length >= MAX_SOLUTIONS) done = true;
         return;
       }
       if (coverage + ceiling[i]! < best) return;
-      if (solutions.length >= MAX_SOLUTIONS && coverage + ceiling[i]! <= best) return;
+      // Only the tie-collecting pass has a use for branches that cannot beat the best.
+      if (!collectTies && solutions.length >= MAX_SOLUTIONS && coverage + ceiling[i]! <= best) {
+        tiesPruned = true;
+        return;
+      }
 
       const comp = order[i]!;
-      let byBindings = targetCache.get(comp);
-      if (!byBindings) {
-        byBindings = new WeakMap();
-        targetCache.set(comp, byBindings);
-      }
-      let space = byBindings.get(bindings);
-      if (!space) {
-        space = allTargets(comp, bindings).map((t) => (t.bindings === bindings ? t : { ...t, bindings: intern(t.bindings) }));
-        byBindings.set(bindings, space);
-      }
+      const space = targetsFor(comp, bindings);
 
-      const viable: { readonly t: Target; readonly overlap: number }[] = [];
-      let emptySeen: Set<string> | null = null;
+      const repeats = i > 0 && order[i - 1] === comp;
+      const viable: { readonly t: Target; readonly overlap: number; readonly swaps: readonly Target[] }[] = [];
+      /** folded-away targets, by the signature of the representative they stand behind */
+      const folded = new Map<string, Target[]>();
       for (const t of space) {
+        // Identical components are interchangeable, so keep them in generation order.
+        // This has to come before the dedup below: dedup first and the representative
+        // it keeps may be one this branch has already passed, leaving nothing to try.
+        if (repeats && prevOrd !== null && t.ord < prevOrd) continue;
         if (!distinctAllows(t.bindings)) continue;
         if (pattern.maxSuits !== undefined && suitCount(mask | t.mask) > pattern.maxSuits) continue;
         let buildable = true;
@@ -447,14 +671,23 @@ export function coverPattern(pattern: Pattern, hand: HandInput, ctx: MatchCtx, g
         }
         for (const j of t.idx) scratch[j] = 0;
         if (overlap === 0) {
-          // Targets the hand does not touch differ only in what they bind, so one
-          // representative per binding stands in for all of them.
-          const sig = bindingKey(t.bindings);
-          if (emptySeen === null) emptySeen = new Set();
-          else if (emptySeen.has(sig)) continue;
-          emptySeen.add(sig);
+          // Targets the hand does not touch are worth nothing now and, since the hand
+          // holds no copy of any of their tiles, nothing to a later component either.
+          // One representative per (bindings, suits, meld type) therefore stands in for
+          // all of them without costing coverage; the rest are kept as swaps, which is
+          // where the tiles of a many-sided wait come from.
+          const sig = `${bindingKey(t.bindings)}|${t.mask}|${t.type ?? ''}`;
+          const behind = folded.get(sig);
+          if (behind) {
+            behind.push(t);
+            continue;
+          }
+          const swaps: Target[] = [];
+          folded.set(sig, swaps);
+          viable.push({ t, overlap, swaps });
+          continue;
         }
-        viable.push({ t, overlap });
+        viable.push({ t, overlap, swaps: EMPTY_TARGETS });
       }
 
       if (viable.length === 0) {
@@ -463,18 +696,16 @@ export function coverPattern(pattern: Pattern, hand: HandInput, ctx: MatchCtx, g
         chosen[i] = target([], bindings);
         usedAt[i]!.length = 0;
         missAt[i]!.length = 0;
+        altAt[i] = EMPTY_TARGETS;
         step(i + 1, coverage, bindings, mask, null);
         return;
       }
       // Stable, so equal overlaps stay in target-space order and the search stays deterministic.
       viable.sort((a, c) => c.overlap - a.overlap);
 
-      const repeats = i > 0 && order[i - 1] === comp;
       const used = usedAt[i]!;
       const missing = missAt[i]!;
-      for (const { t } of viable) {
-        // Identical components are interchangeable, so keep them in key order.
-        if (repeats && prevKey !== null && t.key < prevKey) continue;
+      for (const { t, swaps } of viable) {
         used.length = 0;
         missing.length = 0;
         for (const k of t.tiles) {
@@ -488,10 +719,16 @@ export function coverPattern(pattern: Pattern, hand: HandInput, ctx: MatchCtx, g
           }
         }
         chosen[i] = t;
-        step(i + 1, coverage + used.length, t.bindings, mask | t.mask, t.key);
+        altAt[i] = swaps;
+        step(i + 1, coverage + used.length, t.bindings, mask | t.mask, t.ord);
         for (const k of used) counts[tileOrder(k)]!++;
         for (const k of t.tiles) claimed[tileOrder(k)]!--;
-        if (done || nodes >= NODE_BUDGET) return;
+        if (done) return;
+        if (nodes >= NODE_BUDGET) {
+          truncated = true;
+          approximate = true;
+          return;
+        }
       }
     };
 
@@ -531,7 +768,70 @@ export function coverPattern(pattern: Pattern, hand: HandInput, ctx: MatchCtx, g
     0,
   );
 
-  // Melds cannot be changed, so a pattern no meld arrangement fits is gone for good.
-  if (!reachable || best < 0) return UNREACHABLE;
-  return { reachable: true, covered: best + meldTiles.length, size: bestSize, meldTiles, solutions, truncated };
+  const needs: TileNeed[] = [];
+  if (recorded) {
+    for (const kind of KINDS) {
+      const value = needKind[tileOrder(kind)]!;
+      if (value !== NEED_NONE) needs.push({ kind, claimable: value === NEED_CLAIM });
+    }
+  }
+  return {
+    reachable,
+    best: recorded ? best : -1,
+    size: recorded ? bestSize : fullSize,
+    solutions,
+    needs,
+    truncated,
+    approximate,
+    tiesPruned,
+    meldTiles,
+  };
+}
+
+export function coverPattern(
+  pattern: Pattern,
+  hand: HandInput,
+  ctx: MatchCtx,
+  guards: Guards = {},
+  options: CoverOptions = {},
+): CoverResult {
+  if (pattern.exposure === 'concealed' && hand.melds.some((m) => !m.concealed)) return UNREACHABLE;
+  if (pattern.maxSuits !== undefined && suitCount(suitMask(hand.melds.flatMap((m) => [...m.tiles]))) > pattern.maxSuits) {
+    return UNREACHABLE;
+  }
+  const first = search(pattern, hand, ctx, guards, options.claims);
+  // The second pass enumerates the ties the first pruned, which is where `needs` and
+  // the many-sided waits come from; it can only match or better the first's coverage.
+  // Most patterns are narrow enough that the first pass pruned no tie at all, and then
+  // it has already seen every lay-out there is to see.
+  const needsTies = first.reachable && first.best >= 0 && (first.tiesPruned || first.truncated);
+  const found = needsTies ? merge(first, search(pattern, hand, ctx, guards, options.claims, first.best)) : first;
+  // Melds cannot be changed, and neither can the ruleset's verdict on a lay-out, so a
+  // pattern with no legal arrangement at all is gone for good.
+  if (!found.reachable) return UNREACHABLE;
+  if (found.best < 0) {
+    // Unless the budget ran out first, in which case "nothing found" is this search
+    // giving up rather than the rules speaking, and the pattern stays on the list.
+    if (!found.truncated) return UNREACHABLE;
+    return {
+      reachable: true,
+      covered: found.meldTiles.length,
+      size: found.size,
+      meldTiles: found.meldTiles,
+      solutions: [],
+      needs: [],
+      truncated: true,
+      approximate: true,
+    };
+  }
+  return {
+    reachable: true,
+    covered: found.best + found.meldTiles.length,
+    size: found.size,
+    meldTiles: found.meldTiles,
+    solutions: found.solutions,
+    needs: found.needs,
+    truncated: found.truncated,
+    approximate: found.approximate,
+  };
 }

@@ -1,4 +1,5 @@
 import type { TileKind } from '../tiles';
+import type { ClaimRules } from '../ruleset';
 
 export interface PatternCandidate {
   readonly patternId: string;
@@ -6,13 +7,17 @@ export interface PatternCandidate {
   readonly localName?: string;
   /** how many tiles must still change to complete this pattern */
   readonly away: number;
-  /** tile kinds that would reduce `away` if drawn or claimed, over every best lay-out */
+  /** every tile kind that would reduce `away`, drawn or claimed */
   readonly needs: readonly TileKind[];
+  /** the part of `needs` a discard can supply: a claimable meld, or the winning tile */
+  readonly needsClaimable: readonly TileKind[];
+  /** the part of `needs` only the wall can supply - in Karachi, every chow tile */
+  readonly needsFromWall: readonly TileKind[];
   /** the player's tiles serving one best lay-out of this pattern, melds included */
   readonly using: readonly TileKind[];
   /** the concealed part of `using`: the tiles this pattern asks you not to discard */
   readonly usingConcealed: readonly TileKind[];
-  /** the search hit its node budget, so `away` may be one or two tiles pessimistic */
+  /** `away` is an upper bound: the search was cut short, so the hand may be closer */
   readonly approximate: boolean;
 }
 
@@ -45,4 +50,9 @@ export interface AnalysisOptions {
   readonly topN?: number;
   /** how many candidates to return */
   readonly limit?: number;
+  /**
+   * The ruleset's claim rules, which decide whether a needed tile can come from a
+   * discard. Without them nothing is reported claimable, since only the ruleset knows.
+   */
+  readonly claims?: ClaimRules;
 }

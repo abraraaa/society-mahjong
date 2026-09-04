@@ -27,6 +27,9 @@ import { River } from '@/components/river';
 import { riverOrder } from '@/lib/river';
 import { suggestDiscard } from '@/lib/tutor';
 
+/** Custom properties are not part of React's CSSProperties, so name the one we set. */
+type HandStyle = React.CSSProperties & { '--hand-n'?: number };
+
 const ME: Seat = 0;
 const ruleset = karachi;
 /** Local flavour only — the engine knows seats, not names. */
@@ -156,20 +159,24 @@ export function SoloTable({ seed }: { seed: string }) {
   );
 
   const bonus = (
-    <div className="meld-row mt-1 justify-center">
+    <div className="meld-row justify-center">
       {me.bonus.map((k, i) => (
         <Tile key={i} kind={k} size="xs" />
       ))}
     </div>
   );
 
+  // The rail and the landscape tray size their tiles from how many there
+  // actually are, which CSS can only know if we tell it.
+  const handStyle: HandStyle = { '--hand-n': Math.max(me.concealed.length, 1) };
+
   return (
     <>
-      {/* Portrait phone: hand tray bottom, river in the middle taking whatever is left over. */}
+      {/* Phone, either way up: hand at the bottom, river taking whatever is left over. */}
       <div className="table-stage">
         <header className="flex flex-none items-baseline justify-between gap-2">{header}</header>
 
-        <div className="grid flex-none grid-cols-3 gap-2">
+        <div className="seat-strip grid flex-none grid-cols-3 gap-2">
           {[left, across, right].map((p) => (
             <SeatPill key={p.seat} wind={p.seatWind} name={NAMES[p.seat]} concealedCount={p.concealed.length} melds={p.melds} isTurn={state.turn === p.seat} />
           ))}
@@ -182,20 +189,22 @@ export function SoloTable({ seed }: { seed: string }) {
 
         {tip && <Coach>{tip.message}</Coach>}
 
-        {hasActions && <div className="action-row flex-none justify-center">{actions}</div>}
+        {hasActions && <div className="action-row flex-none">{actions}</div>}
 
-        <section className="flex-none">
+        <section className="hand-dock flex-none">
           {me.melds.length > 0 && myMelds}
-          <div className="hand-tray">{handTiles('md')}</div>
+          <div className="hand-tray" style={handStyle}>
+            {handTiles('md')}
+          </div>
           {me.bonus.length > 0 && bonus}
         </section>
       </div>
 
       {/* Landscape tablet: the full square table. */}
-      <div className="mx-auto hidden h-dvh max-w-5xl grid-cols-[120px_1fr_120px] grid-rows-[auto_minmax(0,1fr)_auto_auto] gap-3 overflow-hidden px-6 pt-[max(1rem,var(--safe-top))] pb-[max(1rem,var(--safe-bottom))] md:landscape:grid">
+      <div className="table-grid mx-auto h-dvh max-w-5xl grid-cols-[120px_1fr_120px] grid-rows-[auto_minmax(0,1fr)_auto_auto] gap-3 overflow-hidden px-6 pt-[max(1rem,var(--safe-top))] pb-[max(1rem,var(--safe-bottom))]">
         <div className="col-span-3 flex items-center justify-between gap-3">{header}</div>
 
-        <SeatPill wind={left.seatWind} name={NAMES[left.seat]} concealedCount={left.concealed.length} melds={left.melds} isTurn={state.turn === left.seat} orientation="column" rotateMelds />
+        <SeatPill wind={left.seatWind} name={NAMES[left.seat]} concealedCount={left.concealed.length} melds={left.melds} isTurn={state.turn === left.seat} orientation="column" />
 
         <div className="flex min-h-0 flex-col gap-3">
           <div className="flex justify-center">
@@ -207,7 +216,7 @@ export function SoloTable({ seed }: { seed: string }) {
           </section>
         </div>
 
-        <SeatPill wind={right.seatWind} name={NAMES[right.seat]} concealedCount={right.concealed.length} melds={right.melds} isTurn={state.turn === right.seat} orientation="column" rotateMelds />
+        <SeatPill wind={right.seatWind} name={NAMES[right.seat]} concealedCount={right.concealed.length} melds={right.melds} isTurn={state.turn === right.seat} orientation="column" />
 
         {tip ? (
           <div className="col-span-3">
@@ -217,10 +226,13 @@ export function SoloTable({ seed }: { seed: string }) {
           <div className="col-span-3" />
         )}
 
-        <div className="col-span-3 flex items-end justify-between gap-6">
-          {myMelds}
-          <div className="hand-rail flex-1 justify-center">{handTiles('lg')}</div>
-          {hasActions && <div className="action-row flex-none justify-end">{actions}</div>}
+        <div className="hand-dock col-span-3">
+          {me.melds.length > 0 && myMelds}
+          <div className="hand-rail" style={handStyle}>
+            {handTiles('lg')}
+          </div>
+          {me.bonus.length > 0 && bonus}
+          {hasActions && <div className="action-row">{actions}</div>}
         </div>
       </div>
 

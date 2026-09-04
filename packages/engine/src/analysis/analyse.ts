@@ -21,7 +21,7 @@ import {
 } from '../tiles';
 import type { HandInput } from '../hand';
 import type { Guards, MatchCtx, Pattern } from '../patterns/types';
-import { coverPattern } from './coverage';
+import { coverPattern, type CoverResult } from './coverage';
 import type { AnalysisOptions, HandAnalysis, PatternCandidate, TileRating } from './types';
 
 const DEFAULT_TOP_N = 3;
@@ -70,42 +70,41 @@ export function analyseHand(
   const held = countKinds(concealed);
   const handSize = concealed.length + hand.melds.reduce((n, m) => n + m.tiles.length, 0);
 
-  const rated: { candidate: PatternCandidate; concealedUsed: Counts }[] = [];
+  const rated: { pattern: Pattern; cover: CoverResult; away: number; concealedUsed: Counts }[] = [];
   for (const pattern of patterns) {
-    const cover = coverPattern(pattern, hand, ctx, guards);
-    if (!cover.reachable || cover.solutions.length === 0) continue;
+    const cover = coverPattern(pattern, hand, ctx, guards, { ...(options.claims ? { claims: options.claims } : {}) });
+    if (!cover.reachable) continue;
 
     // A 13 tile hand measured against a 14 tile pattern is one tile away, not zero,
     // so the yardstick is whichever of the two is longer.
     const away = Math.max(cover.size, handSize) - cover.covered;
-    // `using` follows one concrete lay-out - the first the search found, which is its
-    // greedy best - so it reads as a plan and its spare tiles really are spare. Several
-    // lay-outs can tie, so `needs` unions the waits across all of them.
-    const concealedUsed = countKinds(cover.solutions[0]!.used);
-    const needs = new Set<TileKind>();
-    for (const solution of cover.solutions) for (const k of solution.missing) needs.add(k);
-    rated.push({
-      candidate: {
-        patternId: pattern.id,
-        name: pattern.name,
-        ...(pattern.localName ? { localName: pattern.localName } : {}),
-        away,
-        needs: sortTiles([...needs]),
-        using: sortTiles([...cover.meldTiles, ...countsToList(concealedUsed)]),
-        usingConcealed: countsToList(concealedUsed),
-        approximate: cover.truncated,
-      },
-      concealedUsed,
-    });
+    // No lay-out at all means the search ran out of budget before it found one; the
+    // pattern is still on the table, so it stays on the list with nothing to show for itself.
+    rated.push({ pattern, cover, away, concealedUsed: countKinds(cover.solutions[0]?.used ?? []) });
   }
 
   rated.sort(
     (a, b) =>
-      a.candidate.away - b.candidate.away ||
-      b.candidate.using.length - a.candidate.using.length ||
-      a.candidate.needs.length - b.candidate.needs.length ||
-      (a.candidate.patternId < b.candidate.patternId ? -1 : 1),
+      a.away - b.away ||
+      b.cover.covered - a.cover.covered ||
+      (a.pattern.id < b.pattern.id ? -1 : 1),
   );
+
+  // `using` follows one concrete lay-out - the first the search found, which is its
+  // greedy best - so it reads as a plan and its spare tiles really are spare. `needs`
+  // is the union over every lay-out at that coverage, so a many-sided wait is whole.
+  const candidates: PatternCandidate[] = rated.slice(0, limit).map(({ pattern, cover, away, concealedUsed }) => ({
+    patternId: pattern.id,
+    name: pattern.name,
+    ...(pattern.localName ? { localName: pattern.localName } : {}),
+    away,
+    needs: sortTiles(cover.needs.map((n) => n.kind)),
+    needsClaimable: sortTiles(cover.needs.filter((n) => n.claimable).map((n) => n.kind)),
+    needsFromWall: sortTiles(cover.needs.filter((n) => !n.claimable).map((n) => n.kind)),
+    using: sortTiles([...cover.meldTiles, ...countsToList(concealedUsed)]),
+    usingConcealed: countsToList(concealedUsed),
+    approximate: cover.approximate,
+  }));
 
   const leaders = rated.slice(0, topN);
 
@@ -125,10 +124,10 @@ export function analyseHand(
   for (const [kind, n] of held) {
     let usefulness = 0;
     const serves: string[] = [];
-    leaders.forEach(({ candidate, concealedUsed }, i) => {
+    leaders.forEach(({ pattern, concealedUsed }, i) => {
       const used = concealedUsed.get(kind) ?? 0;
       if (used === 0) return;
-      serves.push(candidate.patternId);
+      serves.push(pattern.id);
       // The closest candidate is the one the player is most likely on, so it counts most.
       usefulness += used / (i + 1);
     });
@@ -147,7 +146,7 @@ export function analyseHand(
   const discardable = ratings.find((r) => r.held > (bestUse.get(r.kind) ?? 0));
 
   return {
-    candidates: rated.slice(0, limit).map((r) => r.candidate),
+    candidates,
     keep: sortTiles(keep),
     spare: sortTiles(spare),
     bestDiscard: discardable ? discardable.kind : null,
