@@ -5,7 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { NameGate } from '@/components/name-gate';
 import { RoomWaiting } from '@/components/room-waiting';
 import { ApiError, api, listen, type RoomSnapshot } from '@/lib/live/client';
-import { ensureSession, rememberName, storedName } from '@/lib/supabase/session';
+import { NeedsCaptcha, ensureSession, rememberName, storedName } from '@/lib/supabase/session';
 
 const RULESET_NAMES: Record<string, string> = { karachi: 'Karachi rules', taiwanese: 'Taiwanese rules' };
 
@@ -17,6 +17,7 @@ const RULESET_NAMES: Record<string, string> = { karachi: 'Karachi rules', taiwan
 export function RoomLobby({ code }: { code: string }) {
   const router = useRouter();
   const [name, setName] = useState<string | null>(() => (typeof window === 'undefined' ? null : storedName()));
+  const [captcha, setCaptcha] = useState<string | null>(null);
   const [room, setRoom] = useState<RoomSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -30,20 +31,22 @@ export function RoomLobby({ code }: { code: string }) {
     let cancelled = false;
     (async () => {
       try {
-        const { supabase } = await ensureSession(name);
+        const { supabase } = await ensureSession(name, captcha);
         supabaseRef.current = supabase;
         const snap = await api.join(code, name);
         if (cancelled) return;
         setRoom(snap);
         if (snap.status === 'playing' && snap.gameId) goToGame(snap.gameId);
       } catch (err) {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Could not join this room.');
+        if (cancelled) return;
+        if (err instanceof NeedsCaptcha) setName(null);
+        else setError(err instanceof Error && err.message ? `Could not join this room: ${err.message}` : 'Could not join this room.');
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [code, name, goToGame]);
+  }, [code, name, captcha, goToGame]);
 
   // Live seat changes and the start signal, with a poll as the fallback.
   useEffect(() => {
@@ -74,8 +77,10 @@ export function RoomLobby({ code }: { code: string }) {
     return (
       <NameGate
         title={`Room ${code}`}
-        onDone={(n) => {
+        initialName={storedName() ?? ''}
+        onDone={(n, token) => {
           rememberName(n);
+          setCaptcha(token);
           setName(n);
         }}
       />

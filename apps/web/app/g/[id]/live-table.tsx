@@ -9,7 +9,7 @@ import { analyseFor, coachFor, stageFor, type CoachState } from '@/lib/coach';
 import { ApiError, api, listen } from '@/lib/live/client';
 import { isPrivate, type GameSnapshot } from '@/lib/live/snapshot';
 import type { ClientAction } from '@/lib/live/types';
-import { ensureSession, rememberName, storedName } from '@/lib/supabase/session';
+import { NeedsCaptcha, ensureSession, rememberName, storedName } from '@/lib/supabase/session';
 import { scoresFrom } from '@/lib/ledger';
 
 interface Progress {
@@ -26,6 +26,7 @@ interface Progress {
 export function LiveTable({ gameId }: { gameId: string }) {
   const router = useRouter();
   const [name, setName] = useState<string | null>(() => (typeof window === 'undefined' ? null : storedName()));
+  const [captcha, setCaptcha] = useState<string | null>(null);
   const [snap, setSnap] = useState<GameSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tutorOn, setTutorOn] = useState(true);
@@ -59,7 +60,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
     let cancelled = false;
     (async () => {
       try {
-        const { supabase } = await ensureSession(name);
+        const { supabase } = await ensureSession(name, captcha);
         if (cancelled) return;
         supabaseRef.current = supabase;
         await refetch();
@@ -69,7 +70,9 @@ export function LiveTable({ gameId }: { gameId: string }) {
           },
         });
       } catch (err) {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Could not sit down.');
+        if (cancelled) return;
+        if (err instanceof NeedsCaptcha) setName(null);
+        else setError(err instanceof Error && err.message ? `Could not sit down: ${err.message}` : 'Could not sit down.');
       }
     })();
     const onVisible = () => document.visibilityState === 'visible' && void refetch();
@@ -79,7 +82,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
       stop?.();
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [name, gameId, refetch]);
+  }, [name, captcha, gameId, refetch]);
 
   // When a deadline passes and the table has not moved, ask it to resolve the clock.
   useEffect(() => {
@@ -121,8 +124,10 @@ export function LiveTable({ gameId }: { gameId: string }) {
     return (
       <NameGate
         title="Take your seat"
-        onDone={(n) => {
+        initialName={storedName() ?? ''}
+        onDone={(n, token) => {
           rememberName(n);
+          setCaptcha(token);
           setName(n);
         }}
       />

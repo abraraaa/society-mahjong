@@ -3,12 +3,13 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { NameGate } from '@/components/name-gate';
 import { ApiError, api } from '@/lib/live/client';
-import { ensureSession, rememberName, storedName } from '@/lib/supabase/session';
+import { NeedsCaptcha, ensureSession, rememberName, storedName } from '@/lib/supabase/session';
 
 /** Host a table: a name, a room, and straight to the lobby with a code to share. */
 export function CreateRoom() {
   const router = useRouter();
   const [name, setName] = useState<string | null>(() => (typeof window === 'undefined' ? null : storedName()));
+  const [captcha, setCaptcha] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -16,24 +17,28 @@ export function CreateRoom() {
     let cancelled = false;
     (async () => {
       try {
-        await ensureSession(name);
+        await ensureSession(name, captcha);
         const { code } = await api.createRoom('karachi');
         if (!cancelled) router.replace(`/r/${code}`);
       } catch (err) {
-        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Could not open a room.');
+        if (cancelled) return;
+        if (err instanceof NeedsCaptcha) setName(null);
+        else setError(err instanceof Error && err.message ? `Could not open a room: ${err.message}` : 'Could not open a room.');
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [name, router]);
+  }, [name, captcha, router]);
 
   if (!name) {
     return (
       <NameGate
         title="Host a table"
-        onDone={(n) => {
+        initialName={storedName() ?? ''}
+        onDone={(n, token) => {
           rememberName(n);
+          setCaptcha(token);
           setName(n);
         }}
       />
