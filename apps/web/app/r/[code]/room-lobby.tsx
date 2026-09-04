@@ -40,7 +40,7 @@ export function RoomLobby({ code }: { code: string }) {
       } catch (err) {
         if (cancelled) return;
         if (err instanceof NeedsCaptcha) setName(null);
-        else setError(err instanceof ApiError ? err.message : 'Could not join this room.');
+        else setError(err instanceof Error && err.message ? `Could not join this room: ${err.message}` : 'Could not join this room.');
       }
     })();
     return () => {

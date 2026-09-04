@@ -72,7 +72,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
       } catch (err) {
         if (cancelled) return;
         if (err instanceof NeedsCaptcha) setName(null);
-        else setError(err instanceof ApiError ? err.message : 'Could not sit down.');
+        else setError(err instanceof Error && err.message ? `Could not sit down: ${err.message}` : 'Could not sit down.');
       }
     })();
     const onVisible = () => document.visibilityState === 'visible' && void refetch();

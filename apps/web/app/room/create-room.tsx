@@ -23,7 +23,7 @@ export function CreateRoom() {
       } catch (err) {
         if (cancelled) return;
         if (err instanceof NeedsCaptcha) setName(null);
-        else setError(err instanceof ApiError ? err.message : 'Could not open a room.');
+        else setError(err instanceof Error && err.message ? `Could not open a room: ${err.message}` : 'Could not open a room.');
       }
     })();
     return () => {
