@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { IllegalAction, analysisBot, karachi, viewFor, type Seat } from '@society/engine';
+import { IllegalAction, analysisBot, karachi, legalActions, viewFor, type Seat } from '@society/engine';
+import type { LiveGame } from './types';
 import { NotYourMove, dealFirstHand, resolveExpired, settle, step } from './table';
 import { isHuman, seatOf, type Seats } from './types';
 import { policyFor } from './policy';
@@ -118,5 +119,63 @@ describe('four bots', () => {
     const bots: Seats = [{ kind: 'bot', name: 'A' }, { kind: 'bot', name: 'B' }, { kind: 'bot', name: 'C' }, { kind: 'bot', name: 'D' }];
     const game = dealFirstHand(karachi, bots, 'live-8', policy, T0);
     expect(settle(game.state, karachi, bots).phase).toBe('finished');
+  });
+});
+
+/**
+ * Play the human with the sharp bot's brain until a discard they could win on
+ * comes past. Common enough that a few seeds always produce one.
+ */
+function untilWinOffered(): LiveGame {
+  for (let i = 0; i < 60; i++) {
+    let game: LiveGame = dealFirstHand(karachi, seats, `win-${i}`, policy, T0);
+    for (let k = 0; k < 400 && game.state.phase !== 'finished'; k++) {
+      const legal = legalActions(game.state, karachi, ME);
+      if (legal.claims?.some((c) => c.type === 'win')) return game;
+      const a = analysisBot(viewFor(game.state, karachi, ME), karachi) ?? (legal.claims ? { type: 'pass' as const, seat: ME } : null);
+      if (!a) throw new Error(`no move for the human in phase ${game.state.phase}`);
+      const r = step({
+        game,
+        ruleset: karachi,
+        seats,
+        policy,
+        now: T0,
+        action: a as never,
+        actor: ME,
+      });
+      game = { state: r.state, deadlines: r.deadlines };
+    }
+  }
+  throw new Error('no seed offered the human a win from a discard');
+}
+
+describe('a winning tile on the clock', () => {
+  it('gives a window with Mahjong on offer the turn clock, not the claim clock', { timeout: 60_000 }, () => {
+    const game = untilWinOffered();
+    expect(game.state.phase).toBe('claim');
+    // Not 20 s: reading "Mahjong!" for the first time takes longer than taking a pung.
+    expect(game.deadlines.claim).toBe(T0 + policy.turnSeconds * 1000);
+    expect(game.deadlines.turn).toBeNull();
+    // Taking it finishes the hand in the human's favour.
+    const win = legalActions(game.state, karachi, ME).claims!.find((c) => c.type === 'win')!;
+    const r = step({
+      game,
+      ruleset: karachi,
+      seats,
+      policy,
+      now: T0 + 30_000,
+      action: { type: 'claim', seat: ME, claim: win },
+      actor: ME,
+    });
+    expect(r.state.phase).toBe('finished');
+    expect(r.state.result).toMatchObject({ type: 'win', winner: ME });
+  });
+
+  it('has a bot take the win for a human who let the window expire', { timeout: 60_000 }, () => {
+    const game = untilWinOffered();
+    const s = resolveExpired(game, karachi, seats, game.deadlines.claim!);
+    expect(s).not.toBeNull();
+    expect(s!.phase).toBe('finished');
+    expect(s!.result).toMatchObject({ type: 'win', winner: ME });
   });
 });

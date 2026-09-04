@@ -79,17 +79,31 @@ function humansPending(s: HandState, ruleset: Ruleset, seats: Seats): Seat[] {
   return [];
 }
 
+/** Whether any human still to answer this window was offered the win. */
+function winOffered(state: HandState, ruleset: Ruleset, pending: readonly Seat[]): boolean {
+  return pending.some((seat) => legalActions(state, ruleset, seat).claims?.some((c) => c.type === 'win') ?? false);
+}
+
 export function deadlinesFor(state: HandState, ruleset: Ruleset, seats: Seats, policy: TimerPolicy, now: number): Deadlines {
   const pending = humansPending(state, ruleset, seats);
   if (pending.length === 0) return { claim: null, turn: null };
-  if (state.phase === 'claim') return { claim: now + policy.claimSeconds * 1000, turn: null };
+  if (state.phase === 'claim') {
+    // A winning tile runs on the turn clock, not the claim clock. Twenty
+    // seconds is enough to take a pung; it is not enough for a first-timer
+    // to read "Mahjong!" and believe it, and a win lost to the clock is the
+    // one thing a table must never do to someone.
+    const seconds = winOffered(state, ruleset, pending) ? policy.turnSeconds : policy.claimSeconds;
+    return { claim: now + seconds * 1000, turn: null };
+  }
   return { claim: null, turn: now + policy.turnSeconds * 1000 };
 }
 
 /**
- * Resolve deadlines that have passed. An expired claim window is a pass for
- * everyone who did not answer; an expired turn (or exchange) is played by a
- * bot standing in for the absent human, so the table moves on.
+ * Resolve deadlines that have passed. Whatever a human did not answer in time
+ * is decided by a bot standing in for them, in a claim window as in a turn:
+ * it takes a win they were offered, claims a set only when that brings their
+ * hand closer, and passes on the rest, so the table moves on and an absent
+ * player's Mahjong is not thrown away.
  */
 export function resolveExpired(game: LiveGame, ruleset: Ruleset, seats: Seats, now: number): HandState | null {
   const { state, deadlines } = game;
@@ -97,7 +111,11 @@ export function resolveExpired(game: LiveGame, ruleset: Ruleset, seats: Seats, n
     let s = state;
     for (const seat of humansPending(s, ruleset, seats)) {
       if (s.phase !== 'claim') break;
-      s = reduce(s, { type: 'pass', seat }, ruleset);
+      const a = analysisBot(viewFor(s, ruleset, seat), ruleset) ?? {
+        type: 'pass' as const,
+        seat,
+      };
+      s = reduce(s, a, ruleset);
     }
     return s;
   }
