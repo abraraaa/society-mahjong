@@ -2,6 +2,7 @@ export * from './tiles';
 export * from './rng';
 export * from './hand';
 export * from './patterns/index';
+export * from './analysis/index';
 export * from './ruleset';
 export * from './rulesets/index';
 export * from './game/index';

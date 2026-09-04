@@ -16,12 +16,14 @@ export interface TutorTip {
 export function suggestDiscard(hand: readonly TileKind[]): TutorTip | null {
   const lone = hand.find((k) => (isWindTile(k) || isDragonTile(k)) && countOf(hand, k) === 1);
   if (!lone) return null;
-  const family = isWindTile(lone) ? 'Winds' : 'Dragons';
+  const family = isWindTile(lone) ? 'winds' : 'dragons';
+  // Short on purpose: the bubble is clamped to three lines on a phone, and the
+  // tile's name has to survive to the end of the sentence.
   return {
     tile: lone,
     message: (
       <>
-        You&rsquo;re holding a lone {tileName(lone)}. {family} only score in sets — <b>discard {tileName(lone)}</b> if nobody&rsquo;s collecting them.
+        Lone {family} are dead weight — they only score in sets. <b>Discard {tileName(lone)}</b>.
       </>
     ),
   };
