@@ -44,8 +44,10 @@
   color-scheme: light dark;
 
   /* Tile sizes: width / height, 60:84 in the source SVGs. */
+  --tile-2xs-w: 16px;
+  --tile-2xs-h: 22px; /* one-per-meld summary in a phone seat pill */
   --tile-xs-w: 24px;
-  --tile-xs-h: 34px; /* opponent melds, wall pips */
+  --tile-xs-h: 34px; /* my melds, bonus row, a crowded river */
   --tile-sm-w: 36px;
   --tile-sm-h: 50px; /* river */
   --tile-md-w: 44px;
@@ -59,6 +61,8 @@
   --claim-seconds: 8s;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
 }
 
 html,
@@ -94,15 +98,24 @@ h3 {
     var(--color-felt-700);
 }
 
-/* Tile faces. <Tile kind="m1" size="md" /> renders <button class="tile tile-md"><img src="/tiles/m1.svg"></button> */
+/* Tile faces. <Tile kind="m1" size="md" /> renders an empty
+   <button class="tile tile-md" style="--tile-face:url(/tiles/m1.svg)">. */
 .tile {
   position: relative;
   display: inline-flex;
   padding: 0;
   border: 0;
-  overflow: hidden;
   border-radius: var(--radius-tile);
-  background: linear-gradient(180deg, var(--color-ivory-50), var(--color-ivory-200));
+  /* The glyph is a background layer, not a child element: a late-hand table
+     paints 100+ tiles, and the face carries no meaning a screen reader needs
+     (the button's aria-label already names the tile). Nothing is clipped
+     either, so the coach's glow can spill past the tile edge. */
+  --tile-face: none;
+  background-color: var(--color-ivory-200);
+  background-image: var(--tile-face), linear-gradient(180deg, var(--color-ivory-50), var(--color-ivory-200));
+  background-size: cover, auto;
+  background-position: center, center;
+  background-repeat: no-repeat, no-repeat;
   box-shadow:
     0 1px 0 rgb(255 255 255 / 0.6) inset,
     0 2px 4px rgb(0 0 0 / 0.35),
@@ -114,11 +127,10 @@ h3 {
   touch-action: manipulation;
   cursor: pointer;
 }
-.tile > img {
-  width: 100%;
-  height: 100%;
-  display: block;
-  pointer-events: none;
+.tile-2xs {
+  width: var(--tile-2xs-w);
+  height: var(--tile-2xs-h);
+  border-radius: 2px;
 }
 .tile-xs {
   width: var(--tile-xs-w);
@@ -158,6 +170,12 @@ h3 {
 .tile[data-dim='true'] {
   opacity: 0.38;
 }
+.tile[data-latest='true'] {
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.6) inset,
+    0 2px 4px rgb(0 0 0 / 0.35),
+    0 0 0 1.5px rgb(216 180 90 / 0.8);
+}
 .tile[data-claimable='true'] {
   outline: 2px solid var(--color-brass-400);
   outline-offset: 1px;
@@ -183,9 +201,6 @@ h3 {
   background: var(--color-felt-700) url('/tiles/back.svg') center / cover;
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
 }
-.tile[data-back='true'][data-rotate='true'] {
-  transform: rotate(90deg);
-}
 @keyframes tile-pulse {
   0%,
   100% {
@@ -196,50 +211,310 @@ h3 {
   }
 }
 
-/* Hand rail: horizontal, snaps, never wraps */
+/*
+  The table is a stage, not a document: a fixed viewport height with the
+  regions that can grow without bound (the river) doing the scrolling, so the
+  hand and the action buttons can never be pushed past the fold. Safe-area
+  insets live here and nowhere else, so nothing double-counts them.
+
+  `overflow-y: auto` rather than `hidden` is the floor, not the plan: the
+  river collapses to nothing before anything else gives, so the stage only
+  ever scrolls when the fixed rows alone outgrow the viewport. A hand you
+  cannot scroll to is a hand you cannot play.
+*/
+.table-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100dvh;
+  max-width: 32rem;
+  margin-inline: auto;
+  padding: max(8px, var(--safe-top)) 16px max(8px, var(--safe-bottom));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Only one of the two compositions is ever mounted; the tablet grid claims
+   the viewport in the media query below. Written as CSS rather than
+   `hidden md:landscape:grid` utilities because an unlayered rule outranks
+   Tailwind's utility layer, so those utilities would lose to each other. */
+.table-grid {
+  display: none;
+}
+
+/*
+  A phone lying on its side is a real posture, and it is not a small tablet:
+  320px of height cannot carry a header row, a seat row, a felt, a coach, an
+  action row and a two-row hand stacked. So the short-landscape stage pairs
+  the rows that can share a line (the coach with the actions) and lays the
+  hand out in one row sized to the width. The tablet grid needs both the
+  width and the height to earn its four-sided table.
+*/
+@media (orientation: landscape) and (height < 32rem) {
+  .table-stage {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+    max-width: none;
+    gap: 6px 12px;
+    padding-inline: max(12px, var(--safe-left)) max(12px, var(--safe-right));
+  }
+  /* Explicit placement, so a row added to the stage later lands visibly
+     wrong rather than silently displacing the hand. */
+  .table-stage > header,
+  .table-stage > .seat-strip,
+  .table-stage > .felt,
+  .table-stage > .hand-dock {
+    grid-column: 1 / -1;
+  }
+  .table-stage > header {
+    grid-row: 1;
+  }
+  .table-stage > .seat-strip {
+    grid-row: 2;
+  }
+  .table-stage > .felt {
+    grid-row: 3;
+  }
+  /* The tip and the buttons share the row, and the tip keeps a width it can
+     actually be read at — an `auto` button track otherwise takes the lot and
+     leaves the bubble as an avatar and a sliver. The buttons wrap instead. */
+  .table-stage > .coach {
+    grid-row: 4;
+    grid-column: 1;
+    min-width: 13rem;
+    align-self: center;
+  }
+  .table-stage > .action-row {
+    grid-row: 4;
+    grid-column: 2;
+    justify-content: flex-end;
+    align-self: center;
+  }
+  .table-stage > .hand-dock {
+    grid-row: 5;
+  }
+  /* One line per seat. Letting the melds drop inside the pill costs the felt
+     25px of its 320, and three pills across a landscape phone have the width
+     to keep them on the end of the row instead. */
+  .seat-strip .seat {
+    grid-template-columns: auto minmax(0, 1fr) auto minmax(0, auto);
+  }
+  .seat-strip .seat .sets {
+    grid-column: auto;
+    flex-wrap: nowrap;
+    overflow: hidden;
+  }
+}
+@media (width >= 48rem) and (orientation: landscape) and (height >= 32rem) {
+  .table-stage {
+    display: none;
+  }
+  .table-grid {
+    display: grid;
+  }
+}
+
+/*
+  The primary actions of the game, so never behind a scroller: a centred row
+  that overflows cannot be scrolled back to (scrollLeft is already 0 at a
+  negative offset), which sliced the end-caps off the first and last button
+  on a 393px phone. They wrap instead — a second row costs 52px, a button
+  you cannot reach costs the turn.
+*/
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.action-row > .btn {
+  flex: 0 1 auto;
+  max-width: 100%;
+  min-width: 0;
+}
+
+/*
+  Phone hand: seven tiles to a row, so a 13-tile hand is always two even rows
+  and every tile is on screen. Tiles shrink to the tray's width before they
+  spill — a hidden horizontal scrollbar hides half a hand on a 320px phone.
+
+  Seven across cannot reach the 44px tap minimum on a 320px screen at any
+  padding (7 x 44 + 6 x 3 = 326 > 320), so the narrow rule below buys back
+  what it can — 40.3px wide by 56.4px tall, up from 37.7 x 52.8. Six across
+  would clear 44px but leaves a 13-tile hand as 6 + 6 + 1, and the odd tile
+  out reads as a bug. The shrink stands, 3.7px short.
+*/
+.hand-tray {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: flex-end;
+  gap: var(--hand-gap);
+  width: min(100%, calc(7 * (var(--tile-md-w) + var(--hand-gap)) - var(--hand-gap)));
+  margin-inline: auto;
+  padding-top: 18px; /* headroom for the selected lift and the coach's glow */
+}
+.hand-tray > .tile {
+  flex: 0 0 auto;
+  width: min(var(--tile-md-w), calc((100% - 6 * var(--hand-gap)) / 7));
+  height: auto;
+  aspect-ratio: 60 / 84;
+}
+@media (width < 24rem) {
+  .table-stage {
+    padding-inline: 10px;
+  }
+  .hand-tray {
+    --hand-gap: 3px;
+  }
+}
+
+/*
+  Wide hand rail: one row, and it stays one row — tiles narrow to whatever
+  the rail can give them (never past --tile-lg) rather than running off the
+  end behind a hidden scrollbar.
+
+  `--hand-n` is the tiles actually in the rail, set by the caller. Dividing
+  by a fixed 14 sized a five-tile hand as if it were a full one, which is how
+  a 491px rail ended up drawing 30px tiles. The 12px is the drawn tile's
+  offset, which is part of the row whenever there is one.
+*/
 .hand-rail {
+  --hand-n: 14;
   display: flex;
   gap: var(--hand-gap);
   align-items: flex-end;
-  padding: 14px 16px calc(8px + var(--safe-bottom));
-  overflow-x: auto;
-  scroll-snap-type: x proximity;
-  scrollbar-width: none;
-}
-.hand-rail::-webkit-scrollbar {
-  display: none;
+  justify-content: center;
+  padding-top: 18px;
 }
 .hand-rail > .tile {
   flex: 0 0 auto;
-  scroll-snap-align: center;
+  width: min(var(--tile-lg-w), calc((100% - (var(--hand-n) - 1) * var(--hand-gap) - 12px) / var(--hand-n)));
+  height: auto;
+  aspect-ratio: 60 / 84;
 }
 .hand-rail > .drawn {
   margin-left: 12px;
 }
 
-/* River grid */
-.river {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, var(--tile-sm-w));
-  gap: var(--river-gap);
-  justify-content: center;
+/*
+  The hand and everything that belongs to it stack, so the rail owns the full
+  width of the table: sharing a line with the melds and the action buttons
+  made the rail the only shrinkable box on the row, and it paid for both.
+*/
+.hand-dock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* Landscape phone: one row, sized to the tiles actually held. */
+@media (orientation: landscape) and (height < 32rem) {
+  .hand-tray {
+    --hand-n: 14;
+    flex-wrap: nowrap;
+    width: 100%;
+    padding-top: 12px;
+  }
+  .hand-tray > .tile {
+    width: min(var(--tile-md-w), calc((100% - (var(--hand-n) - 1) * var(--hand-gap)) / var(--hand-n)));
+  }
+  /* The melds and the bonus tiles share a line above the hand, at the size
+     they take in a seat pill: two more full-height rows under the hand is
+     70px the felt does not have on a phone lying down, and neither row is a
+     thing you play from — they are there to be counted. */
+  .table-stage > .hand-dock {
+    flex-flow: row wrap;
+    align-items: flex-end;
+    gap: 4px 8px;
+  }
+  .table-stage > .hand-dock > .hand-tray {
+    order: 1;
+    flex: 1 0 100%;
+  }
+  .table-stage > .hand-dock .meld-row .tile {
+    width: var(--tile-2xs-w);
+    height: var(--tile-2xs-h);
+  }
 }
 
-/* Meld group */
+/*
+  River. It is the only region allowed to take the leftover height, so it is
+  also the only one that scrolls — and it scrolls to the newest discard,
+  which is the end a player actually reads. Past roughly three rows the tiles
+  step down a size: a 60-tile river at --tile-sm cannot fit a phone at any
+  height budget, and a smaller tile beats a hidden one.
+*/
+.river-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Only once there is something above: a hard-clipped row reads as a bug. */
+.river-scroll[data-above] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 20px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 20px);
+}
+/*
+  The discards sit in the middle of the felt as they would in the room. The
+  grid has to be told to fill the scroller first (`min-height: 100%`) or
+  `align-content` has an auto-height box and nothing to distribute — which is
+  how a 71px river came to be pinned to the top of a 519px scroller. `safe`
+  hands the top row back the moment the river outgrows the felt.
+*/
+.river {
+  --river-tile-w: var(--tile-sm-w);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, var(--river-tile-w));
+  gap: var(--river-gap);
+  justify-content: center;
+  align-content: safe center;
+  min-height: 100%;
+}
+.river[data-dense='true'] {
+  --river-tile-w: var(--tile-xs-w);
+  --river-gap: 3px;
+}
+.river-scroll[data-empty] {
+  display: grid;
+  place-items: center;
+}
+
+/* Meld group: one box per exposed set, so the sets read as sets. */
 .meld {
   display: inline-flex;
+  flex: 0 0 auto;
   gap: 1px;
   padding: 2px;
   border-radius: 4px;
   background: rgb(0 0 0 / 0.18);
 }
-
-/* Seat strip (opponents) */
-.seat {
+/* Wraps rather than scrolls: every child is a disabled button, so a hidden
+   scrollbar put four exposed kongs (430px against a 361px box) out of reach
+   of the keyboard and the pointer both. */
+.meld-row {
   display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/*
+  Seat strip (opponents). Three of these share a phone's width, so the pill is
+  a grid that can shrink: the name truncates, and melds drop to a second line
+  inside the pill rather than shouldering the wind badge off the screen.
+*/
+.seat {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
+  /* `safe`, because the tablet's side seats are given a fixed-height grid row:
+     plain `center` centres rows that are taller than the pill and spills them
+     out of both ends of it, and the wind badge lands on top of the title. */
+  align-content: safe center;
+  gap: 3px 5px;
+  min-width: 0;
+  padding: 5px 7px;
   border-radius: var(--radius-card);
   background: rgb(18 58 52 / 0.6);
   font-size: 12px;
@@ -250,13 +525,23 @@ h3 {
   color: var(--color-ivory-100);
 }
 .seat.is-column {
-  flex-direction: column;
-  padding: 12px 0;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  padding: 12px 4px;
   gap: 10px;
+  /* Its row is `minmax(0, 1fr)`, so a seat with four sets down can be taller
+     than the box it is given; scroll it rather than paint over the table. */
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.seat.is-column::-webkit-scrollbar {
+  display: none;
 }
 .seat .wind {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   display: grid;
   place-items: center;
@@ -265,12 +550,46 @@ h3 {
   color: var(--color-ink-900);
   font: 500 12px var(--font-sans);
 }
+.seat .name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.seat .held {
+  font-variant-numeric: tabular-nums;
+  color: rgb(243 236 219 / 0.55);
+}
 .seat .pips {
   display: flex;
   gap: 1px;
 }
 .seat.is-column .pips {
   flex-direction: column;
+}
+/* One tile per exposed set — enough to read the suit they are chasing. */
+.seat .sets .meld {
+  padding: 0;
+  background: none;
+  gap: 2px;
+}
+.seat .sets {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.seat.is-column .sets {
+  grid-column: auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.seat .sets i {
+  font-size: 10px;
+  font-style: normal;
+  align-self: flex-end;
+  color: rgb(243 236 219 / 0.55);
 }
 
 /* Buttons */
@@ -405,12 +724,53 @@ h3 {
   display: flex;
   gap: 12px;
   align-items: flex-start;
-  padding: 14px 16px;
+  padding: 12px 14px;
   border-radius: var(--radius-card);
   background: var(--color-ivory-50);
   color: var(--color-ink-900);
   font-size: 15px;
-  line-height: 1.45;
+  line-height: 1.4;
+}
+.coach .body {
+  /* a flex child will not shrink below its text without this, and the clamp needs it to */
+  min-width: 0;
+}
+/* The plan line answers "how am I doing" and must stay one line to be worth its height. */
+.coach .plan {
+  margin: 0 0 2px;
+  font: 500 11px/1.3 var(--font-sans);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-ink-700);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* A tip is worth three lines; past that it is a wall that costs the hand its room. */
+.coach .say {
+  margin: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+}
+/* The plan line has already spent one of the three, so the tip keeps two. */
+.coach .plan + .say {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+/* A phone lying down has no height to spare: the tip shares its row with the
+   buttons, so the plan line goes and the tip keeps its two lines. Has to live
+   beside the rules it overrides: same specificity, so the later of them wins. */
+@media (orientation: landscape) and (height < 32rem) {
+  .coach .plan {
+    display: none;
+  }
+  .coach .say {
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
 }
 .coach .avatar {
   flex: 0 0 32px;

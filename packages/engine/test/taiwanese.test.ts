@@ -18,6 +18,7 @@ function winInput(h: HandInput, selfDrawn: boolean, extra: Partial<WinInput> = {
     bonus: [],
     wallRemaining: 40,
     handIndex: 1,
+    progress: { roundWind: 'E', roundIndex: 0, handInRound: 1, handIndex: 1 },
     flags: { lastWallTile: false, robbedKong: false, afterKong: false, firstDiscard: false, heavenly: false },
     ...(selfDrawn ? {} : { discarder: 2 as const }),
     ...extra,

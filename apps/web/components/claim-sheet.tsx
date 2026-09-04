@@ -1,6 +1,8 @@
 'use client';
 import { useEffect, useRef } from 'react';
 import { tileName, type ClaimOption, type TileKind } from '@society/engine';
+import type { CoachState } from '@/lib/coach';
+import { CoachLine } from './coach';
 import { Tile } from './tile';
 
 const CLAIM_MS = 8000; // mirrors --claim-seconds in globals.css
@@ -10,23 +12,29 @@ const GRID: readonly ClaimType[] = ['pung', 'chow', 'kong'];
 const LABEL: Record<ClaimType, string> = { pung: 'Pung', chow: 'Chow', kong: 'Kong', win: 'Mahjong' };
 
 /**
- * Bottom sheet for the 8-second claim window. All claim types are always
- * shown — unavailable ones stay visible but dimmed, so the vocabulary is
- * learned (Design Guide, rules of the table §4) — and the window
- * auto-passes if nobody taps a button in time.
+ * Bottom sheet for the 8-second claim window. Every claim type the ruleset can
+ * ever offer is shown — unavailable ones stay visible but dimmed, so the
+ * vocabulary is learned (Design Guide, rules of the table §4). A type the
+ * ruleset never allows (Chow in Karachi) is left out rather than dimmed: a button
+ * that can never light up teaches that the move exists. The window auto-passes
+ * if nobody taps a button in time.
+ *
+ * The caption and the highlighted button both come from the coach, which has
+ * re-analysed the hand as it would stand after each claim. That is the only
+ * honest way to answer "does this help me": in Karachi a pung can shut a hand
+ * out of the round's chow patterns entirely.
  */
 export function ClaimSheet({
   discardKind,
   discarderName,
-  heldCount,
+  coach,
   options,
   onClaim,
   onPass,
 }: {
   discardKind: TileKind;
   discarderName: string;
-  /** how many of the discarded kind is already in your hand, for the coach-style caption */
-  heldCount: number;
+  coach: CoachState;
   options: readonly ClaimOption[];
   onClaim: (option: ClaimOption) => void;
   onPass: () => void;
@@ -44,12 +52,8 @@ export function ClaimSheet({
 
   const win = options.find((o) => o.type === 'win');
   const byType = (t: ClaimType) => options.find((o) => o.type === t);
-  const best = byType('kong') ?? byType('pung') ?? byType('chow');
-  const caption = win
-    ? 'This completes your hand.'
-    : best
-      ? `You hold ${heldCount}. ${LABEL[best.type]} completes a set.`
-      : "Nobody's collecting this one.";
+  const advised = coach.action.kind === 'claim' ? coach.action.option : null;
+  const grid = GRID.filter((type) => type !== 'chow' || coach.goal.chowsClaimable);
 
   return (
     <>
@@ -65,7 +69,9 @@ export function ClaimSheet({
             <h2 className="font-display text-xl">
               {discarderName} discards {tileName(discardKind)}
             </h2>
-            <p className="text-ivory-200/60 text-sm">{caption}</p>
+            <p className="text-ivory-200/70 text-sm">
+              <CoachLine say={coach.say} />
+            </p>
           </div>
         </div>
         {win && (
@@ -74,15 +80,15 @@ export function ClaimSheet({
           </button>
         )}
         <div className="grid grid-cols-2 gap-2">
-          {GRID.map((type) => {
+          {grid.map((type) => {
             const opt = byType(type);
             return (
-              <button key={type} className={`btn ${type === best?.type ? 'btn-primary' : 'btn-ghost'}`} disabled={!opt} onClick={() => opt && onClaim(opt)}>
+              <button key={type} className={`btn ${opt && opt === advised ? 'btn-primary' : 'btn-ghost'}`} disabled={!opt} onClick={() => opt && onClaim(opt)}>
                 {LABEL[type]}
               </button>
             );
           })}
-          <button className="btn btn-quiet col-span-2" onClick={onPass}>
+          <button className={`btn col-span-2 ${coach.action.kind === 'pass' ? 'btn-ghost' : 'btn-quiet'}`} onClick={onPass}>
             Pass
           </button>
         </div>

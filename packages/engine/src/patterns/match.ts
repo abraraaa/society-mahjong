@@ -1,13 +1,7 @@
 import {
   SUITS,
   countKinds,
-  isDragonTile,
-  isHonourTile,
-  isSimple,
   isSuitTile,
-  isTerminal,
-  isWindTile,
-  numOf,
   suitOf,
   suitTile,
   type Counts,
@@ -15,87 +9,14 @@ import {
   type TileKind,
 } from '../tiles';
 import type { HandInput, Meld } from '../hand';
-import type { Bindings, Component, Group, Guards, MatchCtx, Pattern, PatternMatch, Solution, SuitRef, NumRef, TileFilter, Var } from './types';
+import type { Bindings, Component, Group, Guards, MatchCtx, Pattern, PatternMatch, Solution } from './types';
+import { applyFilter, applyFilterAll, bind, distinctOk, isVar, meldAccepted, numsFor, permutations, specificity, suitsFor } from './vars';
+
+export { applyFilter } from './vars';
 
 const MAX_SOLUTIONS = 32;
 
 type Comp = Component;
-
-function isVar(x: unknown): x is Var {
-  return typeof x === 'string' && x.startsWith('$');
-}
-
-function suitsFor(ref: SuitRef | undefined, b: Bindings): readonly Suit[] {
-  if (ref === undefined) return SUITS;
-  if (!isVar(ref)) return [ref];
-  const bound = b[ref];
-  return bound === undefined ? SUITS : [bound as Suit];
-}
-function numsFor(ref: NumRef | undefined, b: Bindings): readonly number[] {
-  if (ref === undefined) return [1, 2, 3, 4, 5, 6, 7, 8, 9];
-  if (!isVar(ref)) return [ref];
-  const bound = b[ref];
-  return bound === undefined ? [1, 2, 3, 4, 5, 6, 7, 8, 9] : [bound as number];
-}
-function bind(b: Bindings, v: Var, value: Suit | number | string): Bindings | null {
-  const cur = b[v];
-  if (cur === undefined) return { ...b, [v]: value };
-  return cur === value ? b : null;
-}
-
-/** Returns extended bindings if `kind` passes the filter, else null. */
-export function applyFilter(kind: TileKind, f: TileFilter | undefined, b: Bindings): Bindings | null {
-  if (!f) return b;
-  if (f.kinds && !f.kinds.includes(kind)) return null;
-  if (f.honour && !isHonourTile(kind)) return null;
-  if (f.wind && !isWindTile(kind)) return null;
-  if (f.dragon && !isDragonTile(kind)) return null;
-  if (f.suitTile && !isSuitTile(kind)) return null;
-  if (f.terminal && !isTerminal(kind)) return null;
-  if (f.simple && !isSimple(kind)) return null;
-  let out: Bindings | null = b;
-  if (f.suit !== undefined) {
-    if (!isSuitTile(kind)) return null;
-    const s = suitOf(kind);
-    if (isVar(f.suit)) out = bind(out, f.suit, s);
-    else if (f.suit !== s) return null;
-    if (!out) return null;
-  }
-  if (f.num !== undefined) {
-    if (!isSuitTile(kind)) return null;
-    const n = numOf(kind);
-    if (isVar(f.num)) out = bind(out, f.num, n);
-    else if (f.num !== n) return null;
-    if (!out) return null;
-  }
-  if (f.nums) {
-    if (!isSuitTile(kind) || !f.nums.includes(numOf(kind))) return null;
-  }
-  return out;
-}
-
-function applyFilterAll(kinds: readonly TileKind[], f: TileFilter | undefined, b: Bindings): Bindings | null {
-  let out: Bindings | null = b;
-  for (const k of kinds) {
-    out = applyFilter(k, f, out);
-    if (!out) return null;
-  }
-  return out;
-}
-
-function distinctOk(p: Pattern, b: Bindings): boolean {
-  if (!p.distinct) return true;
-  for (const group of p.distinct) {
-    const seen = new Set<unknown>();
-    for (const v of group) {
-      const val = b[v];
-      if (val === undefined) continue;
-      if (seen.has(val)) return false;
-      seen.add(val);
-    }
-  }
-  return true;
-}
 
 interface Candidate {
   readonly tiles: readonly TileKind[];
@@ -107,16 +28,6 @@ function has(counts: Counts, kinds: readonly TileKind[]): boolean {
   const need = countKinds(kinds);
   for (const [k, n] of need) if ((counts.get(k) ?? 0) < n) return false;
   return true;
-}
-
-function permutations<T>(items: readonly T[]): T[][] {
-  if (items.length <= 1) return [[...items]];
-  const out: T[][] = [];
-  items.forEach((x, i) => {
-    const rest = [...items.slice(0, i), ...items.slice(i + 1)];
-    for (const p of permutations(rest)) out.push([x, ...p]);
-  });
-  return out;
 }
 
 function candidatesFor(comp: Comp, counts: Counts, b: Bindings): Candidate[] {
@@ -272,36 +183,6 @@ function expand(components: readonly Comp[]): Comp[] {
     for (let i = 0; i < n; i++) out.push(comp);
   }
   return out;
-}
-
-function specificity(c: Comp): number {
-  switch (c.c) {
-    case 'each':
-    case 'run':
-      return 0;
-    case 'knit':
-    case 'mixedSeq':
-    case 'mixedRun':
-    case 'tiles':
-      return 1;
-    case 'set':
-    case 'seq':
-      return 2;
-    case 'pair':
-    case 'mixedPair':
-      return 3;
-  }
-}
-
-function meldAccepted(comp: Comp, meld: Meld, b: Bindings): Bindings | null {
-  if (comp.c !== 'set') return null;
-  const ok =
-    comp.of === 'any' ||
-    comp.of === meld.type ||
-    (comp.of === 'pungOrKong' && (meld.type === 'pung' || meld.type === 'kong'));
-  if (!ok) return null;
-  if (comp.concealed && !meld.concealed) return null;
-  return applyFilterAll(meld.tiles, comp.filter, b);
 }
 
 function suitsUsed(hand: HandInput): number {

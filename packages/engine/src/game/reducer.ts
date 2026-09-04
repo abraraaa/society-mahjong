@@ -245,6 +245,7 @@ function finishWin(state: HandState, ruleset: Ruleset, seat: Seat, concealed: re
     bonus: p.bonus,
     wallRemaining: state.wall.live.length,
     handIndex: state.progress.handIndex,
+    progress: state.progress,
     flags: {
       lastWallTile: selfDrawn && state.drawnWasLastWallTile,
       robbedKong: false,

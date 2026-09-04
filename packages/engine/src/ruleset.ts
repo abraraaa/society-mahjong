@@ -69,6 +69,8 @@ export interface WinInput {
   readonly wallRemaining: number;
   /** hand index within the game, 0 for the first hand */
   readonly handIndex: number;
+  /** where in the game the hand sits; what `handSpec` was called with to deal it */
+  readonly progress: GameProgress;
   readonly flags: {
     readonly lastWallTile: boolean;
     readonly robbedKong: boolean;

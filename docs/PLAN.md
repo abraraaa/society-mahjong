@@ -4,7 +4,20 @@ A browser-led social mahjong game. Karachi rules ship first because that is the 
 (iOS 26+ Safari guaranteed), up to ~100 concurrent players (~25 tables),
 beautiful, fast, persistent, with a tutor that sits beside first-timers.
 
-Status: **draft v0.2 for discussion**. Nothing here is built yet.
+Status: **v0.3, tracking a live build.** This document sets direction; it is
+not the record of what exists. As of the last update:
+
+| | |
+|---|---|
+| M0 Foundation | Done. Monorepo, tokens, CI, engine skeleton. |
+| M1 Solo table | Engine-driven, playable on a phone. Layout, hand-analysis, coach and bots all rebuilt on the analysis layer after a review round. Next: M1.5 polish (tablet sizing, hand-over-hand progression, sound), then M2. |
+| Karachi rules fidelity | Catalogue and scoring built from primary sources; several points still ⚠ in `docs/RULES-KARACHI.md`, blocked on one session at a real table. |
+| Taiwanese | Engine ruleset stubbed (patterns, House/Advanced/Standard scoring); no UI. |
+| M2 Multiplayer | Designed in `docs/MULTIPLAYER.md` (authoritative over this doc's §3 on realtime and schema). Not started. |
+| Tutor | Deterministic coach layer landing now, grounded in engine analysis. Conversational layer not started. |
+
+Treat any other section below as intent, and defer to the code and to
+`docs/RULES-KARACHI.md` / `docs/MULTIPLAYER.md` where they've moved ahead of it.
 
 ---
 
@@ -92,13 +105,14 @@ Safari being killed.
 Vercel functions cannot hold websockets or timers, so the design is:
 
 1. **Server is authoritative.** Every action (draw, discard, claim, pass,
-   declare) is a POST to a route handler. It loads the table snapshot, runs the
-   engine reducer, appends events to `game_events`, updates the snapshot, and
-   returns the acting player's private view.
-2. **Fan-out via Supabase Broadcast from the database.** A trigger on
-   `game_events` broadcasts the public payload to the private channel
-   `table:{id}`. Clients subscribe with RLS-authorised channels. Public events
-   never carry another player's concealed tiles.
+   declare) is a POST to a route handler. It loads the live state, runs the
+   engine reducer, appends the action to the hand's compact log, updates the
+   live state, and returns the acting player's private view.
+2. **Fan-out is the route handler POSTing to Supabase Realtime Broadcast**,
+   not a database trigger — superseded by `docs/MULTIPLAYER.md`, which is
+   authoritative on this. Public and private deltas go to separate channels
+   (`game:{id}` and `game:{id}:seat:{n}`); the public one never carries
+   another player's concealed tiles.
 3. **Private state** (your hand, your drawn tile) comes back in the HTTP
    response or via an RLS-scoped query on reconnect. Nothing secret crosses
    the broadcast channel.

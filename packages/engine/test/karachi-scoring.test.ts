@@ -5,7 +5,8 @@ const hand = (concealed: TileKind[], melds: HandInput['melds'] = []): HandInput 
 
 function win(h: HandInput, opts: { seat: Seat; dealer: Seat; round: Wind; seatWind: Wind; selfDrawn?: boolean; bonus?: TileKind[]; handIndex?: number }): WinInput {
   const ctx: MatchCtx = { seatWind: opts.seatWind, roundWind: opts.round };
-  const spec = karachi.handSpec({ roundWind: opts.round, roundIndex: 'ESWN'.indexOf(opts.round), handInRound: opts.handIndex === 0 ? 0 : 1, handIndex: opts.handIndex ?? 1 });
+  const progress = { roundWind: opts.round, roundIndex: 'ESWN'.indexOf(opts.round), handInRound: opts.handIndex === 0 ? 0 : 1, handIndex: opts.handIndex ?? 1 };
+  const spec = karachi.handSpec(progress);
   return {
     seat: opts.seat,
     dealer: opts.dealer,
@@ -17,6 +18,7 @@ function win(h: HandInput, opts: { seat: Seat; dealer: Seat; round: Wind; seatWi
     bonus: opts.bonus ?? [],
     wallRemaining: 30,
     handIndex: opts.handIndex ?? 1,
+    progress,
     flags: { lastWallTile: false, robbedKong: false, afterKong: false, firstDiscard: false, heavenly: false },
   };
 }
