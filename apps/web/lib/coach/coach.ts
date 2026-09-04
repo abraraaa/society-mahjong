@@ -99,6 +99,17 @@ function completesRun(concealed: readonly TileKind[], kind: TileKind): boolean {
   return (has(num - 2) && has(num - 1)) || (has(num - 1) && has(num + 1)) || (has(num + 1) && has(num + 2));
 }
 
+/**
+ * True when the discard is a tile the target hand wants, would complete a run
+ * with tiles in hand, and this ruleset never lets a run be claimed. Both checks
+ * matter: in a goulash round a run is not wanted at all, and a wall-only tile
+ * that would complete a pung is not a chow rule problem.
+ */
+function wantedButUnclaimable(target: CoachTarget | null, goal: CoachGoal, concealed: readonly TileKind[], kind: TileKind): boolean {
+  if (goal.chowsClaimable || !target) return false;
+  return target.wantsFromWall.includes(kind) && completesRun(concealed, kind);
+}
+
 /** The hand as it would stand after taking this discard, for a like-for-like re-analysis. */
 function afterClaim(view: PrivatePlayerView, option: ClaimOption, kind: TileKind, from: Seat): HandInput | null {
   if (option.type === 'win') return null;
@@ -259,7 +270,7 @@ export function coachFor(input: CoachInput): CoachState {
         highlight: [],
       };
     }
-    const runNote = !goal.chowsClaimable && completesRun(view.concealed, discard.kind) ? ' A run never comes off the table here, so that one has to be drawn.' : '';
+    const runNote = wantedButUnclaimable(target, goal, view.concealed, discard.kind) ? ' A run never comes off the table here, so that one has to be drawn.' : '';
     return {
       ...base,
       moment: 'claim',
@@ -300,7 +311,7 @@ export function coachFor(input: CoachInput): CoachState {
   if (!myTurn) {
     // Waiting is where the chow rule bites: the tile you wanted goes past and no
     // window opens, because in this ruleset it never can.
-    if (verbose && view.phase === 'claim' && discard && !goal.chowsClaimable && completesRun(view.concealed, discard.kind)) {
+    if (verbose && view.phase === 'claim' && discard && wantedButUnclaimable(target, goal, view.concealed, discard.kind)) {
       return {
         ...base,
         moment: 'waiting',

@@ -72,8 +72,9 @@ export function karachiHandSpec(p: GameProgress): HandSpec {
 }
 
 export function karachiScore(win: WinInput): Settlement {
-  const handKind = karachiHandSpec(win.ctx.roundWind === 'E' && win.handIndex === 0 ? { roundWind: 'E', roundIndex: 0, handInRound: 0, handIndex: 0 } : { roundWind: win.ctx.roundWind, roundIndex: 0, handInRound: 1, handIndex: 1 }).kind;
-  return scoreKarachi(win, handKind);
+  // The same spec that dealt the hand decides how it pays: the opening goulash
+  // and the West goulashes score by the calculator, everything else at the flat stake.
+  return scoreKarachi(win, karachiHandSpec(win.progress).kind);
 }
 
 export const karachi: Ruleset = {

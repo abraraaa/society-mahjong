@@ -116,6 +116,41 @@ describe('rounds that want honours', () => {
   }
 });
 
+/** A claim window on someone else's discard that the player cannot claim. */
+function waitingView(round: Wind, handInRound: number, tiles: readonly TileKind[], discard: TileKind): PrivatePlayerView {
+  return {
+    ...turnView(round, handInRound, tiles),
+    phase: 'claim',
+    turn: 1,
+    legal: { claims: [], pass: true },
+    lastDiscard: { kind: discard, from: 1 },
+  } as unknown as PrivatePlayerView;
+}
+
+const NAMES = { 0: 'You', 1: 'Bilal', 2: 'Sana', 3: 'Ayesha' } as const;
+
+describe('the chow rule, explained only when it bites', () => {
+  it('names the run that just went past when the hand wanted it', () => {
+    // Windy Chows two away, wanting s6 (or s3) and m8 (or m5): run tiles, and runs
+    // never come off the table. (One away, the same tile would win the hand, and
+    // a winning tile can be claimed - so the note stays quiet there.)
+    const tiles: TileKind[] = ['s4', 's5', 'p2', 'p3', 'p4', 'm6', 'm7', 'WE', 'WS', 'WW', 'WN', 'WN', 'm1'];
+    const view = waitingView('E', 1, tiles, 's6');
+    const coach = coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: 'new', names: NAMES });
+    expect(coach.moment).toBe('waiting');
+    expect(coach.say.map((s) => s.text).join('')).toContain('runs are never claimed');
+  });
+
+  it('stays quiet in a goulash round, where no run is wanted', () => {
+    // Four pungs and a pair is the hand; s6 would "complete" s4-s5-s6 but the hand has no use for it.
+    const tiles: TileKind[] = ['m1', 'm1', 'm1', 'p7', 'p7', 'p7', 'DR', 'DR', 'DR', 'WW', 'WW', 's4', 's5'];
+    const view = waitingView('W', 0, tiles, 's6');
+    const coach = coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: 'new', names: NAMES });
+    expect(coach.moment).toBe('waiting');
+    expect(coach.say).toEqual([]);
+  });
+});
+
 describe('South, where honours are dead', () => {
   it('lets a lone wind go, and says why', () => {
     const tiles: TileKind[] = ['s4', 's5', 's6', 'p2', 'p3', 'p4', 'm6', 'm7', 'm8', 'm1', 'm1', 's2', 'WN', 'p9'];

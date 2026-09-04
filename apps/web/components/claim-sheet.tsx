@@ -12,10 +12,12 @@ const GRID: readonly ClaimType[] = ['pung', 'chow', 'kong'];
 const LABEL: Record<ClaimType, string> = { pung: 'Pung', chow: 'Chow', kong: 'Kong', win: 'Mahjong' };
 
 /**
- * Bottom sheet for the 8-second claim window. All claim types are always
- * shown — unavailable ones stay visible but dimmed, so the vocabulary is
- * learned (Design Guide, rules of the table §4) — and the window
- * auto-passes if nobody taps a button in time.
+ * Bottom sheet for the 8-second claim window. Every claim type the ruleset can
+ * ever offer is shown — unavailable ones stay visible but dimmed, so the
+ * vocabulary is learned (Design Guide, rules of the table §4). A type the
+ * ruleset never allows (Chow in Karachi) is left out rather than dimmed: a button
+ * that can never light up teaches that the move exists. The window auto-passes
+ * if nobody taps a button in time.
  *
  * The caption and the highlighted button both come from the coach, which has
  * re-analysed the hand as it would stand after each claim. That is the only
@@ -51,6 +53,7 @@ export function ClaimSheet({
   const win = options.find((o) => o.type === 'win');
   const byType = (t: ClaimType) => options.find((o) => o.type === t);
   const advised = coach.action.kind === 'claim' ? coach.action.option : null;
+  const grid = GRID.filter((type) => type !== 'chow' || coach.goal.chowsClaimable);
 
   return (
     <>
@@ -77,7 +80,7 @@ export function ClaimSheet({
           </button>
         )}
         <div className="grid grid-cols-2 gap-2">
-          {GRID.map((type) => {
+          {grid.map((type) => {
             const opt = byType(type);
             return (
               <button key={type} className={`btn ${opt && opt === advised ? 'btn-primary' : 'btn-ghost'}`} disabled={!opt} onClick={() => opt && onClaim(opt)}>
