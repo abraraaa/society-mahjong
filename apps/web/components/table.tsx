@@ -59,7 +59,7 @@ const ROUND_NAME: Record<string, string> = { E: 'East', S: 'South', W: 'West', N
 function TableInner({ view, label, names, coach, tutorOn, onToggleTutor, onAct, onNextHand, claimMs, gameOver, subtitle, scores = NO_SCORES, handsPerRound = 4 }: TableProps) {
   const ME = view.me;
   const openTerm = useOpenTerm();
-  const counter = `${ROUND_NAME[view.progress.roundWind] ?? view.progress.roundWind} round · hand ${view.progress.handInRound + 1} of ${handsPerRound}`;
+  const counter = `${ROUND_NAME[view.progress.roundWind] ?? view.progress.roundWind} round · hand ${view.progress.handInRound + 1} of ${handsPerRound} · wall ${view.wallRemaining}`;
   const sub = subtitle ? `${subtitle} · ${counter}` : counter;
   const me = view.players[ME];
   const legal = view.legal;
@@ -91,9 +91,7 @@ function TableInner({ view, label, names, coach, tutorOn, onToggleTutor, onAct, 
         <p className="text-ivory-200/50 truncate text-xs">{sub}</p>
       </div>
       <div className="flex flex-none items-center gap-2">
-        <span className="text-ivory-200/60 text-sm whitespace-nowrap">
-          {signed(scores[ME])} · Wall {view.wallRemaining}
-        </span>
+        <span className="text-ivory-200/60 text-sm whitespace-nowrap">{signed(scores[ME])}</span>
         <button type="button" className={`chip${tutorOn ? ' chip-gold' : ''}`} onClick={onToggleTutor}>
           Tutor {tutorOn ? 'on' : 'off'}
         </button>
