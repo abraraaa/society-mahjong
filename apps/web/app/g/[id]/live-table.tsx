@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getRuleset, type Seat } from '@society/engine';
 import { Table } from '@/components/table';
 import { NameGate } from '@/components/name-gate';
+import { Trouble, Waiting } from '@/components/trouble';
 import { analyseFor, coachFor, stageFor, type CoachState } from '@/lib/coach';
 import { ApiError, api, listen } from '@/lib/live/client';
 import { isPrivate, type GameSnapshot } from '@/lib/live/snapshot';
@@ -29,6 +30,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
   const [captcha, setCaptcha] = useState<string | null>(null);
   const [snap, setSnap] = useState<GameSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const [tutorOn, setTutorOn] = useState(true);
   const [progress, setProgress] = useState<Progress>({ handsFinished: 0, wins: 0, discardsMade: 0 });
   const supabaseRef = useRef<SupabaseClient | null>(null);
@@ -82,7 +84,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
       stop?.();
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [name, captcha, gameId, refetch]);
+  }, [name, captcha, gameId, refetch, attempt]);
 
   // When a deadline passes and the table has not moved, ask it to resolve the clock.
   useEffect(() => {
@@ -135,12 +137,21 @@ export function LiveTable({ gameId }: { gameId: string }) {
   }
 
   if (!snap || !view || !ruleset || !coach) {
+    if (error && !snap) {
+      return (
+        <Trouble
+          message={error}
+          onRetry={() => {
+            setError(null);
+            setAttempt((n) => n + 1);
+          }}
+        />
+      );
+    }
     return (
-      <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-3 px-6">
-        <p className="font-display text-2xl">{error ? 'Hmm.' : 'Setting the table…'}</p>
-        {error && <p className="text-ivory-200/70 text-center text-sm">{error}</p>}
-        {snap && !view && <p className="text-ivory-200/70 text-center text-sm">You are watching this table, not seated at it.</p>}
-      </main>
+      <Waiting>
+        {snap && !view ? 'You are watching this table, not seated at it.' : 'Setting the table…'}
+      </Waiting>
     );
   }
 
