@@ -125,6 +125,10 @@ h3 {
     box-shadow 0.15s var(--ease-tile),
     opacity 0.15s ease;
   touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
   cursor: pointer;
 }
 .tile-2xs {
@@ -155,8 +159,12 @@ h3 {
   height: var(--tile-xl-h);
   border-radius: var(--radius-tile-lg);
 }
-.tile[data-selectable='true']:hover {
-  transform: translateY(-4px);
+/* The lift-on-hover is for a pointer. On touch, iOS treats a hover rule as a
+   first tap that only "hovers", and the tile moves under the finger. */
+@media (hover: hover) {
+  .tile[data-selectable='true']:hover {
+    transform: translateY(-4px);
+  }
 }
 .tile[data-selected='true'] {
   transform: translateY(-10px);

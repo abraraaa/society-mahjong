@@ -145,7 +145,9 @@ function TableInner({ view, label, names, coach, tutorOn, onToggleTutor, onAct, 
           key={`${k}-${i}`}
           kind={k}
           size={size}
-          selectable={myTurn}
+          // Always selectable: a tap while the bots are still moving lifts the
+          // tile and reads the river for it; the discard button waits for the turn.
+          selectable
           selected={selected === k}
           fresh={isDrawn}
           coached={!!advice && advice.highlight.includes(k) && selected !== k}
@@ -266,7 +268,10 @@ function TableInner({ view, label, names, coach, tutorOn, onToggleTutor, onAct, 
       )}
 
       {view.phase === 'preplay' && legal.exchange && (
-        <ExchangeSheet hand={view.concealed} count={legal.exchange.count} coach={coach} onDone={(tiles) => act({ type: 'exchange', seat: ME, tiles })} />
+        // Keyed on the event sequence: each of the three passes (right, across,
+        // left) gets a fresh sheet, so picks from the last pass cannot linger and
+        // swallow the taps of the next.
+        <ExchangeSheet key={view.seq} hand={view.concealed} count={legal.exchange.count} coach={coach} onDone={(tiles) => act({ type: 'exchange', seat: ME, tiles })} />
       )}
 
       {view.phase === 'finished' && <ResultSheet coach={coach} gameOver={!!gameOver} onNext={onNextHand} view={view} names={names} scores={scores} />}
