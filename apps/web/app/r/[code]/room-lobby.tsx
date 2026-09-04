@@ -1,0 +1,129 @@
+'use client';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { NameGate } from '@/components/name-gate';
+import { RoomWaiting } from '@/components/room-waiting';
+import { ApiError, api, listen, type RoomSnapshot } from '@/lib/live/client';
+import { ensureSession, rememberName, storedName } from '@/lib/supabase/session';
+
+const RULESET_NAMES: Record<string, string> = { karachi: 'Karachi rules', taiwanese: 'Taiwanese rules' };
+
+/**
+ * The invite link lands here. A name is all it asks; then the visitor is
+ * seated, sees who else is here, and is taken to the table when the host
+ * starts. Realtime carries the changes; a slow poll covers the day it does not.
+ */
+export function RoomLobby({ code }: { code: string }) {
+  const router = useRouter();
+  const [name, setName] = useState<string | null>(() => (typeof window === 'undefined' ? null : storedName()));
+  const [room, setRoom] = useState<RoomSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const supabaseRef = useRef<SupabaseClient | null>(null);
+
+  const goToGame = useCallback((gameId: string) => router.replace(`/g/${gameId}`), [router]);
+
+  // Join once we have a name.
+  useEffect(() => {
+    if (!name) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { supabase } = await ensureSession(name);
+        supabaseRef.current = supabase;
+        const snap = await api.join(code, name);
+        if (cancelled) return;
+        setRoom(snap);
+        if (snap.status === 'playing' && snap.gameId) goToGame(snap.gameId);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Could not join this room.');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [code, name, goToGame]);
+
+  // Live seat changes and the start signal, with a poll as the fallback.
+  useEffect(() => {
+    const supabase = supabaseRef.current;
+    if (!room || !supabase) return;
+    const refresh = () =>
+      api
+        .room(code)
+        .then((snap) => {
+          setRoom(snap);
+          if (snap.status === 'playing' && snap.gameId) goToGame(snap.gameId);
+        })
+        .catch(() => {});
+    const stop = listen(supabase, `room:${room.id}`, {
+      seats: () => refresh(),
+      started: (p) => (typeof p['gameId'] === 'string' ? goToGame(p['gameId']) : refresh()),
+    });
+    const poll = setInterval(refresh, 5000);
+    return () => {
+      stop();
+      clearInterval(poll);
+    };
+    // room.id is stable once set; re-subscribing on every seat change would drop messages.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room?.id, code, goToGame]);
+
+  if (!name) {
+    return (
+      <NameGate
+        title={`Room ${code}`}
+        onDone={(n) => {
+          rememberName(n);
+          setName(n);
+        }}
+      />
+    );
+  }
+
+  if (!room) {
+    return (
+      <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-3 px-6">
+        <p className="font-display text-2xl">{error ? 'Hmm.' : 'Finding your seat…'}</p>
+        {error && <p className="text-ivory-200/70 text-center text-sm">{error}</p>}
+      </main>
+    );
+  }
+
+  const share = async () => {
+    const url = `${window.location.origin}/r/${code}`;
+    try {
+      if (navigator.share) await navigator.share({ title: 'Mahjong?', text: `Join my table: ${code}`, url });
+      else await navigator.clipboard.writeText(url);
+    } catch {
+      // the user dismissed the share sheet
+    }
+  };
+
+  const start = async () => {
+    setStarting(true);
+    setError(null);
+    try {
+      const { gameId } = await api.start(code);
+      goToGame(gameId);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not start.');
+      setStarting(false);
+    }
+  };
+
+  return (
+    <RoomWaiting
+      code={code}
+      seats={room.seats}
+      me={room.me}
+      ruleset={RULESET_NAMES[room.rulesetId] ?? room.rulesetId}
+      isHost={room.isHost}
+      starting={starting}
+      error={error}
+      onStart={start}
+      onShare={share}
+    />
+  );
+}

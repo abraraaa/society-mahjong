@@ -5,7 +5,8 @@ import type { CoachState } from '@/lib/coach';
 import { CoachLine } from './coach';
 import { Tile } from './tile';
 
-const CLAIM_MS = 8000; // mirrors --claim-seconds in globals.css
+/** Solo default; a live table passes the server's deadline instead. Mirrors --claim-seconds in globals.css. */
+const CLAIM_MS = 8000;
 
 type ClaimType = ClaimOption['type'];
 const GRID: readonly ClaimType[] = ['pung', 'chow', 'kong'];
@@ -31,6 +32,7 @@ export function ClaimSheet({
   options,
   onClaim,
   onPass,
+  claimMs = CLAIM_MS,
 }: {
   discardKind: TileKind;
   discarderName: string;
@@ -38,6 +40,7 @@ export function ClaimSheet({
   options: readonly ClaimOption[];
   onClaim: (option: ClaimOption) => void;
   onPass: () => void;
+  claimMs?: number;
 }) {
   const onPassRef = useRef(onPass);
   useEffect(() => {
@@ -45,10 +48,10 @@ export function ClaimSheet({
   });
 
   useEffect(() => {
-    const t = setTimeout(() => onPassRef.current(), CLAIM_MS);
+    const t = setTimeout(() => onPassRef.current(), claimMs);
     return () => clearTimeout(t);
     // one countdown per discard: discardKind + discarderName changes whenever a new one arrives
-  }, [discardKind, discarderName]);
+  }, [discardKind, discarderName, claimMs]);
 
   const win = options.find((o) => o.type === 'win');
   const byType = (t: ClaimType) => options.find((o) => o.type === t);
@@ -60,7 +63,7 @@ export function ClaimSheet({
       <div className="scrim" />
       <div className="sheet">
         <div className="grabber" />
-        <div className="timer mb-4">
+        <div className="timer mb-4" style={{ '--claim-seconds': `${Math.round(claimMs / 1000)}s` } as React.CSSProperties}>
           <i />
         </div>
         <div className="mb-4 flex items-center gap-4">

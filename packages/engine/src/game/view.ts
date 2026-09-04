@@ -2,7 +2,7 @@ import type { TileKind, Wind } from '../tiles';
 import type { Meld, Seat } from '../hand';
 import type { GameProgress, RulesetId, Ruleset } from '../ruleset';
 import { SEATS } from '../hand';
-import type { HandResult, HandState, LegalActions, Phase } from './types';
+import type { GameEvent, HandResult, HandState, LegalActions, Phase } from './types';
 import { legalActions } from './reducer';
 
 /**
@@ -40,6 +40,12 @@ export interface PublicGameView {
   readonly result: HandResult | null;
   /** every hand face up once the hand has finished */
   readonly revealed: Readonly<Partial<Record<Seat, readonly TileKind[]>>>;
+  /**
+   * The hand's event log, with secret tiles (draws and replacements) stripped
+   * for everyone but the seat the view is for. The river and the animation
+   * both read this, so a client never needs the state itself.
+   */
+  readonly events: readonly GameEvent[];
 }
 
 /** The public view plus exactly one seat's private information. */
@@ -48,6 +54,16 @@ export interface PrivatePlayerView extends PublicGameView {
   readonly concealed: readonly TileKind[];
   readonly drawn: TileKind | null;
   readonly legal: LegalActions;
+}
+
+/** Secret events keep their shape and sequence but lose the tile, unless `seat` is the one that drew it. */
+export function redactEvents(events: readonly GameEvent[], seat: Seat | null): GameEvent[] {
+  return events.map((ev) => {
+    if (!ev.secret || ev.seat === seat) return ev;
+    const { tile: _tile, ...rest } = ev;
+    void _tile;
+    return rest;
+  });
 }
 
 export function publicView(state: HandState): PublicGameView {
@@ -83,6 +99,7 @@ export function publicView(state: HandState): PublicGameView {
     seq: state.seq,
     result: state.result,
     revealed,
+    events: redactEvents(state.events, null),
   };
 }
 
@@ -91,6 +108,7 @@ export function viewFor(state: HandState, ruleset: Ruleset, seat: Seat): Private
   const p = state.players[seat];
   return {
     ...publicView(state),
+    events: redactEvents(state.events, seat),
     me: seat,
     concealed: p.concealed,
     drawn: state.turn === seat ? state.drawn : null,
