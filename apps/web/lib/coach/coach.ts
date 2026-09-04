@@ -1,5 +1,6 @@
 import {
   analyseHand,
+  handAfterClaim,
   isHonourTile,
   isSuitTile,
   numOf,
@@ -11,7 +12,6 @@ import {
   type HandAnalysis,
   type HandInput,
   type MatchCtx,
-  type Meld,
   type Pattern,
   type PatternCandidate,
   type PrivatePlayerView,
@@ -108,20 +108,6 @@ function completesRun(concealed: readonly TileKind[], kind: TileKind): boolean {
 function wantedButUnclaimable(target: CoachTarget | null, goal: CoachGoal, concealed: readonly TileKind[], kind: TileKind): boolean {
   if (goal.chowsClaimable || !target) return false;
   return target.wantsFromWall.includes(kind) && completesRun(concealed, kind);
-}
-
-/** The hand as it would stand after taking this discard, for a like-for-like re-analysis. */
-function afterClaim(view: PrivatePlayerView, option: ClaimOption, kind: TileKind, from: Seat): HandInput | null {
-  if (option.type === 'win') return null;
-  const taken = option.tiles ?? [];
-  const concealed = [...view.concealed];
-  for (const t of taken) {
-    const i = concealed.indexOf(t);
-    if (i < 0) return null;
-    concealed.splice(i, 1);
-  }
-  const meld: Meld = { type: option.type, tiles: [...taken, kind], concealed: false, from };
-  return { concealed, melds: [...view.players[view.me].melds, meld] };
 }
 
 const CLAIM_VERB: Readonly<Record<ClaimOption['type'], string>> = { pung: 'Pung it', kong: 'Kong it', chow: 'Chow it', win: 'Take it' };
@@ -253,7 +239,7 @@ export function coachFor(input: CoachInput): CoachState {
     const baseAway = target?.away ?? Number.POSITIVE_INFINITY;
     let best: { option: ClaimOption; away: number; leader: CoachTarget | null } | null = null;
     for (const option of options) {
-      const hand = afterClaim(view, option, discard.kind, discard.from);
+      const hand = handAfterClaim(handOf(view), option, discard.kind, discard.from);
       if (!hand) continue;
       const after = analyseHand(hand, spec.patterns, ctxOf(view), ruleset.guards, { claims: ruleset.claims });
       const away = after.candidates[0]?.away ?? Number.POSITIVE_INFINITY;

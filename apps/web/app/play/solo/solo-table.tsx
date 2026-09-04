@@ -9,7 +9,7 @@ import {
   nextHand,
   reduce,
   rightOf,
-  simpleBot,
+  analysisBot,
   startHand,
   tileName,
   viewFor,
@@ -49,7 +49,7 @@ function botStep(state: HandState): HandState {
   let s = state;
   for (const seat of SEATS) {
     if (seat === ME || s.phase === 'finished') continue;
-    const a = simpleBot(viewFor(s, ruleset, seat));
+    const a = analysisBot(viewFor(s, ruleset, seat), ruleset);
     if (a) s = reduce(s, a, ruleset);
   }
   return s;

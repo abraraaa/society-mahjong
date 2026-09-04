@@ -10,7 +10,7 @@ not the record of what exists. As of the last update:
 | | |
 |---|---|
 | M0 Foundation | Done. Monorepo, tokens, CI, engine skeleton. |
-| M1 Solo table | Engine-driven, playable. Layout, hand-analysis and tutor rebuilt after a review round; bots not yet analysis-driven — next. |
+| M1 Solo table | Engine-driven, playable on a phone. Layout, hand-analysis, coach and bots all rebuilt on the analysis layer after a review round. Next: M1.5 polish (tablet sizing, hand-over-hand progression, sound), then M2. |
 | Karachi rules fidelity | Catalogue and scoring built from primary sources; several points still ⚠ in `docs/RULES-KARACHI.md`, blocked on one session at a real table. |
 | Taiwanese | Engine ruleset stubbed (patterns, House/Advanced/Standard scoring); no UI. |
 | M2 Multiplayer | Designed in `docs/MULTIPLAYER.md` (authoritative over this doc's §3 on realtime and schema). Not started. |
