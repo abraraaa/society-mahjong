@@ -77,6 +77,11 @@ export function ClaimSheet({
             </p>
           </div>
         </div>
+        {(coach.stage === 'new' || coach.stage === 'first_hand') && (
+          <p className="text-ivory-200/60 mb-3 text-xs leading-snug">
+            Pung takes it to make three of a kind, Kong four; either lays the set face up. Pass lets it go and the turn moves on.
+          </p>
+        )}
         {win && (
           <button className="btn btn-gold btn-block mb-3" onClick={() => onClaim(win)}>
             Mahjong!

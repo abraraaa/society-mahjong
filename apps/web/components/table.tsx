@@ -4,7 +4,7 @@ import { acrossFrom, leftOf, rightOf, tileName, type Action, type PrivatePlayerV
 import { Tile } from '@/components/tile';
 import { SeatPill } from '@/components/seat-pill';
 import { ClaimSheet } from '@/components/claim-sheet';
-import { Coach, CoachLine } from '@/components/coach';
+import { Coach, CoachLine, TermProvider, useOpenTerm } from '@/components/coach';
 import { River } from '@/components/river';
 import { riverOrder } from '@/lib/river';
 import type { CoachState } from '@/lib/coach';
@@ -41,8 +41,17 @@ export interface TableProps {
  * selection and renders the same way whether the view came from a local
  * reducer (the solo table) or a route handler (a live table).
  */
-export function Table({ view, label, names, coach, tutorOn, onToggleTutor, onAct, onNextHand, claimMs, gameOver, subtitle }: TableProps) {
+export function Table(props: TableProps) {
+  return (
+    <TermProvider>
+      <TableInner {...props} />
+    </TermProvider>
+  );
+}
+
+function TableInner({ view, label, names, coach, tutorOn, onToggleTutor, onAct, onNextHand, claimMs, gameOver, subtitle }: TableProps) {
   const ME = view.me;
+  const openTerm = useOpenTerm();
   const me = view.players[ME];
   const legal = view.legal;
   const [selected, setSelected] = useState<TileKind | null>(null);
@@ -77,6 +86,9 @@ export function Table({ view, label, names, coach, tutorOn, onToggleTutor, onAct
         <button type="button" className={`chip${tutorOn ? ' chip-gold' : ''}`} onClick={onToggleTutor}>
           Tutor {tutorOn ? 'on' : 'off'}
         </button>
+        <button type="button" className="chip" aria-label="Glossary" onClick={() => openTerm('all')}>
+          ?
+        </button>
       </div>
     </>
   );
@@ -89,7 +101,7 @@ export function Table({ view, label, names, coach, tutorOn, onToggleTutor, onAct
   );
   const river = <River tiles={riverTiles} claimable={view.phase === 'claim'} highlight={selected} />;
 
-  const bubble = advice ? <Coach plan={advice.plan} say={advice.say} /> : null;
+  const bubble = advice ? <Coach plan={advice.plan} say={advice.say} stage={coach.stage} /> : null;
 
   const actions = (
     <>
