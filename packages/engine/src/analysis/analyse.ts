@@ -21,7 +21,7 @@ import {
 } from '../tiles';
 import type { HandInput } from '../hand';
 import type { Guards, MatchCtx, Pattern } from '../patterns/types';
-import { coverPattern, type CoverResult } from './coverage';
+import { coverPattern, type CoverOptions, type CoverResult } from './coverage';
 import type { AnalysisOptions, HandAnalysis, PatternCandidate, TileRating } from './types';
 
 const DEFAULT_TOP_N = 3;
@@ -53,8 +53,9 @@ function connection(kind: TileKind, counts: Counts): number {
  * that says about the tiles in it.
  *
  * `away` counts tiles that must still change: 0 for a complete hand, 1 for a hand
- * waiting on its last tile, and so on. Patterns whose declared melds or exposure
- * rule them out for good are left out of `candidates` entirely.
+ * waiting on its last tile, and so on. Patterns the rules shut out - a meld they
+ * cannot use, an exposure they forbid, no lay-out the ruleset guard accepts - are
+ * left out of `candidates` entirely. Being far away is not being shut out.
  */
 export function analyseHand(
   hand: HandInput,
@@ -70,9 +71,10 @@ export function analyseHand(
   const held = countKinds(concealed);
   const handSize = concealed.length + hand.melds.reduce((n, m) => n + m.tiles.length, 0);
 
+  const coverOptions: CoverOptions = options.claims ? { claims: options.claims } : {};
   const rated: { pattern: Pattern; cover: CoverResult; away: number; concealedUsed: Counts }[] = [];
   for (const pattern of patterns) {
-    const cover = coverPattern(pattern, hand, ctx, guards, { ...(options.claims ? { claims: options.claims } : {}) });
+    const cover = coverPattern(pattern, hand, ctx, guards, coverOptions);
     if (!cover.reachable) continue;
 
     // A 13 tile hand measured against a 14 tile pattern is one tile away, not zero,

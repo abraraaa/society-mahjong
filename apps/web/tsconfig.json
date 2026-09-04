@@ -9,5 +9,6 @@
     "paths": { "@/*": ["./*"] }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules"]
+  "//exclude": "*.test.ts is excluded until vitest is a dependency of this package; see lib/coach/coach.test.ts for how to run those today",
+  "exclude": ["node_modules", "**/*.test.ts"]
 }

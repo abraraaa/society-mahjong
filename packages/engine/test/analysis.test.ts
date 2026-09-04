@@ -249,7 +249,7 @@ describe('performance', () => {
       expect(analysis.candidates.length).toBeGreaterThan(0);
     }
     // Generous, so a loaded CI box does not make this flaky; the real figure is
-    // around 15ms for the widest round.
+    // around 20ms for the widest round, 60ms for all four together.
     expect(performance.now() - start).toBeLessThan(250);
   });
 
@@ -260,6 +260,9 @@ describe('performance', () => {
 });
 
 describe('regressions', () => {
+  /** Every kind a hand can hold that a pattern can consume: flowers and seasons are neither. */
+  const DRAWABLE = ALL_TILE_KINDS.filter((k) => !isBonusTile(k));
+
   it('keeps a far-off pattern in the list instead of calling it unreachable', () => {
     // Four Blessings wants four wind pungs; two of the winds are missing entirely.
     // A pattern the search cannot lay out neatly is still one the hand can reach.
@@ -277,7 +280,7 @@ describe('regressions', () => {
     // nor this seat's wind, so the goulash guard can never accept that honour pung.
     const tiles: TileKind[] = ['WS', 'WS', 'WS', 'm2', 'm2', 'm2', 'm3', 'm3', 'm3', 'm4', 'm4', 'm4', 'm1'];
     const goulash = roundPatterns('W')[0]!;
-    for (const k of ALL_TILE_KINDS) {
+    for (const k of DRAWABLE) {
       expect(matchPattern(goulash, hand([...tiles, k]), ctxFor('W'), karachi.guards), `${k} wins`).toHaveLength(0);
     }
     // Two changes away: three more m1 tiles is one plan, and the spare WS goes.
@@ -291,7 +294,7 @@ describe('regressions', () => {
     const tiles: TileKind[] = ['m1', 'm1', 'm1', 'WN', 'WN', 'WN', 'WE', 'WE', 'WE', 'p5', 'p5', 'p5', 's3'];
     const ctx: MatchCtx = { seatWind: 'S', roundWind: 'W' };
     const goulash = roundPatterns('W')[0]!;
-    for (const k of ALL_TILE_KINDS) {
+    for (const k of DRAWABLE) {
       expect(matchPattern(goulash, hand([...tiles, k]), ctx, karachi.guards), `${k} wins`).toHaveLength(0);
     }
     const analysis = analyseHand(hand(tiles), roundPatterns('W'), ctx, karachi.guards);
@@ -363,14 +366,13 @@ describe('regressions', () => {
       { round: 'W', tiles: ['m1', 'm1', 'm1', 'p5', 'p5', 's9', 's9', 's9', 'WE', 'WS', 'WW', 'WN', 'm3'] },
       { round: 'N', tiles: ['s1', 's2', 's3', 's4', 's5', 'WE', 'WS', 'WW', 'WN', 'DR', 'DG', 'DW', 'm9'] },
     ];
-    const kinds = ALL_TILE_KINDS.filter((k) => !isBonusTile(k));
     for (const { round, tiles } of cases) {
       for (const pattern of roundPatterns(round)) {
         const cover = coverPattern(pattern, hand(tiles), ctxFor(round), karachi.guards);
         // An approximate answer is allowed to be short; an exact one is not.
         if (!cover.reachable || cover.approximate) continue;
         const named = new Set(cover.needs.map((n) => n.kind));
-        for (const kind of kinds) {
+        for (const kind of DRAWABLE) {
           const drawn = coverPattern(pattern, hand([...tiles, kind]), ctxFor(round), karachi.guards);
           const closer = drawn.reachable && drawn.covered > cover.covered;
           if (closer) expect(named.has(kind), `${pattern.id} ${kind} helps`).toBe(true);

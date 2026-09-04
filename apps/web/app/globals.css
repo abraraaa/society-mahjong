@@ -731,19 +731,43 @@ h3 {
   font-size: 15px;
   line-height: 1.4;
 }
+.coach .body {
+  /* a flex child will not shrink below its text without this, and the clamp needs it to */
+  min-width: 0;
+}
+/* The plan line answers "how am I doing" and must stay one line to be worth its height. */
+.coach .plan {
+  margin: 0 0 2px;
+  font: 500 11px/1.3 var(--font-sans);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-ink-700);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* A tip is worth three lines; past that it is a wall that costs the hand its room. */
-.coach > span {
+.coach .say {
+  margin: 0;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   line-clamp: 3;
   overflow: hidden;
 }
-/* Two on a phone lying down, where the tip shares its row with the buttons.
-   Has to live beside the rule it overrides: same specificity, so the later of
-   the two wins wherever it happens to be written. */
+/* The plan line has already spent one of the three, so the tip keeps two. */
+.coach .plan + .say {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+/* A phone lying down has no height to spare: the tip shares its row with the
+   buttons, so the plan line goes and the tip keeps its two lines. Has to live
+   beside the rules it overrides: same specificity, so the later of them wins. */
 @media (orientation: landscape) and (height < 32rem) {
-  .coach > span {
+  .coach .plan {
+    display: none;
+  }
+  .coach .say {
     -webkit-line-clamp: 2;
     line-clamp: 2;
   }

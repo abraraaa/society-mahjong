@@ -52,12 +52,13 @@ const COPIES = 4;
 const MAX_SOLUTIONS = 24;
 
 /**
- * Nodes explored per pattern before the search returns its best answer so far.
- * Only wide patterns on scattered hands reach it, where the remaining nodes would
- * be shuffling single-tile overlaps; `away` is then an upper bound, never a lie
- * in the player's favour.
+ * Nodes explored per pass before the search returns its best answer so far. Only the
+ * widest patterns on scattered hands reach it - the South round's four-set hands, on
+ * a hand with nothing in it - where the remaining nodes would be shuffling
+ * single-tile overlaps; `away` is then an upper bound, never a lie in the player's
+ * favour, and `approximate` says so.
  */
-const NODE_BUDGET = 12000;
+const NODE_BUDGET = 24000;
 
 const SUIT_BIT: Record<Suit, number> = { m: 1, p: 2, s: 4 };
 

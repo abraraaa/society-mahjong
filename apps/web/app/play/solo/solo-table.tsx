@@ -6,7 +6,6 @@ import {
   initialProgress,
   karachi,
   leftOf,
-  legalActions,
   nextHand,
   reduce,
   rightOf,
@@ -22,10 +21,10 @@ import {
 import { Tile } from '@/components/tile';
 import { SeatPill } from '@/components/seat-pill';
 import { ClaimSheet } from '@/components/claim-sheet';
-import { Coach } from '@/components/coach';
+import { Coach, CoachLine } from '@/components/coach';
 import { River } from '@/components/river';
 import { riverOrder } from '@/lib/river';
-import { suggestDiscard } from '@/lib/tutor';
+import { analyseFor, coachFor, stageFor, type CoachState } from '@/lib/coach';
 
 /** Custom properties are not part of React's CSSProperties, so name the one we set. */
 type HandStyle = React.CSSProperties & { '--hand-n'?: number };
@@ -36,6 +35,14 @@ const ruleset = karachi;
 const NAMES: Record<Seat, string> = { 0: 'You', 1: 'Bilal', 2: 'Sana', 3: 'Ayesha' };
 /** Every kind is in the wall four times, which is what makes "already dead" answerable. */
 const COPIES = 4;
+
+/** What the coach has watched this player do, which is how it decides how much to say. */
+interface Progress {
+  readonly handsFinished: number;
+  readonly wins: number;
+  readonly discardsMade: number;
+}
+const NO_PROGRESS: Progress = { handsFinished: 0, wins: 0, discardsMade: 0 };
 
 function botStep(state: HandState): HandState {
   let s = state;
@@ -53,9 +60,18 @@ export function SoloTable({ seed }: { seed: string }) {
   const [state, setState] = useState<HandState>(() => startHand(ruleset, { seed, progress: initialProgress, dealer: 0 }));
   const [selected, setSelected] = useState<TileKind | null>(null);
   const [tutorOn, setTutorOn] = useState(true);
+  const [progress, setProgress] = useState<Progress>(NO_PROGRESS);
   const me = state.players[ME];
-  const legal = useMemo(() => legalActions(state, ruleset, ME), [state]);
+
+  const view = useMemo(() => viewFor(state, ruleset, ME), [state]);
+  const legal = view.legal;
   const myMove = legal.discard || legal.claims || legal.exchange || legal.win;
+
+  // The analysis is the expensive part (a bounded search per pattern), so it is
+  // memoised on the state it was taken from and handed to the coach.
+  const analysis = useMemo(() => analyseFor(view, ruleset), [view]);
+  const stage = stageFor(progress);
+  const coach: CoachState = useMemo(() => coachFor({ view, ruleset, analysis, stage, names: NAMES }), [view, analysis, stage]);
 
   // Let bots act whenever it is not our move, paced so the table reads as a conversation.
   useEffect(() => {
@@ -66,13 +82,17 @@ export function SoloTable({ seed }: { seed: string }) {
 
   const act = (a: Action) => {
     setSelected(null);
+    if (a.type === 'discard') setProgress((p) => ({ ...p, discardsMade: p.discardsMade + 1 }));
     setState((s) => reduce(s, a, ruleset));
   };
 
   const spec = ruleset.handSpec(state.progress);
-  const tip = tutorOn && state.phase === 'turn' && state.turn === ME ? suggestDiscard(me.concealed) : null;
   const myTurn = state.phase === 'turn' && state.turn === ME;
-  const hasActions = !!legal.win || !!legal.kong?.length || (myTurn && (selected !== null || tip !== null));
+  // The tutor chip silences the advice; it never silences the result sheet, which
+  // is reporting what happened rather than coaching.
+  const advice = tutorOn ? coach : null;
+  const suggested = advice && advice.action.kind === 'discard' ? advice.action.tile : null;
+  const hasActions = !!legal.win || !!legal.kong?.length || (myTurn && (selected !== null || suggested !== null));
   // stable sort means duplicates of a newly-drawn kind land last, so this always resolves the tile just drawn
   const drawnIndex = state.drawn ? me.concealed.lastIndexOf(state.drawn) : -1;
 
@@ -103,6 +123,8 @@ export function SoloTable({ seed }: { seed: string }) {
   );
   const river = <River tiles={riverTiles} claimable={state.phase === 'claim'} highlight={selected} />;
 
+  const bubble = advice ? <Coach plan={advice.plan} say={advice.say} /> : null;
+
   const actions = (
     <>
       {legal.win && (
@@ -120,9 +142,9 @@ export function SoloTable({ seed }: { seed: string }) {
           <button className="btn btn-primary" onClick={() => act({ type: 'discard', seat: ME, tile: selected })}>
             Discard {tileName(selected)}
           </button>
-        ) : tip ? (
-          <button className="btn btn-primary" onClick={() => act({ type: 'discard', seat: ME, tile: tip.tile })}>
-            Discard {tileName(tip.tile)}
+        ) : suggested ? (
+          <button className="btn btn-primary" onClick={() => act({ type: 'discard', seat: ME, tile: suggested })}>
+            Discard {tileName(suggested)}
           </button>
         ) : null)}
     </>
@@ -139,7 +161,7 @@ export function SoloTable({ seed }: { seed: string }) {
           selectable={myTurn}
           selected={selected === k}
           fresh={isDrawn}
-          coached={!!tip && tip.tile === k && selected !== k}
+          coached={!!advice && advice.highlight.includes(k) && selected !== k}
           className={isDrawn ? 'drawn' : undefined}
           onClick={() => setSelected(selected === k ? null : k)}
         />
@@ -187,7 +209,7 @@ export function SoloTable({ seed }: { seed: string }) {
           {river}
         </section>
 
-        {tip && <Coach>{tip.message}</Coach>}
+        {bubble}
 
         {hasActions && <div className="action-row flex-none">{actions}</div>}
 
@@ -218,13 +240,7 @@ export function SoloTable({ seed }: { seed: string }) {
 
         <SeatPill wind={right.seatWind} name={NAMES[right.seat]} concealedCount={right.concealed.length} melds={right.melds} isTurn={state.turn === right.seat} orientation="column" />
 
-        {tip ? (
-          <div className="col-span-3">
-            <Coach>{tip.message}</Coach>
-          </div>
-        ) : (
-          <div className="col-span-3" />
-        )}
+        <div className="col-span-3">{bubble}</div>
 
         <div className="hand-dock col-span-3">
           {me.melds.length > 0 && myMelds}
@@ -236,23 +252,26 @@ export function SoloTable({ seed }: { seed: string }) {
         </div>
       </div>
 
-      {state.phase === 'claim' && legal.claims && state.lastDiscard && (
+      {state.phase === 'claim' && legal.claims && legal.claims.length > 0 && state.lastDiscard && (
         <ClaimSheet
           discardKind={state.lastDiscard.kind}
           discarderName={NAMES[state.lastDiscard.from]}
-          heldCount={me.concealed.filter((k) => k === state.lastDiscard!.kind).length}
+          coach={coach}
           options={legal.claims}
           onClaim={(claim) => act({ type: 'claim', seat: ME, claim })}
           onPass={() => act({ type: 'pass', seat: ME })}
         />
       )}
 
-      {state.phase === 'preplay' && legal.exchange && <ExchangeSheet hand={me.concealed} count={legal.exchange.count} onDone={(tiles) => act({ type: 'exchange', seat: ME, tiles })} />}
+      {state.phase === 'preplay' && legal.exchange && (
+        <ExchangeSheet hand={me.concealed} count={legal.exchange.count} coach={coach} onDone={(tiles) => act({ type: 'exchange', seat: ME, tiles })} />
+      )}
 
       {state.phase === 'finished' && (
         <ResultSheet
-          state={state}
+          coach={coach}
           onNext={() => {
+            setProgress((p) => ({ ...p, handsFinished: p.handsFinished + 1, wins: p.wins + (state.result?.type === 'win' && state.result.winner === ME ? 1 : 0) }));
             const n = nextHand(state, ruleset);
             setState(n ? startHand(ruleset, { seed, ...n }) : startHand(ruleset, { seed: `${seed}-again`, progress: initialProgress, dealer: 0 }));
           }}
@@ -262,18 +281,31 @@ export function SoloTable({ seed }: { seed: string }) {
   );
 }
 
-function ExchangeSheet({ hand, count, onDone }: { hand: readonly TileKind[]; count: number; onDone: (tiles: TileKind[]) => void }) {
+function ExchangeSheet({ hand, count, coach, onDone }: { hand: readonly TileKind[]; count: number; coach: CoachState; onDone: (tiles: TileKind[]) => void }) {
   const [picked, setPicked] = useState<number[]>([]);
+  // The coach has already worked out which tiles no candidate hand is using; the
+  // player can overrule it, but the sheet opens on its answer rather than empty.
+  const suggested = coach.action.kind === 'exchange' ? coach.action.tiles : [];
   return (
     <>
       <div className="scrim" />
       <div className="sheet">
         <div className="grabber" />
         <h2 className="font-display mb-1 text-xl">Goulash exchange</h2>
-        <p className="text-ivory-200/70 mb-3 text-sm">Choose {count} tiles to pass.</p>
+        <p className="text-ivory-200/70 mb-3 text-sm">
+          Choose {count} tiles to pass. <CoachLine say={coach.say} />
+        </p>
         <div className="flex flex-wrap justify-center gap-1">
           {hand.map((k, i) => (
-            <Tile key={i} kind={k} size="md" selectable selected={picked.includes(i)} onClick={() => setPicked((p) => (p.includes(i) ? p.filter((x) => x !== i) : p.length < count ? [...p, i] : p))} />
+            <Tile
+              key={i}
+              kind={k}
+              size="md"
+              selectable
+              selected={picked.includes(i)}
+              coached={picked.length === 0 && suggested.includes(k)}
+              onClick={() => setPicked((p) => (p.includes(i) ? p.filter((x) => x !== i) : p.length < count ? [...p, i] : p))}
+            />
           ))}
         </div>
         <button className="btn btn-primary btn-block mt-3" disabled={picked.length !== count} onClick={() => onDone(picked.map((i) => hand[i]!))}>
@@ -284,21 +316,29 @@ function ExchangeSheet({ hand, count, onDone }: { hand: readonly TileKind[]; cou
   );
 }
 
-function ResultSheet({ state, onNext }: { state: HandState; onNext: () => void }) {
-  const result = state.result;
+/**
+ * The debrief. A beginner learns more here than anywhere else in the hand, so it
+ * shows the winning tiles laid out and names the hand the way players name it —
+ * never the engine's pattern id.
+ */
+function ResultSheet({ coach, onNext }: { coach: CoachState; onNext: () => void }) {
+  const outcome = coach.outcome;
   return (
     <>
       <div className="scrim" />
       <div className="sheet">
         <div className="grabber" />
-        {result?.type === 'win' ? (
-          <p className="text-lg">
-            Seat {state.players[result.winner].seatWind} wins with <strong className="font-medium">{result.patternId}</strong>
-            {result.selfDrawn ? ' (self-drawn)' : ''}.
-          </p>
-        ) : (
-          <p className="text-lg">Wall exhausted. No winner.</p>
+        <h2 className="font-display mb-2 text-xl">{outcome?.type === 'win' ? (outcome.winnerIsMe ? 'Mahjong!' : `${outcome.winnerName} wins`) : 'Washed out'}</h2>
+        {outcome?.tiles && outcome.tiles.length > 0 && (
+          <div className="mb-3 flex flex-wrap justify-center gap-1">
+            {outcome.tiles.map((k, i) => (
+              <Tile key={i} kind={k} size="xs" />
+            ))}
+          </div>
         )}
+        <p className="text-ivory-100/90 text-sm">
+          <CoachLine say={coach.say} />
+        </p>
         <button className="btn btn-primary btn-block mt-4" onClick={onNext}>
           Next hand
         </button>

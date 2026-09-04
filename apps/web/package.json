@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "echo \"no web tests yet\""
+    "test": "vitest run"
   },
   "dependencies": {
     "@society/engine": "workspace:*",
@@ -28,6 +28,7 @@
     "eslint": "^9.39.4",
     "eslint-config-next": "16.3.4",
     "tailwindcss": "^4.3.3",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
   }
 }
