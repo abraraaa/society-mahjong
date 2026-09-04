@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SEATS, analysisBot, isWindTile, karachi, reduce, startHand, viewFor, type GameProgress, type HandState, type PrivatePlayerView, type TileKind } from '../src/index';
+import { SEATS, analysisBot, initialProgress, isWindTile, karachi, reduce, startHand, viewFor, type GameProgress, type HandState, type PrivatePlayerView, type TileKind } from '../src/index';
 
 const ROUNDS: GameProgress[] = [
   { roundWind: 'E', roundIndex: 0, handInRound: 0, handIndex: 0 },
@@ -80,5 +80,30 @@ describe('analysisBot', () => {
     const a = analysisBot(view, karachi);
     expect(a?.type).toBe('discard');
     if (a?.type === 'discard') expect(isWindTile(a.tile)).toBe(false);
+  });
+});
+
+describe('gentle bots', () => {
+  it('still finish hands, and play differently from sharp ones', () => {
+    // A tiny deterministic generator so the test is repeatable.
+    let x = 12345;
+    const random = () => (x = (x * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const play = (options: Parameters<typeof analysisBot>[2]) => {
+      let s = startHand(karachi, { seed: 'gentle-1', progress: initialProgress, dealer: 0 });
+      let guard = 0;
+      while (s.phase !== 'finished' && guard++ < 2000) {
+        for (const seat of SEATS) {
+          if (s.phase === 'finished') break;
+          const a = analysisBot(viewFor(s, karachi, seat), karachi, options);
+          if (a) s = reduce(s, a, karachi);
+        }
+      }
+      return s;
+    };
+    const sharp = play({});
+    const gentle = play({ strength: 'gentle', random });
+    expect(sharp.phase).toBe('finished');
+    expect(gentle.phase).toBe('finished');
+    expect(gentle.events.map((e) => `${e.type}:${e.tile ?? ''}`).join()).not.toBe(sharp.events.map((e) => `${e.type}:${e.tile ?? ''}`).join());
   });
 });

@@ -7,37 +7,48 @@ tolerate sign-up friction.
 
 ## 1. Authentication
 
-**Supabase Auth**, cookie sessions via `@supabase/ssr`, refreshed in Next.js
-middleware. Decision: **no Sign in with Apple** (no Apple Developer account
-needed) and **passkeys parked** until Supabase's passkey support leaves
-beta; it shipped as experimental in May 2026 with an API that may change,
-which is the wrong foundation for the sign-in path. The auth module keeps a
-seam for it so enabling later is a config change plus one enrolment prompt.
+**Supabase Auth**, cookie sessions via `@supabase/ssr`, refreshed in the Next.js
+`proxy` (the file convention that replaced middleware in Next 16). Decision:
+**no Sign in with Apple** (no Apple Developer account needed) and **passkeys
+parked** until Supabase's passkey support leaves beta; it shipped as
+experimental in May 2026 with an API that may change, which is the wrong
+foundation for the sign-in path. The auth module keeps a seam for it so
+enabling later is a config change plus one enrolment prompt.
 
-v1 flow: email → magic link (or Google). Sessions are long-lived, so on a
-phone this happens roughly once. Anonymous guests as below.
+**The front door is the invite, not a sign-in.** A room link or code lands on
+a page that asks one question, a name, and seats the visitor as an anonymous
+Supabase user bound to that device. That is the whole of v1 onboarding, for
+hosts as well as guests: someone has to make the first room, and putting an
+email round-trip in front of that is the same friction we are avoiding for
+their friends. A guest host's room is bound to their device until they add an
+email.
+
+**Magic link is an upgrade, never a gate.** On iOS the app runs as a PWA and a
+magic link opens in Mail, then Safari, not in the installed app, so a
+sign-in that *requires* the link strands the player outside the table. It is
+offered only from the profile, as "keep my history on a new phone", where
+landing in Safari is an annoyance rather than a wall. Google covers Android
+and desktop friends the same way. Linking is `updateUser` on the anonymous
+account, so the seat, ledger and stats carry over in place.
 
 | Provider | Role | Prerequisite |
 |---|---|---|
-| Magic link (email) | Primary sign-in | none |
-| Google | Android and desktop friends | Google Cloud OAuth client |
+| Anonymous (guest) | The front door: play from a link with a name only | enable in Supabase Auth |
+| Magic link (email) | Upgrade from the profile; recovers history on a new device | none |
+| Google | Same, for Android and desktop | Google Cloud OAuth client |
 | Passkey | Parked until GA; then "Use Face ID next time?" after first sign-in | Supabase passkeys GA, RP id + origins configured |
-| Anonymous (guest) | Play from an invite without any of the above | enable in Supabase Auth |
 
 Not in v1: Sign in with Apple, passkeys (see above), phone OTP (SMS cost,
 Twilio setup).
 
-**Guest policy.** A room code or link is enough to sit down. Guests are
-anonymous Supabase users bound to the device, shown as "Guest" plus a
-colour unless they choose a display name, which needs no account. They can
-stay fully anonymous for as long as they like; the ledger records them by
-seat. Adding an email or passkey later links in place and keeps their
-history. Hosting a room requires a full account. Guests who never upgrade
-are pruned after 30 idle days.
+**Guest policy.** Guests show as the name they gave; the ledger records them
+by seat. They can stay anonymous for as long as they like. Guests who never
+upgrade are pruned after 30 idle days, along with rooms nobody has touched.
 
 **Authority.** Every game route handler resolves the caller's seat from the
 session. Clients never write to game tables. The service role is used only
-inside route handlers, after the session check.
+inside route handlers, after the session check, and `games.seed` is
+column-revoked from clients outright.
 
 ## 2. Profiles
 
@@ -83,16 +94,26 @@ among friends), writable only by its owner.
 ```
 client  POST /api/games/:id/act  { action, expectedVersion }
 server  session → seat
-        load live_state (version = expectedVersion, else 409 → client refetches)
-        reduce(state, action, ruleset)       // IllegalAction → 400
-        run bot turns inline until a human is up, stamping each bot event
-          with reveal_at = now + 600ms × n so clients animate at human pace
-        if a discard opened a claim window: claim_deadline = now + policy.claimSeconds
-        write live_state (version+1), append compact actions to hands row
-        broadcast public delta to  game:{id}         (all seats, spectators)
-        broadcast private delta to game:{id}:seat:{n} (drawn tile, legal actions)
-        respond with the actor's private view
+        load live_state (version = expectedVersion, else 409 carrying the current snapshot)
+        resolve any expired deadline first (passes for absent claimers, a bot
+          stands in for an absent turn), then reduce(state, action, ruleset)
+          // IllegalAction → 400, someone else's seat → 403
+        settle: bots act inline until a human has a real decision; a human
+          with nothing to claim is passed for, so windows only open when
+          someone can use them
+        deadlines from the table's timer policy (longest level at the table)
+        write live_state (version+1) if version unchanged, else 409
+        append the action to the hand's log; close the hand row on a result
+        broadcast {version} on game:{id}; every client refetches its own view
+        respond with the actor's private view and version
 ```
+
+Implemented in `apps/web/lib/live/`: `table.ts` is the pure part (settle,
+deadlines, expiry, `step`), covered by tests that play whole hands through
+it; `service.ts` wraps it in loads, saves and broadcasts; the route handlers
+are thin. Not yet done from the design: `reveal_at` pacing of bot events (a
+client currently snaps to the latest view), the private per-seat delta
+channel (policies exist; nothing is sent on it yet) and presence.
 
 Redaction is a pure function `viewFor(state, seat | null)`: other players'
 concealed tiles become counts, wall and dead wall become counts, seed and
@@ -119,10 +140,14 @@ Deadlines live on `live_state`: `claim_deadline` and `turn_deadline`.
 
 - Any incoming request first resolves expired deadlines (missing claim
   responses become passes; an expired turn applies the room's policy).
-- A Vercel Cron sweep every minute resolves deadlines on tables where nobody
-  has sent anything, so an abandoned claim window never wedges a game.
-- Clients render the countdown from the deadline timestamp, so a phone that
-  went to sleep shows the right remaining time on wake.
+- Every client renders the countdown from the deadline timestamp, so a phone
+  that went to sleep shows the right remaining time on wake, and when its
+  countdown reaches zero it POSTs `/api/games/:id/tick`, which resolves the
+  deadline without applying any action. Any seated player's tick will do, so
+  a window closes as soon as one phone at the table notices.
+- A Vercel Cron sweep (`/api/cron/sweep`, `CRON_SECRET`) is the backstop for
+  tables everyone has left. On the Hobby plan crons run at most daily, which
+  is why the tick above does the real work; Pro makes the sweep per-minute.
 
 **Claim windows are adaptive, and rarely open.** Three things keep the
 countdown from frightening anyone:

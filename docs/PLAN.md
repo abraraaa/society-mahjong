@@ -13,7 +13,7 @@ not the record of what exists. As of the last update:
 | M1 Solo table | Engine-driven, playable on a phone. Layout, hand-analysis, coach and bots all rebuilt on the analysis layer after a review round. Next: M1.5 polish (tablet sizing, hand-over-hand progression, sound), then M2. |
 | Karachi rules fidelity | Catalogue and scoring built from primary sources; several points still ⚠ in `docs/RULES-KARACHI.md`, blocked on one session at a real table. |
 | Taiwanese | Engine ruleset stubbed (patterns, House/Advanced/Standard scoring); no UI. |
-| M2 Multiplayer | Designed in `docs/MULTIPLAYER.md` (authoritative over this doc's §3 on realtime and schema). Not started. |
+| M2 Multiplayer | Designed in `docs/MULTIPLAYER.md` (authoritative over this doc's §3 on realtime and schema). First slice built: rooms with codes and links, guest seats, authoritative table in route handlers with optimistic versioning, bots inline, deadlines with client tick + cron backstop, Realtime pokes, live table UI on the shared `Table`. Needs migration 0002 applied and env set; untested against a live project until then. Next: presence and away/stand-in, ledger across hands, profile upgrade (magic link/Google), replay archive. |
 | Tutor | Deterministic coach layer landing now, grounded in engine analysis. Conversational layer not started. |
 
 Treat any other section below as intent, and defer to the code and to

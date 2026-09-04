@@ -125,6 +125,10 @@ h3 {
     box-shadow 0.15s var(--ease-tile),
     opacity 0.15s ease;
   touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
   cursor: pointer;
 }
 .tile-2xs {
@@ -155,8 +159,12 @@ h3 {
   height: var(--tile-xl-h);
   border-radius: var(--radius-tile-lg);
 }
-.tile[data-selectable='true']:hover {
-  transform: translateY(-4px);
+/* The lift-on-hover is for a pointer. On touch, iOS treats a hover rule as a
+   first tap that only "hovers", and the tile moves under the finger. */
+@media (hover: hover) {
+  .tile[data-selectable='true']:hover {
+    transform: translateY(-4px);
+  }
 }
 .tile[data-selected='true'] {
   transform: translateY(-10px);
@@ -746,24 +754,56 @@ h3 {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* A tip is worth three lines; past that it is a wall that costs the hand its room. */
+/* The tip is never cut on a phone held upright: the river gives up the room,
+   because a sentence you cannot finish reading teaches nothing. */
 .coach .say {
   margin: 0;
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
-  overflow: hidden;
 }
-/* The plan line has already spent one of the three, so the tip keeps two. */
-.coach .plan + .say {
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+/* A glossary word: dotted, tappable, otherwise reading as text. */
+.term {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  text-decoration: underline dotted;
+  text-decoration-color: rgb(20 40 36 / 0.45);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+b .term {
+  font-weight: inherit;
+}
+/* The footnote a first-timer gets the first time a word appears. */
+.coach .gloss {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--color-ink-700);
+}
+.coach .more {
+  font: 500 12px/1 var(--font-sans);
+  color: var(--color-ink-700);
+  background: none;
+  border: 0;
+  padding: 2px 0 0;
+  text-decoration: underline;
 }
 /* A phone lying down has no height to spare: the tip shares its row with the
    buttons, so the plan line goes and the tip keeps its two lines. Has to live
    beside the rules it overrides: same specificity, so the later of them wins. */
 @media (orientation: landscape) and (height < 32rem) {
+  .coach:not(.expanded) .say {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+  }
+  .coach:not(.expanded) .gloss {
+    display: none;
+  }
   .coach .plan {
     display: none;
   }
@@ -802,4 +842,58 @@ h3 {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* A definition opens above whatever sheet is already up. */
+.scrim.scrim-top {
+  z-index: 40;
+}
+.sheet.sheet-top {
+  z-index: 50;
+  max-height: 80dvh;
+  overflow-y: auto;
+}
+.glossary {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.glossary .entry + .entry {
+  padding-top: 14px;
+  border-top: 1px solid rgb(251 247 238 / 0.12);
+}
+
+/* Running score on a seat pill, and the standings on the result sheet. */
+.seat .score {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: rgb(251 247 238 / 0.7);
+  white-space: nowrap;
+}
+.standings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.standings .row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+.standings .row.is-me {
+  background: rgb(251 247 238 / 0.08);
+}
+.standings .delta {
+  color: rgb(251 247 238 / 0.6);
+  min-width: 4.5em;
+  text-align: right;
+}
+.standings .total {
+  min-width: 5em;
+  text-align: right;
+  font-weight: 500;
 }

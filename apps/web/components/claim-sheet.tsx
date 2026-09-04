@@ -5,7 +5,8 @@ import type { CoachState } from '@/lib/coach';
 import { CoachLine } from './coach';
 import { Tile } from './tile';
 
-const CLAIM_MS = 8000; // mirrors --claim-seconds in globals.css
+/** Solo default; a live table passes the server's deadline instead. Mirrors --claim-seconds in globals.css. */
+const CLAIM_MS = 8000;
 
 type ClaimType = ClaimOption['type'];
 const GRID: readonly ClaimType[] = ['pung', 'chow', 'kong'];
@@ -31,6 +32,7 @@ export function ClaimSheet({
   options,
   onClaim,
   onPass,
+  claimMs = CLAIM_MS,
 }: {
   discardKind: TileKind;
   discarderName: string;
@@ -38,19 +40,23 @@ export function ClaimSheet({
   options: readonly ClaimOption[];
   onClaim: (option: ClaimOption) => void;
   onPass: () => void;
+  claimMs?: number;
 }) {
   const onPassRef = useRef(onPass);
   useEffect(() => {
     onPassRef.current = onPass;
   });
 
+  const win = options.find((o) => o.type === 'win');
+  // A winning tile is never taken away by the clock on a solo table; a live
+  // table's server deadline still applies, and is long enough to read the sheet.
+  const timed = !win;
   useEffect(() => {
-    const t = setTimeout(() => onPassRef.current(), CLAIM_MS);
+    if (!timed) return;
+    const t = setTimeout(() => onPassRef.current(), claimMs);
     return () => clearTimeout(t);
     // one countdown per discard: discardKind + discarderName changes whenever a new one arrives
-  }, [discardKind, discarderName]);
-
-  const win = options.find((o) => o.type === 'win');
+  }, [discardKind, discarderName, claimMs, timed]);
   const byType = (t: ClaimType) => options.find((o) => o.type === t);
   const advised = coach.action.kind === 'claim' ? coach.action.option : null;
   const grid = GRID.filter((type) => type !== 'chow' || coach.goal.chowsClaimable);
@@ -60,9 +66,11 @@ export function ClaimSheet({
       <div className="scrim" />
       <div className="sheet">
         <div className="grabber" />
-        <div className="timer mb-4">
-          <i />
-        </div>
+        {timed && (
+          <div className="timer mb-4" style={{ '--claim-seconds': `${Math.round(claimMs / 1000)}s` } as React.CSSProperties}>
+            <i />
+          </div>
+        )}
         <div className="mb-4 flex items-center gap-4">
           <Tile kind={discardKind} size="lg" />
           <div className="flex flex-col gap-1">
@@ -74,6 +82,11 @@ export function ClaimSheet({
             </p>
           </div>
         </div>
+        {(coach.stage === 'new' || coach.stage === 'first_hand') && (
+          <p className="text-ivory-200/60 mb-3 text-xs leading-snug">
+            Pung takes it to make three of a kind, Kong four; either lays the set face up. Pass lets it go and the turn moves on.
+          </p>
+        )}
         {win && (
           <button className="btn btn-gold btn-block mb-3" onClick={() => onClaim(win)}>
             Mahjong!

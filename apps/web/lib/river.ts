@@ -1,4 +1,4 @@
-import type { HandState, Seat, TileKind } from '@society/engine';
+import type { GameEvent, Seat, TileKind } from '@society/engine';
 
 export interface RiverTile {
   readonly seat: Seat;
@@ -6,7 +6,7 @@ export interface RiverTile {
 }
 
 /** Both of the reducer's paths that take a discard back off the table. */
-function takenBy(ev: HandState['events'][number]): Seat | undefined {
+function takenBy(ev: GameEvent): Seat | undefined {
   // A pung, chow or kong off the discard.
   if (ev.type === 'claimed') return ev.data?.['from'] as Seat | undefined;
   // A win off the discard: the reducer removes the tile there too, but the
@@ -26,9 +26,9 @@ function takenBy(ev: HandState['events'][number]): Seat | undefined {
  * river, so those events pop the discarder's last entry, exactly as the
  * reducer does.
  */
-export function riverOrder(state: HandState): RiverTile[] {
+export function riverOrder(source: { readonly events: readonly GameEvent[] }): RiverTile[] {
   const out: RiverTile[] = [];
-  for (const ev of state.events) {
+  for (const ev of source.events) {
     if (ev.type === 'discarded' && ev.seat !== undefined && ev.tile !== undefined) {
       out.push({ seat: ev.seat, kind: ev.tile });
       continue;

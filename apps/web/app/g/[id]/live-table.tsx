@@ -1,0 +1,171 @@
+'use client';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { getRuleset, type Seat } from '@society/engine';
+import { Table } from '@/components/table';
+import { NameGate } from '@/components/name-gate';
+import { analyseFor, coachFor, stageFor, type CoachState } from '@/lib/coach';
+import { ApiError, api, listen } from '@/lib/live/client';
+import { isPrivate, type GameSnapshot } from '@/lib/live/snapshot';
+import type { ClientAction } from '@/lib/live/types';
+import { ensureSession, rememberName, storedName } from '@/lib/supabase/session';
+import { scoresFrom } from '@/lib/ledger';
+
+interface Progress {
+  readonly handsFinished: number;
+  readonly wins: number;
+  readonly discardsMade: number;
+}
+
+/**
+ * A seat at a live table. The server is the table; this component holds the
+ * latest snapshot it was given, sends actions with the version it saw, and
+ * refetches whenever the game channel says the version moved.
+ */
+export function LiveTable({ gameId }: { gameId: string }) {
+  const router = useRouter();
+  const [name, setName] = useState<string | null>(() => (typeof window === 'undefined' ? null : storedName()));
+  const [snap, setSnap] = useState<GameSnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [tutorOn, setTutorOn] = useState(true);
+  const [progress, setProgress] = useState<Progress>({ handsFinished: 0, wins: 0, discardsMade: 0 });
+  const supabaseRef = useRef<SupabaseClient | null>(null);
+  const versionRef = useRef(0);
+
+  // How long the claim window had left when this snapshot was made, measured on
+  // the server's clock so the phone's clock never enters into it.
+  const [claimMs, setClaimMs] = useState<number | null>(null);
+
+  const take = useCallback((s: GameSnapshot) => {
+    if (s.version < versionRef.current) return; // an older reply arriving late
+    versionRef.current = s.version;
+    setClaimMs(s.deadlines.claim === null ? null : s.deadlines.claim - s.now);
+    setSnap(s);
+  }, []);
+
+  const refetch = useCallback(async () => {
+    try {
+      take(await api.view(gameId));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Lost the table.');
+    }
+  }, [gameId, take]);
+
+  // Session, first view, subscription.
+  useEffect(() => {
+    if (!name) return;
+    let stop: (() => void) | null = null;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { supabase } = await ensureSession(name);
+        if (cancelled) return;
+        supabaseRef.current = supabase;
+        await refetch();
+        stop = listen(supabase, `game:${gameId}`, {
+          state: (p) => {
+            if (typeof p['version'] !== 'number' || p['version'] > versionRef.current) void refetch();
+          },
+        });
+      } catch (err) {
+        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Could not sit down.');
+      }
+    })();
+    const onVisible = () => document.visibilityState === 'visible' && void refetch();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      stop?.();
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [name, gameId, refetch]);
+
+  // When a deadline passes and the table has not moved, ask it to resolve the clock.
+  useEffect(() => {
+    if (!snap) return;
+    const due = [snap.deadlines.claim, snap.deadlines.turn].filter((d): d is number => d !== null);
+    if (due.length === 0) return;
+    const skew = Date.now() - snap.now; // client clock minus server clock, roughly
+    const wait = Math.max(500, Math.min(...due) + skew - Date.now() + 750);
+    const t = setTimeout(() => api.tick(gameId).then(take).catch(() => refetch()), wait);
+    return () => clearTimeout(t);
+  }, [snap, gameId, take, refetch]);
+
+  const ruleset = useMemo(() => (snap ? getRuleset(snap.rulesetId as 'karachi' | 'taiwanese') : null), [snap]);
+  const view = snap && isPrivate(snap.view) ? snap.view : null;
+  const names = useMemo(() => {
+    const out: Record<Seat, string> = { 0: 'East', 1: 'South', 2: 'West', 3: 'North' };
+    snap?.seats.forEach((s, i) => {
+      if (s) out[i as Seat] = i === snap.me ? 'You' : s.name;
+    });
+    return out;
+  }, [snap]);
+  const analysis = useMemo(() => (view && ruleset ? analyseFor(view, ruleset) : null), [view, ruleset]);
+  const stage = stageFor(progress);
+  const coach: CoachState | null = useMemo(() => (view && ruleset && analysis ? coachFor({ view, ruleset, analysis, stage, names }) : null), [view, ruleset, analysis, stage, names]);
+
+  const send = async (action: ClientAction) => {
+    if (!snap) return;
+    if (action.type === 'discard') setProgress((p) => ({ ...p, discardsMade: p.discardsMade + 1 }));
+    try {
+      take(await api.act(gameId, action, snap.version));
+    } catch (err) {
+      if (err instanceof ApiError && err.snapshot) take(err.snapshot);
+      else if (err instanceof ApiError && err.status === 400) void refetch();
+      else setError(err instanceof ApiError ? err.message : 'That did not reach the table.');
+    }
+  };
+
+  if (!name) {
+    return (
+      <NameGate
+        title="Take your seat"
+        onDone={(n) => {
+          rememberName(n);
+          setName(n);
+        }}
+      />
+    );
+  }
+
+  if (!snap || !view || !ruleset || !coach) {
+    return (
+      <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-3 px-6">
+        <p className="font-display text-2xl">{error ? 'Hmm.' : 'Setting the table…'}</p>
+        {error && <p className="text-ivory-200/70 text-center text-sm">{error}</p>}
+        {snap && !view && <p className="text-ivory-200/70 text-center text-sm">You are watching this table, not seated at it.</p>}
+      </main>
+    );
+  }
+
+  const gameOver = snap.status === 'finished';
+  // The server settles the room's ledger in the request that finishes the hand,
+  // so a snapshot of a finished hand already carries the settled totals.
+  const scores = scoresFrom(snap.scores);
+
+  return (
+    <Table
+      view={view}
+      label={ruleset.handSpec(view.progress).label}
+      subtitle={`Room ${snap.roomCode}`}
+      names={names}
+      coach={coach}
+      tutorOn={tutorOn}
+      onToggleTutor={() => setTutorOn((v) => !v)}
+      onAct={(a) => void send(a)}
+      onNextHand={() => {
+        if (gameOver) {
+          router.push(`/r/${snap.roomCode}`);
+          return;
+        }
+        setProgress((p) => ({ ...p, handsFinished: p.handsFinished + 1, wins: p.wins + (view.result?.type === 'win' && view.result.winner === view.me ? 1 : 0) }));
+        void send({ type: 'nextHand' });
+      }}
+      claimMs={claimMs}
+      gameOver={gameOver}
+      scores={scores}
+      handsPerRound={ruleset.handsPerRound}
+    />
+  );
+}
