@@ -897,3 +897,93 @@ b .term {
   text-align: right;
   font-weight: 500;
 }
+
+/* ---------------------------------------------------------------- landing */
+/* One screen, no scroll on a phone: words, the set, the door in. The brass
+   is kept off this page; the tiles are the only thing allowed to shine. */
+.landing {
+  min-height: 100dvh;
+  max-width: 28rem;
+  margin-inline: auto;
+  padding: max(2.5rem, var(--safe-top)) 1.5rem max(2rem, var(--safe-bottom));
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 1.5rem;
+}
+.landing .hero h1 {
+  font-size: clamp(2.75rem, 12vw, 3.5rem);
+  line-height: 1;
+  margin: 0.25rem 0 0.75rem;
+  color: var(--color-ivory-50);
+}
+.landing .lede {
+  margin: 0;
+  max-width: 24rem;
+  font-size: 15px;
+  line-height: 1.5;
+  color: rgb(243 236 219 / 0.75);
+}
+.eyebrow-quiet {
+  color: rgb(243 236 219 / 0.5);
+}
+.landing .actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.landing .hint {
+  margin: -0.25rem 0 0.25rem;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.4;
+  color: rgb(243 236 219 / 0.55);
+}
+/* A text link that stays ivory: the global `a` rule paints links brass, which
+   is for exceptional states, not a way in. */
+.link-quiet {
+  align-self: center;
+  padding: 0.25rem 0;
+  font-size: 15px;
+  color: var(--color-ivory-100);
+  text-decoration: underline;
+  text-decoration-color: rgb(230 219 194 / 0.4);
+  text-underline-offset: 4px;
+}
+.link-quiet:hover {
+  color: var(--color-ivory-50);
+  text-decoration-color: currentColor;
+}
+
+/* The set on the felt: a run of backs, five faces fanned in front. */
+.hero-tiles {
+  position: relative;
+  height: 9.5rem;
+  display: grid;
+  place-items: center;
+}
+.hero-tiles .wall {
+  position: absolute;
+  top: 0.25rem;
+  display: flex;
+  gap: 2px;
+  opacity: 0.9;
+}
+.hero-tiles .fan {
+  position: absolute;
+  bottom: 0;
+  display: flex;
+  align-items: flex-end;
+}
+.hero-tiles .fan .tile {
+  margin-inline: -4px;
+  transform-origin: 50% 120%;
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.6) inset,
+    0 6px 14px rgb(0 0 0 / 0.45);
+}
+.hero-tiles .fan .tile:nth-child(1) { transform: rotate(-14deg) translateY(10px); }
+.hero-tiles .fan .tile:nth-child(2) { transform: rotate(-7deg) translateY(3px); }
+.hero-tiles .fan .tile:nth-child(3) { transform: none; z-index: 1; }
+.hero-tiles .fan .tile:nth-child(4) { transform: rotate(7deg) translateY(3px); }
+.hero-tiles .fan .tile:nth-child(5) { transform: rotate(14deg) translateY(10px); }
