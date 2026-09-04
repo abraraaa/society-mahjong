@@ -1,13 +1,4 @@
-/**
- * Coach regressions.
- *
- * ⚠ `apps/web` has no test runner of its own yet (`pnpm test` there is still a
- * stub), so until vitest is a dependency of this package these run through the
- * engine's copy:
- *
- *   cd apps/web && ../../packages/engine/node_modules/.bin/vitest run \
- *     --root "$PWD" lib/coach/coach.test.ts
- */
+/** Coach regressions: `pnpm --filter @society/web test`. */
 import { describe, expect, it } from 'vitest';
 import {
   ROUND_WINDS,
