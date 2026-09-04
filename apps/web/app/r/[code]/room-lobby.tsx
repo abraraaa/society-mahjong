@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { NameGate } from '@/components/name-gate';
 import { RoomWaiting } from '@/components/room-waiting';
+import { Trouble, Waiting } from '@/components/trouble';
 import { ApiError, api, listen, type RoomSnapshot } from '@/lib/live/client';
 import { NeedsCaptcha, ensureSession, rememberName, storedName } from '@/lib/supabase/session';
 
@@ -20,6 +21,7 @@ export function RoomLobby({ code }: { code: string }) {
   const [captcha, setCaptcha] = useState<string | null>(null);
   const [room, setRoom] = useState<RoomSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const [starting, setStarting] = useState(false);
   const supabaseRef = useRef<SupabaseClient | null>(null);
 
@@ -46,7 +48,7 @@ export function RoomLobby({ code }: { code: string }) {
     return () => {
       cancelled = true;
     };
-  }, [code, name, captcha, goToGame]);
+  }, [code, name, captcha, goToGame, attempt]);
 
   // Live seat changes and the start signal, with a poll as the fallback.
   useEffect(() => {
@@ -88,12 +90,18 @@ export function RoomLobby({ code }: { code: string }) {
   }
 
   if (!room) {
-    return (
-      <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-3 px-6">
-        <p className="font-display text-2xl">{error ? 'Hmm.' : 'Finding your seat…'}</p>
-        {error && <p className="text-ivory-200/70 text-center text-sm">{error}</p>}
-      </main>
-    );
+    if (error) {
+      return (
+        <Trouble
+          message={error}
+          onRetry={() => {
+            setError(null);
+            setAttempt((n) => n + 1);
+          }}
+        />
+      );
+    }
+    return <Waiting>Finding your seat…</Waiting>;
   }
 
   const share = async () => {

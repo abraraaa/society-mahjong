@@ -33,6 +33,7 @@ export function ClaimSheet({
   onClaim,
   onPass,
   claimMs = CLAIM_MS,
+  clock = 'solo',
 }: {
   discardKind: TileKind;
   discarderName: string;
@@ -41,6 +42,8 @@ export function ClaimSheet({
   onClaim: (option: ClaimOption) => void;
   onPass: () => void;
   claimMs?: number;
+  /** whose clock: the sheet's own eight seconds, or a server deadline that applies to a win too */
+  clock?: 'solo' | 'server';
 }) {
   const onPassRef = useRef(onPass);
   useEffect(() => {
@@ -48,9 +51,10 @@ export function ClaimSheet({
   });
 
   const win = options.find((o) => o.type === 'win');
-  // A winning tile is never taken away by the clock on a solo table; a live
-  // table's server deadline still applies, and is long enough to read the sheet.
-  const timed = !win;
+  // On a solo table a winning tile is never taken away by the clock. On a live
+  // table the server's deadline applies to a win too (a long one, the turn
+  // clock), so the bar has to show: a clock you cannot see is a trap.
+  const timed = clock === 'server' || !win;
   useEffect(() => {
     if (!timed) return;
     const t = setTimeout(() => onPassRef.current(), claimMs);

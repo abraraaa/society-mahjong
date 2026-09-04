@@ -17,7 +17,8 @@ export class ApiError extends Error {
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { ...init, headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) }, credentials: 'same-origin' });
   const body = (await res.json().catch(() => ({}))) as { error?: string; snapshot?: GameSnapshot } & T;
-  if (!res.ok) throw new ApiError(res.status, body.error ?? res.statusText, body.snapshot);
+  // Safari leaves statusText empty over HTTP/2, so a non-JSON failure still names its status.
+  if (!res.ok) throw new ApiError(res.status, body.error ?? (res.statusText || `the server answered ${res.status}`), body.snapshot);
   return body;
 }
 

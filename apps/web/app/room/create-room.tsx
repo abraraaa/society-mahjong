@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { NameGate } from '@/components/name-gate';
+import { Trouble, Waiting } from '@/components/trouble';
 import { ApiError, api } from '@/lib/live/client';
 import { NeedsCaptcha, ensureSession, rememberName, storedName } from '@/lib/supabase/session';
 
@@ -11,6 +12,7 @@ export function CreateRoom() {
   const [name, setName] = useState<string | null>(() => (typeof window === 'undefined' ? null : storedName()));
   const [captcha, setCaptcha] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!name) return;
@@ -29,7 +31,7 @@ export function CreateRoom() {
     return () => {
       cancelled = true;
     };
-  }, [name, captcha, router]);
+  }, [name, captcha, router, attempt]);
 
   if (!name) {
     return (
@@ -44,10 +46,16 @@ export function CreateRoom() {
       />
     );
   }
-  return (
-    <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-3 px-6">
-      <p className="font-display text-2xl">{error ? 'Hmm.' : 'Opening a room…'}</p>
-      {error && <p className="text-ivory-200/70 text-center text-sm">{error}</p>}
-    </main>
-  );
+  if (error) {
+    return (
+      <Trouble
+        message={error}
+        onRetry={() => {
+          setError(null);
+          setAttempt((n) => n + 1);
+        }}
+      />
+    );
+  }
+  return <Waiting>Opening a room…</Waiting>;
 }

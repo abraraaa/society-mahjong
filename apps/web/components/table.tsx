@@ -53,7 +53,6 @@ export function Table(props: TableProps) {
     </TermProvider>
   );
 }
-
 const ROUND_NAME: Record<string, string> = { E: 'East', S: 'South', W: 'West', N: 'North' };
 
 function TableInner({ view, label, names, coach, tutorOn, onToggleTutor, onAct, onNextHand, claimMs, gameOver, subtitle, scores = NO_SCORES, handsPerRound = 4 }: TableProps) {
@@ -263,7 +262,7 @@ function TableInner({ view, label, names, coach, tutorOn, onToggleTutor, onAct, 
           options={legal.claims!}
           onClaim={(claim) => act({ type: 'claim', seat: ME, claim })}
           onPass={() => act({ type: 'pass', seat: ME })}
-          {...(claimMs ? { claimMs: Math.max(1000, claimMs) } : {})}
+          {...(claimMs ? { claimMs: Math.max(1000, claimMs), clock: 'server' as const } : {})}
         />
       )}
 

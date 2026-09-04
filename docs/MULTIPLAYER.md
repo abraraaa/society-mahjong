@@ -95,8 +95,8 @@ among friends), writable only by its owner.
 client  POST /api/games/:id/act  { action, expectedVersion }
 server  session → seat
         load live_state (version = expectedVersion, else 409 carrying the current snapshot)
-        resolve any expired deadline first (passes for absent claimers, a bot
-          stands in for an absent turn), then reduce(state, action, ruleset)
+        resolve any expired deadline first (a bot stands in for an absent
+          human, in a claim window as in a turn), then reduce(state, action, ruleset)
           // IllegalAction → 400, someone else's seat → 403
         settle: bots act inline until a human has a real decision; a human
           with nothing to claim is passed for, so windows only open when
@@ -138,8 +138,10 @@ volume; the number to watch as tables multiply.
 
 Deadlines live on `live_state`: `claim_deadline` and `turn_deadline`.
 
-- Any incoming request first resolves expired deadlines (missing claim
-  responses become passes; an expired turn applies the room's policy).
+- Any incoming request first resolves expired deadlines. A bot stands in
+  for whoever did not answer: in a claim window it takes a win they were
+  offered, claims a set only when that brings the hand closer, and passes
+  on the rest; in a turn it plays the room's policy.
 - Every client renders the countdown from the deadline timestamp, so a phone
   that went to sleep shows the right remaining time on wake, and when its
   countdown reaches zero it POSTs `/api/games/:id/tick`, which resolves the
@@ -167,6 +169,12 @@ countdown from frightening anyone:
    So a table with one first-timer waits for the first-timer, and a table
    of regulars runs at 7 seconds, which is the norm in online Hong Kong and
    Taiwanese play and feels quick only until you've done it twice.
+
+   A window in which someone was offered the **win** runs on the turn limit
+   instead (90 s for a first-timer). Twenty seconds is enough to take a
+   pung; it is not enough to read "Mahjong!" for the first time and believe
+   it, and the claim sheet shows the clock in every case so nobody is timed
+   out by a deadline they could not see.
 
 Turn limits nudge at 20 seconds remaining. After two expired turns the seat
 is handed to a bot stand-in and the human reclaims it on return. No

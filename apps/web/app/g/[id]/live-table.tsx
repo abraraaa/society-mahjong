@@ -5,6 +5,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getRuleset, type Seat } from '@society/engine';
 import { Table } from '@/components/table';
 import { NameGate } from '@/components/name-gate';
+import { Notice } from '@/components/notice';
+import { Trouble, Waiting } from '@/components/trouble';
 import { analyseFor, coachFor, stageFor, type CoachState } from '@/lib/coach';
 import { ApiError, api, listen } from '@/lib/live/client';
 import { isPrivate, type GameSnapshot } from '@/lib/live/snapshot';
@@ -29,6 +31,10 @@ export function LiveTable({ gameId }: { gameId: string }) {
   const [captcha, setCaptcha] = useState<string | null>(null);
   const [snap, setSnap] = useState<GameSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  // Why the last tap did nothing, shown over the table for a moment.
+  const [notice, setNotice] = useState<string | null>(null);
+  const clearNotice = useCallback(() => setNotice(null), []);
   const [tutorOn, setTutorOn] = useState(true);
   const [progress, setProgress] = useState<Progress>({ handsFinished: 0, wins: 0, discardsMade: 0 });
   const supabaseRef = useRef<SupabaseClient | null>(null);
@@ -49,7 +55,9 @@ export function LiveTable({ gameId }: { gameId: string }) {
     try {
       take(await api.view(gameId));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Lost the table.');
+      const msg = err instanceof ApiError ? err.message : 'Lost the table.';
+      setError(msg);
+      setNotice(msg);
     }
   }, [gameId, take]);
 
@@ -82,7 +90,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
       stop?.();
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [name, captcha, gameId, refetch]);
+  }, [name, captcha, gameId, refetch, attempt]);
 
   // When a deadline passes and the table has not moved, ask it to resolve the clock.
   useEffect(() => {
@@ -108,15 +116,29 @@ export function LiveTable({ gameId }: { gameId: string }) {
   const stage = stageFor(progress);
   const coach: CoachState | null = useMemo(() => (view && ruleset && analysis ? coachFor({ view, ruleset, analysis, stage, names }) : null), [view, ruleset, analysis, stage, names]);
 
-  const send = async (action: ClientAction) => {
+  // A 409 means the table changed under us. If nothing has actually happened
+  // at the table since (same event sequence: a timer sweep, say, that found
+  // nothing to do), the action is as good as it was and goes again against
+  // the new version. If the table has moved on, the tap is void and the
+  // player is told so, because a tap that silently does nothing is worse
+  // than one that fails.
+  const send = async (action: ClientAction, retried = false): Promise<void> => {
     if (!snap) return;
-    if (action.type === 'discard') setProgress((p) => ({ ...p, discardsMade: p.discardsMade + 1 }));
+    if (action.type === 'discard' && !retried) setProgress((p) => ({ ...p, discardsMade: p.discardsMade + 1 }));
     try {
       take(await api.act(gameId, action, snap.version));
     } catch (err) {
-      if (err instanceof ApiError && err.snapshot) take(err.snapshot);
-      else if (err instanceof ApiError && err.status === 400) void refetch();
-      else setError(err instanceof ApiError ? err.message : 'That did not reach the table.');
+      if (err instanceof ApiError && err.snapshot) {
+        const moved = err.snapshot.view.seq !== snap.view.seq;
+        take(err.snapshot);
+        if (!moved && !retried) return send(action, true);
+        setNotice(moved ? explain(err, action) : err.message);
+      } else if (err instanceof ApiError && (err.status === 400 || err.status === 403)) {
+        void refetch();
+        setNotice(explain(err, action));
+      } else {
+        setNotice(err instanceof ApiError ? err.message : 'That did not reach the table. Check the connection and try again.');
+      }
     }
   };
 
@@ -135,13 +157,18 @@ export function LiveTable({ gameId }: { gameId: string }) {
   }
 
   if (!snap || !view || !ruleset || !coach) {
-    return (
-      <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-3 px-6">
-        <p className="font-display text-2xl">{error ? 'Hmm.' : 'Setting the table…'}</p>
-        {error && <p className="text-ivory-200/70 text-center text-sm">{error}</p>}
-        {snap && !view && <p className="text-ivory-200/70 text-center text-sm">You are watching this table, not seated at it.</p>}
-      </main>
-    );
+    if (error && !snap) {
+      return (
+        <Trouble
+          message={error}
+          onRetry={() => {
+            setError(null);
+            setAttempt((n) => n + 1);
+          }}
+        />
+      );
+    }
+    return <Waiting>{snap && !view ? 'You are watching this table, not seated at it.' : 'Setting the table…'}</Waiting>;
   }
 
   const gameOver = snap.status === 'finished';
@@ -150,27 +177,41 @@ export function LiveTable({ gameId }: { gameId: string }) {
   const scores = scoresFrom(snap.scores);
 
   return (
-    <Table
-      view={view}
-      label={ruleset.handSpec(view.progress).label}
-      subtitle={`Room ${snap.roomCode}`}
-      names={names}
-      coach={coach}
-      tutorOn={tutorOn}
-      onToggleTutor={() => setTutorOn((v) => !v)}
-      onAct={(a) => void send(a)}
-      onNextHand={() => {
-        if (gameOver) {
-          router.push(`/r/${snap.roomCode}`);
-          return;
-        }
+    <>
+      <Notice text={notice} onDone={clearNotice} />
+      <Table
+        view={view}
+        label={ruleset.handSpec(view.progress).label}
+        subtitle={`Room ${snap.roomCode}`}
+        names={names}
+        coach={coach}
+        tutorOn={tutorOn}
+        onToggleTutor={() => setTutorOn((v) => !v)}
+        onAct={(a) => void send(a)}
+        onNextHand={() => {
+          if (gameOver) {
+            router.push(`/r/${snap.roomCode}`);
+            return;
+          }
         setProgress((p) => ({ ...p, handsFinished: p.handsFinished + 1, wins: p.wins + (view.result?.type === 'win' && view.result.winner === view.me ? 1 : 0) }));
-        void send({ type: 'nextHand' });
-      }}
-      claimMs={claimMs}
-      gameOver={gameOver}
-      scores={scores}
-      handsPerRound={ruleset.handsPerRound}
-    />
+          void send({ type: 'nextHand' });
+        }}
+        claimMs={claimMs}
+        gameOver={gameOver}
+        scores={scores}
+        handsPerRound={ruleset.handsPerRound}
+      />
+    </>
   );
+}
+
+/** The engine's reasons, in the player's words. */
+const TOO_LATE = new Set(['already responded', 'no discard to claim', 'no claims pending', 'not your turn', 'stale version']);
+function explain(err: ApiError, action: ClientAction): string {
+  if (TOO_LATE.has(err.message)) {
+    if (action.type === 'claim')
+      return action.claim.type === 'win' ? 'Too late: the window closed before your Mahjong reached the table.' : 'Too late: the window closed before that reached the table.';
+    return 'Too late: the table had moved on before that reached it.';
+  }
+  return `The table did not take that: ${err.message}.`;
 }

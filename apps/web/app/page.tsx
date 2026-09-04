@@ -1,30 +1,27 @@
 import Link from 'next/link';
+import { HeroTiles } from '@/components/hero-tiles';
 import { JoinForm } from '@/components/join-form';
 
 export default function Home() {
   return (
-    <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-between px-6 py-10">
-      <header className="space-y-3 pt-11">
-        <p className="eyebrow">Society</p>
-        <h1 className="font-display text-5xl leading-none text-ivory-50">Mahjong</h1>
-        <p className="text-ivory-200/80 text-base leading-normal">
-          Mahjong with your friends, wherever they are. Any table&rsquo;s rules, and a tutor who sits with you for your first rounds.
-        </p>
+    <main className="landing">
+      <header className="hero">
+        <p className="eyebrow eyebrow-quiet">Society</p>
+        <h1 className="font-display">Mahjong</h1>
+        <p className="lede">A table for you and your friends, wherever they are. Karachi rules first, and a tutor who sits with you for your first hands.</p>
       </header>
-      <nav className="space-y-4">
-        <div className="space-y-2">
-          <Link href="/room" className="block rounded-2xl bg-ivory-50 px-5 py-4 text-center text-lg font-medium text-ink-900 shadow-lg transition hover:translate-y-[-1px]">
-            Host a table
-          </Link>
-          <p className="text-center text-sm text-ivory-200/60">Get a code, send the link, bots fill any empty seats.</p>
-        </div>
+
+      <HeroTiles />
+
+      <nav className="actions">
+        <Link href="/room" className="btn btn-primary btn-block min-h-[52px] text-[18px]">
+          Host a table
+        </Link>
+        <p className="hint">You get a code. Friends open the link, give a name, and sit down. Bots take any empty seats.</p>
         <JoinForm />
-        <div className="space-y-2 pt-2">
-          <Link href="/play/solo" className="block text-center text-base text-ivory-100/90 underline decoration-ivory-200/40 underline-offset-4">
-            Or play your first hand alone
-          </Link>
-          <p className="text-center text-sm text-ivory-200/60">Three bots, Karachi rules, no sign-in needed.</p>
-        </div>
+        <Link href="/play/solo" className="link-quiet">
+          Or play a hand alone first
+        </Link>
       </nav>
     </main>
   );
