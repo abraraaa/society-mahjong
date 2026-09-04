@@ -24,6 +24,7 @@ import { ClaimSheet } from '@/components/claim-sheet';
 import { Coach, CoachLine } from '@/components/coach';
 import { River } from '@/components/river';
 import { riverOrder } from '@/lib/river';
+import { tableFlow } from '@/lib/table-flow';
 import { analyseFor, coachFor, stageFor, type CoachState } from '@/lib/coach';
 
 /** Custom properties are not part of React's CSSProperties, so name the one we set. */
@@ -65,7 +66,8 @@ export function SoloTable({ seed }: { seed: string }) {
 
   const view = useMemo(() => viewFor(state, ruleset, ME), [state]);
   const legal = view.legal;
-  const myMove = legal.discard || legal.claims || legal.exchange || legal.win;
+  const flow = tableFlow(state, legal, ME);
+  const myMove = flow === 'mine';
 
   // The analysis is the expensive part (a bounded search per pattern), so it is
   // memoised on the state it was taken from and handed to the coach.
@@ -75,10 +77,13 @@ export function SoloTable({ seed }: { seed: string }) {
 
   // Let bots act whenever it is not our move, paced so the table reads as a conversation.
   useEffect(() => {
-    if (state.phase === 'finished' || myMove) return;
-    const t = setTimeout(() => setState((s) => botStep(s)), 450);
+    if (flow === 'over' || flow === 'mine') return;
+    // Nothing claimable for us, but the engine still wants our response before
+    // the window can close; it is given without the bots' pause.
+    const autoPass = (s: HandState) => (s.phase === 'claim' && s.claims[ME] === undefined ? reduce(s, { type: 'pass', seat: ME }, ruleset) : s);
+    const t = flow === 'auto-pass' ? setTimeout(() => setState(autoPass), 0) : setTimeout(() => setState((s) => botStep(s)), 450);
     return () => clearTimeout(t);
-  }, [state, myMove]);
+  }, [state, flow]);
 
   const act = (a: Action) => {
     setSelected(null);
@@ -252,7 +257,7 @@ export function SoloTable({ seed }: { seed: string }) {
         </div>
       </div>
 
-      {state.phase === 'claim' && legal.claims && legal.claims.length > 0 && state.lastDiscard && (
+      {flow === 'mine' && legal.claims && state.lastDiscard && (
         <ClaimSheet
           discardKind={state.lastDiscard.kind}
           discarderName={NAMES[state.lastDiscard.from]}
