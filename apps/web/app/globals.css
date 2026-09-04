@@ -854,3 +854,38 @@ b .term {
   padding-top: 14px;
   border-top: 1px solid rgb(251 247 238 / 0.12);
 }
+
+/* Running score on a seat pill, and the standings on the result sheet. */
+.seat .score {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: rgb(251 247 238 / 0.7);
+  white-space: nowrap;
+}
+.standings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.standings .row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+.standings .row.is-me {
+  background: rgb(251 247 238 / 0.08);
+}
+.standings .delta {
+  color: rgb(251 247 238 / 0.6);
+  min-width: 4.5em;
+  text-align: right;
+}
+.standings .total {
+  min-width: 5em;
+  text-align: right;
+  font-weight: 500;
+}

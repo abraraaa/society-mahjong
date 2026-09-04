@@ -42,6 +42,7 @@ function snapshot(game: GameRow, room: RoomRow, version: number, deadlines: Dead
     version,
     deadlines,
     seats: publicSeats(room.seats),
+    scores: room.ledger.length === 4 ? room.ledger : [0, 0, 0, 0],
     me,
     view: me === null ? publicView(state) : viewFor(state, ruleset, me),
     status: game.status,
@@ -100,9 +101,10 @@ export async function actOnGame(gameId: string, userId: string | null, action: C
   // The durable log: player actions per hand, results when a hand ends.
   if (action && action.type !== 'nextHand') await appendAction(gameId, live.state.progress.handIndex, action);
   if (action?.type === 'nextHand' && !result.gameOver) await openHand(gameId, result.state);
-  if (!wasFinished && result.state.phase === 'finished') await closeHand(gameId, result.state);
+  let settledRoom = room;
+  if (!wasFinished && result.state.phase === 'finished') settledRoom = { ...room, ledger: await closeHand(gameId, room, result.state) };
   if (result.gameOver) await finishGame(gameId, room.id);
 
   await broadcast([gamePoke(gameId, version, { phase: result.state.phase, turn: result.state.turn, seq: result.state.seq, gameOver: result.gameOver })]);
-  return snapshot({ ...game, status: result.gameOver ? 'finished' : game.status }, room, version, result.deadlines, result.state, me, now);
+  return snapshot({ ...game, status: result.gameOver ? 'finished' : game.status }, settledRoom, version, result.deadlines, result.state, me, now);
 }

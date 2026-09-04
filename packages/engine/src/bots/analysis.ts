@@ -18,8 +18,25 @@ import { simpleBot } from './simple';
  * It still sees only its own seat: a PrivatePlayerView, never the wall or
  * anyone else's tiles.
  */
-export function analysisBot(view: PrivatePlayerView, ruleset: Ruleset): Action | null {
+export interface BotOptions {
+  /**
+   * `sharp` plays the analysis straight. `gentle` is company for a first-timer:
+   * it sometimes lets a useful tile go and sometimes misses a claim, the way a
+   * relative who has had two cups of chai does. Never worse than legal.
+   */
+  readonly strength?: 'sharp' | 'gentle';
+  /** source of randomness for `gentle`; defaults to Math.random */
+  readonly random?: () => number;
+}
+
+/** How often a gentle bot fumbles: a loose discard, a claim not taken. */
+const GENTLE_LOOSE_DISCARD = 0.35;
+const GENTLE_MISSED_CLAIM = 0.3;
+
+export function analysisBot(view: PrivatePlayerView, ruleset: Ruleset, options: BotOptions = {}): Action | null {
   const { legal, me: seat } = view;
+  const gentle = options.strength === 'gentle';
+  const random = options.random ?? Math.random;
   const spec = ruleset.handSpec(view.progress);
   const ctx = { seatWind: view.players[seat].seatWind, roundWind: view.progress.roundWind };
   const hand: HandInput = { concealed: view.concealed, melds: view.players[seat].melds };
@@ -46,7 +63,8 @@ export function analysisBot(view: PrivatePlayerView, ruleset: Ruleset): Action |
       const away = awayOf(analyse(after));
       if (!best || away < best.away) best = { claim, away };
     }
-    return best && best.away < before ? { type: 'claim', seat, claim: best.claim } : { type: 'pass', seat };
+    if (best && best.away < before && !(gentle && random() < GENTLE_MISSED_CLAIM)) return { type: 'claim', seat, claim: best.claim };
+    return { type: 'pass', seat };
   }
 
   if (legal.win) return { type: 'declareWin', seat };
@@ -59,6 +77,13 @@ export function analysisBot(view: PrivatePlayerView, ruleset: Ruleset): Action |
     if (kong) return { type: 'declareKong', seat, tile: kong };
   }
   if (legal.discard && legal.discard.length > 0) {
+    if (gentle && random() < GENTLE_LOOSE_DISCARD) {
+      // One of the three least useful tiles rather than the least: still
+      // sensible-looking, just not the best, which is what gives a beginner room.
+      const loose = a.ratings.slice(0, 3);
+      const pick = loose[Math.floor(random() * loose.length)];
+      if (pick) return { type: 'discard', seat, tile: pick.kind };
+    }
     const tile = a.bestDiscard ?? a.ratings[0]?.kind;
     return tile ? { type: 'discard', seat, tile } : simpleBot(view);
   }

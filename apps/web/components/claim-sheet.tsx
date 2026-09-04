@@ -47,13 +47,16 @@ export function ClaimSheet({
     onPassRef.current = onPass;
   });
 
+  const win = options.find((o) => o.type === 'win');
+  // A winning tile is never taken away by the clock on a solo table; a live
+  // table's server deadline still applies, and is long enough to read the sheet.
+  const timed = !win;
   useEffect(() => {
+    if (!timed) return;
     const t = setTimeout(() => onPassRef.current(), claimMs);
     return () => clearTimeout(t);
     // one countdown per discard: discardKind + discarderName changes whenever a new one arrives
-  }, [discardKind, discarderName, claimMs]);
-
-  const win = options.find((o) => o.type === 'win');
+  }, [discardKind, discarderName, claimMs, timed]);
   const byType = (t: ClaimType) => options.find((o) => o.type === t);
   const advised = coach.action.kind === 'claim' ? coach.action.option : null;
   const grid = GRID.filter((type) => type !== 'chow' || coach.goal.chowsClaimable);
@@ -63,9 +66,11 @@ export function ClaimSheet({
       <div className="scrim" />
       <div className="sheet">
         <div className="grabber" />
-        <div className="timer mb-4" style={{ '--claim-seconds': `${Math.round(claimMs / 1000)}s` } as React.CSSProperties}>
-          <i />
-        </div>
+        {timed && (
+          <div className="timer mb-4" style={{ '--claim-seconds': `${Math.round(claimMs / 1000)}s` } as React.CSSProperties}>
+            <i />
+          </div>
+        )}
         <div className="mb-4 flex items-center gap-4">
           <Tile kind={discardKind} size="lg" />
           <div className="flex flex-col gap-1">

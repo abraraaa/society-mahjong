@@ -10,6 +10,7 @@ import { ApiError, api, listen } from '@/lib/live/client';
 import { isPrivate, type GameSnapshot } from '@/lib/live/snapshot';
 import type { ClientAction } from '@/lib/live/types';
 import { ensureSession, rememberName, storedName } from '@/lib/supabase/session';
+import { scoresFrom } from '@/lib/ledger';
 
 interface Progress {
   readonly handsFinished: number;
@@ -139,6 +140,9 @@ export function LiveTable({ gameId }: { gameId: string }) {
   }
 
   const gameOver = snap.status === 'finished';
+  // The server settles the room's ledger in the request that finishes the hand,
+  // so a snapshot of a finished hand already carries the settled totals.
+  const scores = scoresFrom(snap.scores);
 
   return (
     <Table
@@ -160,6 +164,8 @@ export function LiveTable({ gameId }: { gameId: string }) {
       }}
       claimMs={claimMs}
       gameOver={gameOver}
+      scores={scores}
+      handsPerRound={ruleset.handsPerRound}
     />
   );
 }

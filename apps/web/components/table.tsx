@@ -7,6 +7,7 @@ import { ClaimSheet } from '@/components/claim-sheet';
 import { Coach, CoachLine, TermProvider, useOpenTerm } from '@/components/coach';
 import { River } from '@/components/river';
 import { riverOrder } from '@/lib/river';
+import { NO_SCORES, handDeltas, signed, standings, type Scores } from '@/lib/ledger';
 import type { CoachState } from '@/lib/coach';
 
 /** What a seat can send: every engine action except the server's own `resolveClaims`. */
@@ -34,6 +35,10 @@ export interface TableProps {
   readonly gameOver?: boolean;
   /** shown under the title, e.g. the room code */
   readonly subtitle?: string;
+  /** running totals; the seat pills and the result sheet show them */
+  readonly scores?: Scores;
+  /** how many hands a round has, for the "hand 2 of 4" counter */
+  readonly handsPerRound?: number;
 }
 
 /**
@@ -49,9 +54,13 @@ export function Table(props: TableProps) {
   );
 }
 
-function TableInner({ view, label, names, coach, tutorOn, onToggleTutor, onAct, onNextHand, claimMs, gameOver, subtitle }: TableProps) {
+const ROUND_NAME: Record<string, string> = { E: 'East', S: 'South', W: 'West', N: 'North' };
+
+function TableInner({ view, label, names, coach, tutorOn, onToggleTutor, onAct, onNextHand, claimMs, gameOver, subtitle, scores = NO_SCORES, handsPerRound = 4 }: TableProps) {
   const ME = view.me;
   const openTerm = useOpenTerm();
+  const counter = `${ROUND_NAME[view.progress.roundWind] ?? view.progress.roundWind} round · hand ${view.progress.handInRound + 1} of ${handsPerRound}`;
+  const sub = subtitle ? `${subtitle} · ${counter}` : counter;
   const me = view.players[ME];
   const legal = view.legal;
   const [selected, setSelected] = useState<TileKind | null>(null);
@@ -79,10 +88,12 @@ function TableInner({ view, label, names, coach, tutorOn, onToggleTutor, onAct, 
     <>
       <div className="min-w-0">
         <h1 className="font-display truncate text-xl">{label}</h1>
-        {subtitle && <p className="text-ivory-200/50 truncate text-xs">{subtitle}</p>}
+        <p className="text-ivory-200/50 truncate text-xs">{sub}</p>
       </div>
       <div className="flex flex-none items-center gap-2">
-        <span className="text-ivory-200/60 text-sm whitespace-nowrap">Wall {view.wallRemaining}</span>
+        <span className="text-ivory-200/60 text-sm whitespace-nowrap">
+          {signed(scores[ME])} · Wall {view.wallRemaining}
+        </span>
         <button type="button" className={`chip${tutorOn ? ' chip-gold' : ''}`} onClick={onToggleTutor}>
           Tutor {tutorOn ? 'on' : 'off'}
         </button>
@@ -171,7 +182,15 @@ function TableInner({ view, label, names, coach, tutorOn, onToggleTutor, onAct, 
   const handStyle: HandStyle = { '--hand-n': Math.max(view.concealed.length, 1) };
 
   const seatPill = (p: typeof left, orientation?: 'column') => (
-    <SeatPill wind={p.seatWind} name={names[p.seat]} concealedCount={p.concealedCount} melds={p.melds} isTurn={view.turn === p.seat} {...(orientation ? { orientation } : {})} />
+    <SeatPill
+      wind={p.seatWind}
+      name={names[p.seat]}
+      concealedCount={p.concealedCount}
+      melds={p.melds}
+      isTurn={view.turn === p.seat}
+      score={signed(scores[p.seat])}
+      {...(orientation ? { orientation } : {})}
+    />
   );
 
   const claimOpen = view.phase === 'claim' && !!legal.claims && legal.claims.length > 0 && !!view.lastDiscard;
@@ -252,7 +271,7 @@ function TableInner({ view, label, names, coach, tutorOn, onToggleTutor, onAct, 
         <ExchangeSheet hand={view.concealed} count={legal.exchange.count} coach={coach} onDone={(tiles) => act({ type: 'exchange', seat: ME, tiles })} />
       )}
 
-      {view.phase === 'finished' && <ResultSheet coach={coach} gameOver={!!gameOver} onNext={onNextHand} />}
+      {view.phase === 'finished' && <ResultSheet coach={coach} gameOver={!!gameOver} onNext={onNextHand} view={view} names={names} scores={scores} />}
     </>
   );
 }
@@ -294,11 +313,29 @@ function ExchangeSheet({ hand, count, coach, onDone }: { hand: readonly TileKind
 
 /**
  * The debrief. A beginner learns more here than anywhere else in the hand, so it
- * shows the winning tiles laid out and names the hand the way players name it —
- * never the engine's pattern id.
+ * shows the winning tiles laid out, names the hand the way players name it —
+ * never the engine's pattern id — and says what it cost or paid. When the game
+ * is over it becomes the final table.
  */
-function ResultSheet({ coach, gameOver, onNext }: { coach: CoachState; gameOver: boolean; onNext: () => void }) {
+function ResultSheet({
+  coach,
+  gameOver,
+  onNext,
+  view,
+  names,
+  scores,
+}: {
+  coach: CoachState;
+  gameOver: boolean;
+  onNext: () => void;
+  view: PrivatePlayerView;
+  names: Readonly<Record<Seat, string>>;
+  scores: Scores;
+}) {
   const outcome = coach.outcome;
+  const deltas = handDeltas(view.result);
+  const order = standings(scores);
+  const paid = view.result?.type === 'win';
   return (
     <>
       <div className="scrim" />
@@ -315,8 +352,18 @@ function ResultSheet({ coach, gameOver, onNext }: { coach: CoachState; gameOver:
         <p className="text-ivory-100/90 text-sm">
           <CoachLine say={coach.say} />
         </p>
+        <div className="standings mt-4">
+          {order.map((seat) => (
+            <div key={seat} className={`row${seat === view.me ? ' is-me' : ''}`}>
+              <span className="who">{names[seat]}</span>
+              <span className="delta">{paid ? signed(deltas[seat]) : ''}</span>
+              <span className="total">{signed(scores[seat])}</span>
+            </div>
+          ))}
+        </div>
+        {gameOver && <p className="text-ivory-200/70 mt-3 text-center text-sm">That was the last hand of the North round. Final table above.</p>}
         <button className="btn btn-primary btn-block mt-4" onClick={onNext}>
-          {gameOver ? 'Game over — back to the room' : 'Next hand'}
+          {gameOver ? 'Play again' : 'Next hand'}
         </button>
       </div>
     </>

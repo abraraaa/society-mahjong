@@ -13,6 +13,8 @@ export interface GameSnapshot {
   readonly version: number;
   readonly deadlines: Deadlines;
   readonly seats: readonly ({ readonly kind: 'human' | 'bot'; readonly name: string } | null)[];
+  /** running totals per seat for this game, before the current hand's settlement is applied */
+  readonly scores: readonly number[];
   readonly me: Seat | null;
   readonly view: PrivatePlayerView | PublicGameView;
   readonly status: 'active' | 'finished' | 'abandoned';

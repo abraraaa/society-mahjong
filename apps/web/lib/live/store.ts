@@ -14,6 +14,8 @@ export interface RoomRow {
   readonly status: RoomStatus;
   readonly seats: Seats;
   readonly current_game_id: string | null;
+  /** running totals per seat for the current game */
+  readonly ledger: readonly number[];
 }
 
 export interface GameRow {
@@ -40,12 +42,12 @@ function fromIso(s: string | null): number | null {
 }
 
 export async function roomByCode(code: string): Promise<RoomRow | null> {
-  const { data } = await db().from('rooms').select('id, code, host_id, ruleset_id, options, status, seats, current_game_id').eq('code', code.toUpperCase()).maybeSingle();
+  const { data } = await db().from('rooms').select('id, code, host_id, ruleset_id, options, status, seats, current_game_id, ledger').eq('code', code.toUpperCase()).maybeSingle();
   return (data as RoomRow | null) ?? null;
 }
 
 export async function roomById(id: string): Promise<RoomRow | null> {
-  const { data } = await db().from('rooms').select('id, code, host_id, ruleset_id, options, status, seats, current_game_id').eq('id', id).maybeSingle();
+  const { data } = await db().from('rooms').select('id, code, host_id, ruleset_id, options, status, seats, current_game_id, ledger').eq('id', id).maybeSingle();
   return (data as RoomRow | null) ?? null;
 }
 
@@ -54,7 +56,7 @@ export async function createRoom(input: { code: string; hostId: string; hostName
   const { data, error } = await db()
     .from('rooms')
     .insert({ code: input.code, host_id: input.hostId, ruleset_id: input.rulesetId, options: input.options, seats })
-    .select('id, code, host_id, ruleset_id, options, status, seats, current_game_id')
+    .select('id, code, host_id, ruleset_id, options, status, seats, current_game_id, ledger')
     .single();
   if (error) throw error;
   return data as RoomRow;
@@ -80,7 +82,7 @@ export async function startGame(room: RoomRow, seed: string, seats: Seats, state
   if (e2) throw e2;
   const { error: e3 } = await client.from('hands').insert({ game_id: g.id, hand_index: state.progress.handIndex, dealer: state.dealer, progress: state.progress });
   if (e3) throw e3;
-  const { error: e4 } = await client.from('rooms').update({ status: 'playing', current_game_id: g.id, seats, updated_at: new Date().toISOString() }).eq('id', room.id);
+  const { error: e4 } = await client.from('rooms').update({ status: 'playing', current_game_id: g.id, seats, ledger: [0, 0, 0, 0], updated_at: new Date().toISOString() }).eq('id', room.id);
   if (e4) throw e4;
   return g;
 }
@@ -120,9 +122,18 @@ export async function openHand(gameId: string, state: HandState): Promise<void> 
   if (error) throw error;
 }
 
-export async function closeHand(gameId: string, state: HandState): Promise<void> {
+/** Close the hand's row, record the result, and settle the room's ledger. Returns the settled ledger. */
+export async function closeHand(gameId: string, room: RoomRow, state: HandState): Promise<readonly number[]> {
   const result = state.result;
   const client = db();
+  const ledger = [...(room.ledger.length === 4 ? room.ledger : [0, 0, 0, 0])];
+  if (result?.type === 'win') {
+    for (const t of result.settlement.transfers) {
+      ledger[t.from]! -= t.amount;
+      ledger[t.to]! += t.amount;
+    }
+    await client.from('rooms').update({ ledger, updated_at: new Date().toISOString() }).eq('id', room.id);
+  }
   const { error } = await client
     .from('hands')
     .update({ result, settlement: result?.type === 'win' ? result.settlement : null, ended_at: new Date().toISOString() })
@@ -135,6 +146,7 @@ export async function closeHand(gameId: string, state: HandState): Promise<void>
     await client.from('hand_results').insert({ game_id: gameId, hand_index: state.progress.handIndex, winner: null, pattern_id: null, settlement: {} });
   }
   await client.rpc('bump_hands_played', { p_game_id: gameId });
+  return ledger;
 }
 
 export async function finishGame(gameId: string, roomId: string): Promise<void> {

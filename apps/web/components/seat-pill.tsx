@@ -20,6 +20,7 @@ export function SeatPill({
   melds,
   isTurn,
   orientation = 'row',
+  score,
 }: {
   wind: Wind;
   name: string;
@@ -27,6 +28,8 @@ export function SeatPill({
   melds: readonly Meld[];
   isTurn: boolean;
   orientation?: 'row' | 'column';
+  /** running total, shown signed; omitted when the table keeps no score */
+  score?: string;
 }) {
   const isColumn = orientation === 'column';
   const setSize: TileSize = isColumn ? 'sm' : '2xs';
@@ -35,6 +38,7 @@ export function SeatPill({
     <div className={`seat${isTurn ? ' is-turn' : ''}${isColumn ? ' is-column' : ''}`}>
       <span className="wind">{wind}</span>
       <span className="name">{name}</span>
+      {score !== undefined && <span className="score">{score}</span>}
       {!isColumn && <span className="held">{concealedCount}</span>}
       {isColumn && concealedCount > 0 && (
         <span className="pips">
