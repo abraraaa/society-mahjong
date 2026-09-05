@@ -41,6 +41,8 @@ export interface TableProps {
   readonly handsPerRound?: number;
   /** stand up from the table; the page decides what that means and asks first */
   readonly onLeave?: () => void;
+  /** what the result sheet's button says when the game is over; "Play again" by default */
+  readonly nextLabel?: string;
   /** the live table's ticking clock: whose deadline is running and how long is left */
   readonly clock?: { readonly kind: 'turn' | 'claim'; readonly ms: number } | null;
 }
@@ -83,6 +85,7 @@ function TableInner({
   handsPerRound = 4,
   onLeave,
   clock,
+  nextLabel,
 }: TableProps) {
   const ME = view.me;
   const openTerm = useOpenTerm();
@@ -329,7 +332,7 @@ function TableInner({
         <ExchangeSheet key={view.seq} hand={view.concealed} count={legal.exchange.count} coach={coach} onDone={(tiles) => act({ type: 'exchange', seat: ME, tiles })} />
       )}
 
-      {view.phase === 'finished' && <ResultSheet coach={coach} gameOver={!!gameOver} onNext={onNextHand} view={view} names={names} scores={scores} />}
+      {view.phase === 'finished' && <ResultSheet coach={coach} gameOver={!!gameOver} onNext={onNextHand} view={view} names={names} scores={scores} nextLabel={nextLabel} />}
     </>
   );
 }
@@ -382,10 +385,12 @@ function ResultSheet({
   view,
   names,
   scores,
+  nextLabel,
 }: {
   coach: CoachState;
   gameOver: boolean;
   onNext: () => void;
+  nextLabel?: string | undefined;
   view: PrivatePlayerView;
   names: Readonly<Record<Seat, string>>;
   scores: Scores;
@@ -421,7 +426,7 @@ function ResultSheet({
         </div>
         {gameOver && <p className="text-ivory-200/70 mt-3 text-center text-sm">That was the last hand of the North round. Final table above.</p>}
         <button className="btn btn-primary btn-block mt-4" onClick={onNext}>
-          {gameOver ? 'Play again' : 'Next hand'}
+          {gameOver ? (nextLabel ?? 'Play again') : 'Next hand'}
         </button>
       </div>
     </>

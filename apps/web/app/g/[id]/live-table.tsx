@@ -110,6 +110,19 @@ export function LiveTable({ gameId }: { gameId: string }) {
     };
   }, [name, captcha, gameId, refetch, attempt]);
 
+  // The room's own channel: when the host deals again after this game, everyone
+  // still on the old table follows to the new one.
+  const roomId = snap?.roomId ?? null;
+  useEffect(() => {
+    const supabase = supabaseRef.current;
+    if (!roomId || !supabase) return;
+    return listen(supabase, `room:${roomId}`, {
+      started: (p) => {
+        if (typeof p['gameId'] === 'string' && p['gameId'] !== gameId) router.replace(`/g/${p['gameId']}`);
+      },
+    });
+  }, [roomId, gameId, router]);
+
   // When a deadline passes and the table has not moved, ask it to resolve the clock.
   useEffect(() => {
     if (!snap) return;
@@ -250,6 +263,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
         subtitle={`Room ${snap.roomCode}`}
         onLeave={() => setLeaving('asking')}
         clock={clock}
+        nextLabel={snap.isHost ? 'Play again' : 'Back to the room'}
         names={names}
         coach={coach}
         tutorOn={tutorOn}
@@ -257,7 +271,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
         onAct={(a) => void send(a)}
         onNextHand={() => {
           if (gameOver) {
-            router.push(`/r/${snap.roomCode}`);
+            router.replace(`/r/${snap.roomCode}`);
             return;
           }
           setProgress((p) => ({ ...p, handsFinished: p.handsFinished + 1, wins: p.wins + (view.result?.type === 'win' && view.result.winner === view.me ? 1 : 0) }));

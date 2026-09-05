@@ -10,6 +10,7 @@ export function RoomWaiting({
   me,
   ruleset,
   isHost,
+  again,
   starting,
   error,
   onStart,
@@ -21,6 +22,8 @@ export function RoomWaiting({
   me: number | null;
   ruleset: string;
   isHost: boolean;
+  /** the last game is over; the same seats can go again */
+  again?: boolean;
   starting?: boolean;
   error?: string | null;
   onStart?: () => void;
@@ -73,10 +76,10 @@ export function RoomWaiting({
         {error && <p className="text-center text-sm text-red-300">{error}</p>}
         {isHost ? (
           <button className="btn btn-primary btn-block min-h-[52px] text-[18px]" onClick={onStart} disabled={starting}>
-            {starting ? 'Dealing…' : humans === 4 ? 'Start' : 'Start, bots in the empty seats'}
+            {starting ? 'Dealing…' : again ? 'Play again, same seats' : humans === 4 ? 'Start' : 'Start, bots in the empty seats'}
           </button>
         ) : (
-          <p className="text-ivory-200/60 text-center text-sm">Waiting for the host to start.</p>
+          <p className="text-ivory-200/60 text-center text-sm">{again ? 'Game over. Waiting for the host to deal again.' : 'Waiting for the host to start.'}</p>
         )}
         <p className="text-ivory-200/60 text-center text-sm">
           {humans} of 4 seated · {ruleset}

@@ -34,11 +34,13 @@ async function loadGame(gameId: string): Promise<{ game: GameRow; room: RoomRow 
   return { game, room };
 }
 
-function snapshot(game: GameRow, room: RoomRow, version: number, deadlines: Deadlines, state: Parameters<typeof publicView>[0], me: Seat | null, now: number): GameSnapshot {
+function snapshot(game: GameRow, room: RoomRow, version: number, deadlines: Deadlines, state: Parameters<typeof publicView>[0], me: Seat | null, now: number, userId: string | null = null): GameSnapshot {
   const ruleset = getRuleset(room.ruleset_id);
   return {
     gameId: game.id,
+    roomId: room.id,
     roomCode: room.code,
+    isHost: userId !== null && room.host_id === userId,
     rulesetId: room.ruleset_id,
     version,
     deadlines,
@@ -58,7 +60,7 @@ export async function viewGame(gameId: string, userId: string, now = Date.now())
   if (me === null && room.host_id !== userId) throw new HttpError(403, 'not at this table');
   const live = await loadLive(gameId);
   if (!live) throw new HttpError(404, 'game has no live state');
-  return snapshot(game, room, live.version, live.deadlines, live.state, me, now);
+  return snapshot(game, room, live.version, live.deadlines, live.state, me, now, userId);
 }
 
 /**
@@ -76,7 +78,7 @@ export async function actOnGame(gameId: string, userId: string | null, action: C
   const live = await loadLive(gameId);
   if (!live) throw new HttpError(404, 'game has no live state');
   if (expectedVersion !== null && live.version !== expectedVersion) {
-    throw new HttpError(409, 'stale version', snapshot(game, room, live.version, live.deadlines, live.state, me, now));
+    throw new HttpError(409, 'stale version', snapshot(game, room, live.version, live.deadlines, live.state, me, now, userId));
   }
 
   const policy = policyFor((await stagesFor(room.seats)) as CoachStage[], room.options['strict'] === true);
@@ -89,13 +91,13 @@ export async function actOnGame(gameId: string, userId: string | null, action: C
     throw err;
   }
 
-  if (!result.changed && !result.gameOver) return snapshot(game, room, live.version, live.deadlines, live.state, me, now);
+  if (!result.changed && !result.gameOver) return snapshot(game, room, live.version, live.deadlines, live.state, me, now, userId);
 
   const wasFinished = live.state.phase === 'finished';
   const ok = await saveLive(gameId, live.version, result.state, result.deadlines);
   if (!ok) {
     const fresh = await loadLive(gameId);
-    throw new HttpError(409, 'lost the race', fresh ? snapshot(game, room, fresh.version, fresh.deadlines, fresh.state, me, now) : undefined);
+    throw new HttpError(409, 'lost the race', fresh ? snapshot(game, room, fresh.version, fresh.deadlines, fresh.state, me, now, userId) : undefined);
   }
   const version = live.version + 1;
 
@@ -107,7 +109,7 @@ export async function actOnGame(gameId: string, userId: string | null, action: C
   if (result.gameOver) await finishGame(gameId, room.id);
 
   await broadcast([gamePoke(gameId, version, { phase: result.state.phase, turn: result.state.turn, seq: result.state.seq, gameOver: result.gameOver })]);
-  const snap = snapshot({ ...game, status: result.gameOver ? 'finished' : game.status }, settledRoom, version, result.deadlines, result.state, me, now);
+  const snap = snapshot({ ...game, status: result.gameOver ? 'finished' : game.status }, settledRoom, version, result.deadlines, result.state, me, now, userId);
   return result.standIns.length > 0 ? { ...snap, standIns: result.standIns } : snap;
 }
 
