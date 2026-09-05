@@ -1016,3 +1016,11 @@ b .term {
     transform: translate(-50%, 0);
   }
 }
+
+/* The quiet link as a button (Leave the room): no button chrome at all. */
+button.link-quiet {
+  background: none;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}

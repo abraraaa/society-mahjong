@@ -39,6 +39,8 @@ export interface TableProps {
   readonly scores?: Scores;
   /** how many hands a round has, for the "hand 2 of 4" counter */
   readonly handsPerRound?: number;
+  /** stand up from the table; the page decides what that means and asks first */
+  readonly onLeave?: () => void;
 }
 
 /**
@@ -55,7 +57,22 @@ export function Table(props: TableProps) {
 }
 const ROUND_NAME: Record<string, string> = { E: 'East', S: 'South', W: 'West', N: 'North' };
 
-function TableInner({ view, label, names, coach, tutorOn, onToggleTutor, onAct, onNextHand, claimMs, gameOver, subtitle, scores = NO_SCORES, handsPerRound = 4 }: TableProps) {
+function TableInner({
+  view,
+  label,
+  names,
+  coach,
+  tutorOn,
+  onToggleTutor,
+  onAct,
+  onNextHand,
+  claimMs,
+  gameOver,
+  subtitle,
+  scores = NO_SCORES,
+  handsPerRound = 4,
+  onLeave,
+}: TableProps) {
   const ME = view.me;
   const openTerm = useOpenTerm();
   const counter = `${ROUND_NAME[view.progress.roundWind] ?? view.progress.roundWind} round · hand ${view.progress.handInRound + 1} of ${handsPerRound} · wall ${view.wallRemaining}`;
@@ -97,6 +114,11 @@ function TableInner({ view, label, names, coach, tutorOn, onToggleTutor, onAct, 
         <button type="button" className="chip" aria-label="Glossary" onClick={() => openTerm('all')}>
           ?
         </button>
+        {onLeave && (
+          <button type="button" className="chip" onClick={onLeave}>
+            Leave
+          </button>
+        )}
       </div>
     </>
   );

@@ -116,7 +116,12 @@ describe('a table with one human and three bots', () => {
 
 describe('four bots', () => {
   it('settle plays the hand to the end when no human is seated', () => {
-    const bots: Seats = [{ kind: 'bot', name: 'A' }, { kind: 'bot', name: 'B' }, { kind: 'bot', name: 'C' }, { kind: 'bot', name: 'D' }];
+    const bots: Seats = [
+      { kind: 'bot', name: 'A' },
+      { kind: 'bot', name: 'B' },
+      { kind: 'bot', name: 'C' },
+      { kind: 'bot', name: 'D' },
+    ];
     const game = dealFirstHand(karachi, bots, 'live-8', policy, T0);
     expect(settle(game.state, karachi, bots).phase).toBe('finished');
   });
@@ -177,5 +182,29 @@ describe('a winning tile on the clock', () => {
     expect(s).not.toBeNull();
     expect(s!.phase).toBe('finished');
     expect(s!.result).toMatchObject({ type: 'win', winner: ME });
+  });
+});
+
+describe('coming back after being away', () => {
+  it('reports what the stand-in did, so the table can tell the player', { timeout: 60_000 }, () => {
+    let game: LiveGame = dealFirstHand(karachi, seats, 'away-1', policy, T0);
+    // Play until it is my turn to discard, then vanish for an hour.
+    for (let i = 0; i < 100 && !(game.state.phase === 'turn' && game.state.turn === ME); i++) {
+      const a = analysisBot(viewFor(game.state, karachi, ME), karachi) ?? { type: 'pass' as const, seat: ME };
+      const r = step({ game, ruleset: karachi, seats, policy, now: T0, action: a as never, actor: ME });
+      game = { state: r.state, deadlines: r.deadlines };
+    }
+    expect(game.state.turn).toBe(ME);
+    const later = T0 + 3600_000;
+    const r = step({ game, ruleset: karachi, seats, policy, now: later });
+    expect(r.changed).toBe(true);
+    expect(r.standIns.length).toBeGreaterThan(0);
+    expect(r.standIns[0]!.seat).toBe(ME);
+    expect(['discard', 'declareWin', 'declareKong']).toContain(r.standIns[0]!.action.type);
+    // and the table is back at my next decision with a full clock
+    expect((r.deadlines.turn ?? r.deadlines.claim)!).toBeGreaterThan(later);
+    // a step with nothing expired reports nothing
+    const quiet = step({ game: { state: r.state, deadlines: r.deadlines }, ruleset: karachi, seats, policy, now: later + 1000 });
+    expect(quiet.standIns).toEqual([]);
   });
 });

@@ -14,6 +14,7 @@ export function RoomWaiting({
   error,
   onStart,
   onShare,
+  onLeave,
 }: {
   code: string;
   seats: readonly LobbySeat[];
@@ -24,6 +25,7 @@ export function RoomWaiting({
   error?: string | null;
   onStart?: () => void;
   onShare?: () => void;
+  onLeave?: () => void;
 }) {
   const humans = seats.filter((s) => s?.kind === 'human').length;
   return (
@@ -80,6 +82,13 @@ export function RoomWaiting({
           {humans} of 4 seated · {ruleset}
         </p>
       </div>
+      {onLeave && (
+        <p className="mt-4 text-center">
+          <button type="button" className="link-quiet" onClick={onLeave}>
+            Leave the room
+          </button>
+        </p>
+      )}
     </main>
   );
 }

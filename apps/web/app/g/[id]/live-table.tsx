@@ -2,9 +2,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getRuleset, type Seat } from '@society/engine';
+import { getRuleset, tileName, type Action, type Seat } from '@society/engine';
 import { Table } from '@/components/table';
 import { NameGate } from '@/components/name-gate';
+import { ConfirmSheet } from '@/components/confirm-sheet';
 import { Notice } from '@/components/notice';
 import { Trouble, Waiting } from '@/components/trouble';
 import { analyseFor, coachFor, stageFor, type CoachState } from '@/lib/coach';
@@ -35,6 +36,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
   // Why the last tap did nothing, shown over the table for a moment.
   const [notice, setNotice] = useState<string | null>(null);
   const clearNotice = useCallback(() => setNotice(null), []);
+  const [leaving, setLeaving] = useState<'asking' | 'going' | null>(null);
   const [tutorOn, setTutorOn] = useState(true);
   const [progress, setProgress] = useState<Progress>({ handsFinished: 0, wins: 0, discardsMade: 0 });
   const supabaseRef = useRef<SupabaseClient | null>(null);
@@ -98,8 +100,21 @@ export function LiveTable({ gameId }: { gameId: string }) {
     const due = [snap.deadlines.claim, snap.deadlines.turn].filter((d): d is number => d !== null);
     if (due.length === 0) return;
     const skew = Date.now() - snap.now; // client clock minus server clock, roughly
-    const wait = Math.max(500, Math.min(...due) + skew - Date.now() + 750);
-    const t = setTimeout(() => api.tick(gameId).then(take).catch(() => refetch()), wait);
+    // A clock that has already run out (a phone waking up) is resolved at once,
+    // so the stale table is on screen for as short a time as possible.
+    const wait = Math.max(0, Math.min(...due) + skew - Date.now() + 750);
+    const t = setTimeout(
+      () =>
+        api
+          .tick(gameId)
+          .then((s) => {
+            take(s);
+            const mine = s.standIns?.find((x) => x.seat === s.me);
+            if (mine) setNotice(standInText(mine.action));
+          })
+          .catch(() => refetch()),
+      wait,
+    );
     return () => clearTimeout(t);
   }, [snap, gameId, take, refetch]);
 
@@ -114,7 +129,10 @@ export function LiveTable({ gameId }: { gameId: string }) {
   }, [snap]);
   const analysis = useMemo(() => (view && ruleset ? analyseFor(view, ruleset) : null), [view, ruleset]);
   const stage = stageFor(progress);
-  const coach: CoachState | null = useMemo(() => (view && ruleset && analysis ? coachFor({ view, ruleset, analysis, stage, names }) : null), [view, ruleset, analysis, stage, names]);
+  const coach: CoachState | null = useMemo(
+    () => (view && ruleset && analysis ? coachFor({ view, ruleset, analysis, stage, names }) : null),
+    [view, ruleset, analysis, stage, names],
+  );
 
   // A 409 means the table changed under us. If nothing has actually happened
   // at the table since (same event sequence: a timer sweep, say, that found
@@ -171,6 +189,21 @@ export function LiveTable({ gameId }: { gameId: string }) {
     return <Waiting>{snap && !view ? 'You are watching this table, not seated at it.' : 'Setting the table…'}</Waiting>;
   }
 
+  if (snap.status === 'abandoned') {
+    return <Trouble title="The table has closed." message="Everyone has left this game. Host a new one whenever you like." />;
+  }
+
+  const leave = async () => {
+    setLeaving('going');
+    try {
+      await api.leave(gameId);
+      router.replace('/');
+    } catch (err) {
+      setLeaving(null);
+      setNotice(err instanceof ApiError ? `Could not leave: ${err.message}.` : 'Could not leave. Check the connection and try again.');
+    }
+  };
+
   const gameOver = snap.status === 'finished';
   // The server settles the room's ledger in the request that finishes the hand,
   // so a snapshot of a finished hand already carries the settled totals.
@@ -179,10 +212,21 @@ export function LiveTable({ gameId }: { gameId: string }) {
   return (
     <>
       <Notice text={notice} onDone={clearNotice} />
+      {leaving && (
+        <ConfirmSheet
+          title="Leave the table?"
+          body="A bot plays your seat from here, so the others can carry on. If you are the last one here, the game closes."
+          confirmLabel="Leave"
+          busy={leaving === 'going'}
+          onConfirm={leave}
+          onCancel={() => setLeaving(null)}
+        />
+      )}
       <Table
         view={view}
         label={ruleset.handSpec(view.progress).label}
         subtitle={`Room ${snap.roomCode}`}
+        onLeave={() => setLeaving('asking')}
         names={names}
         coach={coach}
         tutorOn={tutorOn}
@@ -193,7 +237,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
             router.push(`/r/${snap.roomCode}`);
             return;
           }
-        setProgress((p) => ({ ...p, handsFinished: p.handsFinished + 1, wins: p.wins + (view.result?.type === 'win' && view.result.winner === view.me ? 1 : 0) }));
+          setProgress((p) => ({ ...p, handsFinished: p.handsFinished + 1, wins: p.wins + (view.result?.type === 'win' && view.result.winner === view.me ? 1 : 0) }));
           void send({ type: 'nextHand' });
         }}
         claimMs={claimMs}
@@ -203,6 +247,26 @@ export function LiveTable({ gameId }: { gameId: string }) {
       />
     </>
   );
+}
+
+/** What a stand-in did while the player was away, in the player's words. */
+function standInText(a: Action): string {
+  switch (a.type) {
+    case 'discard':
+      return `You ran out of time, so a stand-in discarded ${tileName(a.tile)} for you.`;
+    case 'pass':
+      return 'You ran out of time, so a stand-in passed on that discard for you.';
+    case 'claim':
+      return a.claim.type === 'win' ? 'You ran out of time, so a stand-in took your Mahjong for you.' : `You ran out of time, so a stand-in took a ${a.claim.type} for you.`;
+    case 'exchange':
+      return 'You ran out of time, so a stand-in made the exchange for you.';
+    case 'declareWin':
+      return 'You ran out of time, so a stand-in declared your Mahjong.';
+    case 'declareKong':
+      return 'You ran out of time, so a stand-in declared a kong for you.';
+    default:
+      return 'You ran out of time, so a stand-in moved for you.';
+  }
 }
 
 /** The engine's reasons, in the player's words. */

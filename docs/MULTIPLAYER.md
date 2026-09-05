@@ -176,6 +176,18 @@ countdown from frightening anyone:
    it, and the claim sheet shows the clock in every case so nobody is timed
    out by a deadline they could not see.
 
+When a clock runs out on someone who has gone, the response to whichever
+request resolved it carries what the stand-in did, and their own table
+says so in a line at the top ("You ran out of time, so a stand-in
+discarded 5 bamboo for you") rather than leaving them to work out why the
+hand looks different.
+
+**Leaving.** Any seat can stand up from a live table (Leave, top right,
+with a confirmation). A bot takes the seat for the rest of the game so the
+others carry on; when the last human leaves, the game is marked
+`abandoned` and the room `finished`, and anyone still on the page sees
+"The table has closed". In the lobby, leaving simply empties the seat.
+
 Turn limits nudge at 20 seconds remaining. After two expired turns the seat
 is handed to a bot stand-in and the human reclaims it on return. No
 auto-discard by default, which feels punitive at a friends' table. A room

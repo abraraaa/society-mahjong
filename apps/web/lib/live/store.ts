@@ -82,7 +82,10 @@ export async function startGame(room: RoomRow, seed: string, seats: Seats, state
   if (e2) throw e2;
   const { error: e3 } = await client.from('hands').insert({ game_id: g.id, hand_index: state.progress.handIndex, dealer: state.dealer, progress: state.progress });
   if (e3) throw e3;
-  const { error: e4 } = await client.from('rooms').update({ status: 'playing', current_game_id: g.id, seats, ledger: [0, 0, 0, 0], updated_at: new Date().toISOString() }).eq('id', room.id);
+  const { error: e4 } = await client
+    .from('rooms')
+    .update({ status: 'playing', current_game_id: g.id, seats, ledger: [0, 0, 0, 0], updated_at: new Date().toISOString() })
+    .eq('id', room.id);
   if (e4) throw e4;
   return g;
 }
@@ -118,7 +121,10 @@ export async function appendAction(gameId: string, handIndex: number, action: un
 export async function openHand(gameId: string, state: HandState): Promise<void> {
   const { error } = await db()
     .from('hands')
-    .upsert({ game_id: gameId, hand_index: state.progress.handIndex, dealer: state.dealer, progress: state.progress }, { onConflict: 'game_id,hand_index', ignoreDuplicates: true });
+    .upsert(
+      { game_id: gameId, hand_index: state.progress.handIndex, dealer: state.dealer, progress: state.progress },
+      { onConflict: 'game_id,hand_index', ignoreDuplicates: true },
+    );
   if (error) throw error;
 }
 
@@ -141,7 +147,9 @@ export async function closeHand(gameId: string, room: RoomRow, state: HandState)
     .eq('hand_index', state.progress.handIndex);
   if (error) throw error;
   if (result?.type === 'win') {
-    await client.from('hand_results').insert({ game_id: gameId, hand_index: state.progress.handIndex, winner: result.winner, pattern_id: result.patternId, settlement: result.settlement });
+    await client
+      .from('hand_results')
+      .insert({ game_id: gameId, hand_index: state.progress.handIndex, winner: result.winner, pattern_id: result.patternId, settlement: result.settlement });
   } else {
     await client.from('hand_results').insert({ game_id: gameId, hand_index: state.progress.handIndex, winner: null, pattern_id: null, settlement: {} });
   }
@@ -152,6 +160,13 @@ export async function closeHand(gameId: string, room: RoomRow, state: HandState)
 export async function finishGame(gameId: string, roomId: string): Promise<void> {
   const client = db();
   await client.from('games').update({ status: 'finished', finished_at: new Date().toISOString(), ended_at: new Date().toISOString() }).eq('id', gameId);
+  await client.from('rooms').update({ status: 'finished', updated_at: new Date().toISOString() }).eq('id', roomId);
+}
+
+/** The last human stood up: the game ends without a result and the room closes. */
+export async function abandonGame(gameId: string, roomId: string): Promise<void> {
+  const client = db();
+  await client.from('games').update({ status: 'abandoned', ended_at: new Date().toISOString() }).eq('id', gameId);
   await client.from('rooms').update({ status: 'finished', updated_at: new Date().toISOString() }).eq('id', roomId);
 }
 
