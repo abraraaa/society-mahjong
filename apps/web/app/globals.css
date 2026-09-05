@@ -21,7 +21,7 @@
   --color-ivory-200: #e6dbc2; /* tile face shade */
   --color-ink-900: #1a1714; /* glyphs, text on ivory */
   --color-ink-700: #3b342c;
-  --color-brass-400: #d8b45a; /* attention only, never a fill */
+  --color-brass-400: #d8b45a; /* exceptional states only: a claimable discard, the coach's tile, Mahjong, a clock about to run out */
   --color-brass-500: #c09a3c;
   --color-lac-500: #b3352d; /* 萬, 中, dots */
   --color-jade-500: #2f8f6f; /* bamboo, 發 */
@@ -78,7 +78,8 @@ body {
   overscroll-behavior: none;
 }
 a {
-  color: var(--color-brass-400);
+  color: var(--color-ivory-100);
+  text-decoration-color: rgb(230 219 194 / 0.5);
 }
 a:hover {
   color: var(--color-ivory-50);
@@ -172,7 +173,7 @@ h3 {
     0 1px 0 rgb(255 255 255 / 0.6) inset,
     0 6px 10px rgb(0 0 0 / 0.4),
     0 14px 24px rgb(0 0 0 / 0.3);
-  outline: 2px solid var(--color-brass-400);
+  outline: 2px solid var(--color-ivory-50);
   outline-offset: 1px;
 }
 .tile[data-dim='true'] {
@@ -182,7 +183,7 @@ h3 {
   box-shadow:
     0 1px 0 rgb(255 255 255 / 0.6) inset,
     0 2px 4px rgb(0 0 0 / 0.35),
-    0 0 0 1.5px rgb(216 180 90 / 0.8);
+    0 0 0 1.5px rgb(251 247 238 / 0.85);
 }
 .tile[data-claimable='true'] {
   outline: 2px solid var(--color-brass-400);
@@ -529,7 +530,7 @@ h3 {
   color: rgb(243 236 219 / 0.7);
 }
 .seat.is-turn {
-  box-shadow: 0 0 0 1.5px var(--color-brass-400) inset;
+  box-shadow: 0 0 0 1.5px rgb(251 247 238 / 0.6) inset;
   color: var(--color-ivory-100);
 }
 .seat.is-column {
@@ -654,7 +655,7 @@ h3 {
   font: 500 12px var(--font-sans);
   letter-spacing: 0.3em;
   text-transform: uppercase;
-  color: var(--color-brass-400);
+  color: rgb(243 236 219 / 0.6);
 }
 .label {
   font: 500 11px var(--font-sans);
@@ -672,8 +673,8 @@ h3 {
   font: 500 13px var(--font-sans);
 }
 .chip-gold {
-  background: rgb(216 180 90 / 0.18);
-  color: var(--color-brass-400);
+  background: rgb(251 247 238 / 0.22);
+  color: var(--color-ivory-50);
 }
 
 /* Bottom sheet (claims) */
@@ -705,7 +706,7 @@ h3 {
 .timer > i {
   display: block;
   height: 100%;
-  background: var(--color-brass-400);
+  background: rgb(243 236 219 / 0.75);
   animation: timer-drain var(--claim-seconds) linear forwards;
 }
 @keyframes sheet-in {
@@ -817,7 +818,8 @@ b .term {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: var(--color-brass-400);
+  background: var(--color-ivory-50);
+  color: var(--color-ink-900);
   display: grid;
   place-items: center;
   font: 500 13px var(--font-display);
