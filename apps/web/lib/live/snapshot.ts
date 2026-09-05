@@ -9,7 +9,10 @@ import type { Deadlines } from './types';
  */
 export interface GameSnapshot {
   readonly gameId: string;
+  readonly roomId: string;
   readonly roomCode: string;
+  /** the room's host: the one who can deal again when the game is over */
+  readonly isHost: boolean;
   readonly rulesetId: string;
   readonly version: number;
   readonly deadlines: Deadlines;

@@ -41,6 +41,18 @@ export interface TableProps {
   readonly handsPerRound?: number;
   /** stand up from the table; the page decides what that means and asks first */
   readonly onLeave?: () => void;
+  /** what the result sheet's button says when the game is over; "Play again" by default */
+  readonly nextLabel?: string;
+  /** the live table's ticking clock: whose deadline is running and how long is left */
+  readonly clock?: { readonly kind: 'turn' | 'claim'; readonly ms: number } | null;
+}
+
+/** Under this much time left, the clock turns brass and pulses. */
+const URGENT_MS = 20_000;
+
+function mmss(ms: number): string {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
 /**
@@ -72,6 +84,8 @@ function TableInner({
   scores = NO_SCORES,
   handsPerRound = 4,
   onLeave,
+  clock,
+  nextLabel,
 }: TableProps) {
   const ME = view.me;
   const openTerm = useOpenTerm();
@@ -202,6 +216,7 @@ function TableInner({
   // actually are, which CSS can only know if we tell it.
   const handStyle: HandStyle = { '--hand-n': Math.max(view.concealed.length, 1) };
 
+  const urgent = !!clock && clock.ms <= URGENT_MS;
   const seatPill = (p: typeof left, orientation?: 'column') => (
     <SeatPill
       wind={p.seatWind}
@@ -210,11 +225,31 @@ function TableInner({
       melds={p.melds}
       isTurn={view.turn === p.seat}
       score={signed(scores[p.seat])}
+      clock={clock && clock.kind === 'turn' && view.phase === 'turn' && view.turn === p.seat ? mmss(clock.ms) : undefined}
+      urgent={urgent}
       {...(orientation ? { orientation } : {})}
     />
   );
 
   const claimOpen = view.phase === 'claim' && !!legal.claims && legal.claims.length > 0 && !!view.lastDiscard;
+
+  // The line above the hand that says whose clock is running, when it is
+  // mine or when I am waiting on someone else's claim. A bot's clock never
+  // runs: the server plays it inline.
+  let clockLine: string | null = null;
+  if (clock) {
+    if (clock.kind === 'turn' && view.phase === 'turn' && view.turn === ME) clockLine = `Your turn · ${mmss(clock.ms)}`;
+    else if (clock.kind === 'turn' && view.phase === 'preplay' && legal.exchange) clockLine = `Your exchange · ${mmss(clock.ms)}`;
+    else if (clock.kind === 'claim' && view.phase === 'claim' && !claimOpen) {
+      const waiting = view.players.filter((p) => p.seat !== ME && p.seat !== view.lastDiscard?.from && !p.responded).map((p) => names[p.seat]);
+      if (waiting.length > 0) clockLine = `Waiting for ${waiting.join(' and ')} · ${mmss(clock.ms)}`;
+    }
+  }
+  const clockEl = clockLine && (
+    <p className="turn-clock" data-urgent={urgent || undefined}>
+      {clockLine}
+    </p>
+  );
 
   return (
     <>
@@ -240,6 +275,7 @@ function TableInner({
         {hasActions && <div className="action-row flex-none">{actions}</div>}
 
         <section className="hand-dock flex-none">
+          {clockEl}
           {me.melds.length > 0 && myMelds}
           <div className="hand-tray" style={handStyle}>
             {handTiles('md')}
@@ -267,6 +303,7 @@ function TableInner({
         <div className="col-span-3">{bubble}</div>
 
         <div className="hand-dock col-span-3">
+          {clockEl}
           {me.melds.length > 0 && myMelds}
           <div className="hand-rail" style={handStyle}>
             {handTiles('lg')}
@@ -295,7 +332,7 @@ function TableInner({
         <ExchangeSheet key={view.seq} hand={view.concealed} count={legal.exchange.count} coach={coach} onDone={(tiles) => act({ type: 'exchange', seat: ME, tiles })} />
       )}
 
-      {view.phase === 'finished' && <ResultSheet coach={coach} gameOver={!!gameOver} onNext={onNextHand} view={view} names={names} scores={scores} />}
+      {view.phase === 'finished' && <ResultSheet coach={coach} gameOver={!!gameOver} onNext={onNextHand} view={view} names={names} scores={scores} nextLabel={nextLabel} />}
     </>
   );
 }
@@ -348,10 +385,12 @@ function ResultSheet({
   view,
   names,
   scores,
+  nextLabel,
 }: {
   coach: CoachState;
   gameOver: boolean;
   onNext: () => void;
+  nextLabel?: string | undefined;
   view: PrivatePlayerView;
   names: Readonly<Record<Seat, string>>;
   scores: Scores;
@@ -387,7 +426,7 @@ function ResultSheet({
         </div>
         {gameOver && <p className="text-ivory-200/70 mt-3 text-center text-sm">That was the last hand of the North round. Final table above.</p>}
         <button className="btn btn-primary btn-block mt-4" onClick={onNext}>
-          {gameOver ? 'Play again' : 'Next hand'}
+          {gameOver ? (nextLabel ?? 'Play again') : 'Next hand'}
         </button>
       </div>
     </>

@@ -182,6 +182,13 @@ says so in a line at the top ("You ran out of time, so a stand-in
 discarded 5 bamboo for you") rather than leaving them to work out why the
 hand looks different.
 
+**Playing again.** When the last hand is scored the game and room are
+marked finished, the host's result sheet says "Play again" and everyone
+else's "Back to the room": both lead to the lobby, where Start (now "Play
+again, same seats") deals a fresh game for the same seats with the ledger
+back at nought. Anyone still on the old table follows the room channel's
+`started` message to the new one.
+
 **Leaving.** Any seat can stand up from a live table (Leave, top right,
 with a confirmation). A bot takes the seat for the rest of the game so the
 others carry on; when the last human leaves, the game is marked

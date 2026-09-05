@@ -19,6 +19,9 @@ export default function Home() {
         </Link>
         <p className="hint">You get a code. Friends open the link, give a name, and sit down. Bots take any empty seats.</p>
         <JoinForm />
+        <Link href="/rules" className="link-quiet">
+          How it plays
+        </Link>
         <Link href="/play/solo" className="link-quiet">
           Or play a hand alone first
         </Link>

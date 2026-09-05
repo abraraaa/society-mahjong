@@ -142,6 +142,7 @@ export function RoomLobby({ code }: { code: string }) {
       me={room.me}
       ruleset={RULESET_NAMES[room.rulesetId] ?? room.rulesetId}
       isHost={room.isHost}
+      again={room.status === 'finished'}
       onLeave={leave}
       starting={starting}
       error={error}

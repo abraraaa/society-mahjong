@@ -34,12 +34,16 @@ export async function requireRoom(code: string): Promise<RoomRow> {
   return room;
 }
 
-/** Sit the user down: their existing seat, else the first empty one. */
+/**
+ * Sit the user down: their existing seat, else the first empty one. Between
+ * games (a finished room) a bot's seat counts as empty, so a friend who turns
+ * up late can take one before the host deals again.
+ */
 export async function joinRoom(room: RoomRow, userId: string, name: string): Promise<{ room: RoomRow; seated: boolean }> {
   const existing = seatOf(room.seats, userId);
   if (existing !== null) return { room, seated: false };
-  if (room.status !== 'lobby') throw new HttpError(409, 'this table has already started');
-  const free = room.seats.findIndex((s) => s === null);
+  if (room.status === 'playing') throw new HttpError(409, 'this table has already started');
+  const free = room.seats.findIndex((s) => s === null || (room.status === 'finished' && s.kind === 'bot'));
   if (free < 0) throw new HttpError(409, 'this table is full');
   const seats = [...room.seats] as [SeatEntry, SeatEntry, SeatEntry, SeatEntry];
   seats[free] = { kind: 'human', userId, name };
