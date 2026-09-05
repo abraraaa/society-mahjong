@@ -1024,3 +1024,34 @@ button.link-quiet {
   font: inherit;
   cursor: pointer;
 }
+
+/* The live table's clock: on the acting seat's pill, and above my hand when it is mine. */
+.seat .clock {
+  margin-right: 6px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  color: rgb(243 236 219 / 0.75);
+}
+.seat.is-column .clock {
+  margin: 0;
+  font-size: 13px;
+}
+.turn-clock {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: rgb(243 236 219 / 0.55);
+}
+.seat .clock[data-urgent],
+.turn-clock[data-urgent] {
+  color: var(--color-brass-400);
+  animation: clock-pulse 1s ease-in-out infinite;
+}
+@keyframes clock-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}

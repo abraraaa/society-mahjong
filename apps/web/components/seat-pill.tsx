@@ -21,6 +21,8 @@ export function SeatPill({
   isTurn,
   orientation = 'row',
   score,
+  clock,
+  urgent,
 }: {
   wind: Wind;
   name: string;
@@ -30,6 +32,10 @@ export function SeatPill({
   orientation?: 'row' | 'column';
   /** running total, shown signed; omitted when the table keeps no score */
   score?: string;
+  /** time left on this seat's turn, "1:12"; live tables only */
+  clock?: string | undefined;
+  /** under twenty seconds: the clock turns brass and pulses */
+  urgent?: boolean | undefined;
 }) {
   const isColumn = orientation === 'column';
   const setSize: TileSize = isColumn ? 'sm' : '2xs';
@@ -39,7 +45,21 @@ export function SeatPill({
       <span className="wind">{wind}</span>
       <span className="name">{name}</span>
       {score !== undefined && <span className="score">{score}</span>}
-      {!isColumn && <span className="held">{concealedCount}</span>}
+      {!isColumn && (
+        <span className="held">
+          {clock && (
+            <b className="clock" data-urgent={urgent || undefined}>
+              {clock}
+            </b>
+          )}
+          {concealedCount}
+        </span>
+      )}
+      {isColumn && clock && (
+        <span className="clock" data-urgent={urgent || undefined}>
+          {clock}
+        </span>
+      )}
       {isColumn && concealedCount > 0 && (
         <span className="pips">
           {Array.from({ length: concealedCount }, (_, i) => (

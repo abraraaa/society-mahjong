@@ -45,13 +45,29 @@ export function LiveTable({ gameId }: { gameId: string }) {
   // How long the claim window had left when this snapshot was made, measured on
   // the server's clock so the phone's clock never enters into it.
   const [claimMs, setClaimMs] = useState<number | null>(null);
+  // The server's clock at the moment the snapshot arrived, against the phone's,
+  // so the countdown is drawn in server time and a wrong phone clock cannot
+  // show a deadline that the table does not have.
+  const [sync, setSync] = useState<{ serverNow: number; at: number } | null>(null);
+  const [now, setNow] = useState<number | null>(null);
 
   const take = useCallback((s: GameSnapshot) => {
     if (s.version < versionRef.current) return; // an older reply arriving late
     versionRef.current = s.version;
     setClaimMs(s.deadlines.claim === null ? null : s.deadlines.claim - s.now);
+    const at = Date.now();
+    setSync({ serverNow: s.now, at });
+    setNow(at);
     setSnap(s);
   }, []);
+
+  // A once-a-second tick while any clock is running, for the countdown.
+  const running = !!snap && (snap.deadlines.turn !== null || snap.deadlines.claim !== null);
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [running]);
 
   const refetch = useCallback(async () => {
     try {
@@ -204,6 +220,12 @@ export function LiveTable({ gameId }: { gameId: string }) {
     }
   };
 
+  const deadline = snap.deadlines.turn ?? snap.deadlines.claim;
+  const clock =
+    deadline !== null && sync && now !== null
+      ? { kind: snap.deadlines.turn !== null ? ('turn' as const) : ('claim' as const), ms: Math.max(0, deadline - sync.serverNow - (now - sync.at)) }
+      : null;
+
   const gameOver = snap.status === 'finished';
   // The server settles the room's ledger in the request that finishes the hand,
   // so a snapshot of a finished hand already carries the settled totals.
@@ -227,6 +249,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
         label={ruleset.handSpec(view.progress).label}
         subtitle={`Room ${snap.roomCode}`}
         onLeave={() => setLeaving('asking')}
+        clock={clock}
         names={names}
         coach={coach}
         tutorOn={tutorOn}
