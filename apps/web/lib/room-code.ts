@@ -1,5 +1,6 @@
 // Excludes 0/O/1/I so a spoken or handwritten code is never ambiguous. Exactly
-// 32 symbols, so a random byte modulo the length picks each one evenly.
+// 32 symbols, so the top five bits of a random byte pick each one evenly, with
+// no modulo and no rejection loop.
 const ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const LENGTH = 5;
 
@@ -10,6 +11,6 @@ const LENGTH = 5;
  */
 export function generateRoomCode(prefix = 'KHI'): string {
   let s = '';
-  for (const b of crypto.getRandomValues(new Uint8Array(LENGTH))) s += ALPHABET[b % ALPHABET.length];
+  for (const b of crypto.getRandomValues(new Uint8Array(LENGTH))) s += ALPHABET[b >>> 3];
   return `${prefix}-${s}`;
 }
