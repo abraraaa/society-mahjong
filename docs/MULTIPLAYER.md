@@ -62,7 +62,7 @@ column-revoked from clients outright.
 | `avatar_url` | Vercel Blob URL; null means the generated monogram tile |
 | `preferences` | tutor level, sounds, haptics, tile style, reduced motion |
 | `onboarding_stage` | `new` → `first_hand` → `learning` → `solid` |
-| `stats` | denormalised: hands, wins, self-draws, favourite hand id |
+| `stats` | denormalised: `hands` and `wins`, tallied by the server as each hand ends; self-draws and favourite hand later |
 | `is_guest` | mirrors `auth.users.is_anonymous` |
 
 Default avatar is a monogram rendered as a tile in the player's chosen
@@ -77,10 +77,19 @@ among friends), writable only by its owner.
 ### Lifecycle
 
 1. **Create.** Host picks ruleset and options (scoring sheet, timer policy,
-   tutor allowed for guests, stakes unit for the ledger). Room gets a
-   6-character code and a share link `/r/ABC123`.
+   tutor allowed for guests, stakes unit for the ledger). Room gets a code,
+   `KHI-` and five characters from an alphabet without 0/O/1/I (2^25 codes,
+   drawn from the platform's CSPRNG so one code says nothing about the
+   next), and a share link `/r/KHI-4287Q`.
 2. **Join.** Link → auth (guest allowed) → seat. Host can reorder seats and
-   assign bots. Presence shows who is in the lobby.
+   assign bots. Presence shows who is in the lobby. Sitting down is an
+   optimistic write: the seats are read together with `rooms.updated_at`
+   and the update is conditional on it, so two friends who tap the link in
+   the same instant both sit, the second on a re-read of the room (three
+   tries, then a 409 asking for another tap), and nobody lands in someone
+   else's seat. Standing up and Start carry the same condition: a friend
+   who sits down while the host is dealing is not quietly replaced by a
+   bot; the host is asked to start again.
 3. **Start.** Server creates `games` (seed generated server-side, never
    sent to clients while any hand is live) and the first `live_state` via
    `startHand`. Broadcasts `hand:started` with public info only.
@@ -160,7 +169,7 @@ countdown from frightening anyone:
    Fast tables never wait out the clock.
 3. The window's length is the **longest** of the seated players' levels:
 
-   | Player level (from `onboarding_stage`) | Claim window | Turn limit |
+   | Player level | Claim window | Turn limit |
    |---|---|---|
    | `new` (first three hands) | 20 s, with the coach pointing at the claim | 90 s |
    | `learning` | 12 s | 75 s |
@@ -169,6 +178,13 @@ countdown from frightening anyone:
    So a table with one first-timer waits for the first-timer, and a table
    of regulars runs at 7 seconds, which is the norm in online Hong Kong and
    Taiwanese play and feels quick only until you've done it twice.
+
+   The level is worked out from `profiles.stats`, which the server tallies
+   at the end of every hand for each human seat (`hands`, `wins`), on the
+   solo table's thresholds: one finished hand is `learning`, three wins are
+   `solid` (`lib/live/stage.ts`). `onboarding_stage` is written alongside
+   as a mirror for anything else that reads the profile; the timers do not
+   read it, so a stage nothing advanced cannot pin the clocks.
 
    A window in which someone was offered the **win** runs on the turn limit
    instead (90 s for a first-timer). Twenty seconds is enough to take a
@@ -181,6 +197,18 @@ request resolved it carries what the stand-in did, and their own table
 says so in a line at the top ("You ran out of time, so a stand-in
 discarded 5 bamboo for you") rather than leaving them to work out why the
 hand looks different.
+
+**Next hand.** Any seated human may deal the next hand, not only the host:
+the finished phase runs no clock, so a host who has wandered off would
+otherwise wedge the table for everyone. A second tap cannot skip a hand;
+it is rejected as stale (409) and the table shows a notice.
+
+**Playing again.** When the last hand is scored the game and room are
+marked finished, the host's result sheet says "Play again" and everyone
+else's "Back to the room": both lead to the lobby, where Start (now "Play
+again, same seats") deals a fresh game for the same seats with the ledger
+back at nought. Anyone still on the old table follows the room channel's
+`started` message to the new one.
 
 **Leaving.** Any seat can stand up from a live table (Leave, top right,
 with a confirmation). A bot takes the seat for the rest of the game so the
@@ -208,10 +236,11 @@ the end of each hand, like standing behind the table.
 ### Multiple winners and robbing a kong
 
 Taiwanese House and Advanced allow up to three winners on one discard. The
-claim window already collects all declarations before resolving; the
-resolver settles each winner against the discarder in order from the
-discarder's right. Robbing a kong is a TODO in the engine and a broadcast
-of the exposed tile with a short claim window once implemented.
+claim window already collects all declarations before resolving; today the
+resolver settles only the first winner in order from the discarder's right
+(joint settlement is a TODO in the engine, and a ruleset's `multipleWinners`
+flag is not yet honoured). Robbing a kong is a TODO in the engine and a
+broadcast of the exposed tile with a short claim window once implemented.
 
 ## 4. Data model for M2
 

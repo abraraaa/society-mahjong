@@ -1,9 +1,12 @@
 import 'server-only';
 import type { HandState, RulesetId, Seat } from '@society/engine';
+import type { CoachStage } from '@/lib/coach';
 import { createServiceClient } from '@/lib/supabase/service';
-import type { Deadlines, Seats } from './types';
+import { HttpError } from './errors';
+import { stageFromStats, tallyHand, type ProfileStats } from './stage';
+import type { Deadlines, RoomStatus, Seats } from './types';
 
-export type RoomStatus = 'lobby' | 'playing' | 'finished';
+export type { RoomStatus } from './types';
 
 export interface RoomRow {
   readonly id: string;
@@ -16,6 +19,8 @@ export interface RoomRow {
   readonly current_game_id: string | null;
   /** running totals per seat for the current game */
   readonly ledger: readonly number[];
+  /** the row's last write, as the database formats it; a seat write compares against it so a lost race is not a lost seat */
+  readonly updated_at: string;
 }
 
 export interface GameRow {
@@ -33,6 +38,7 @@ export interface LiveRow {
 }
 
 const db = () => createServiceClient();
+const ROOM_COLUMNS = 'id, code, host_id, ruleset_id, options, status, seats, current_game_id, ledger, updated_at';
 
 function toIso(ms: number | null): string | null {
   return ms === null ? null : new Date(ms).toISOString();
@@ -42,12 +48,12 @@ function fromIso(s: string | null): number | null {
 }
 
 export async function roomByCode(code: string): Promise<RoomRow | null> {
-  const { data } = await db().from('rooms').select('id, code, host_id, ruleset_id, options, status, seats, current_game_id, ledger').eq('code', code.toUpperCase()).maybeSingle();
+  const { data } = await db().from('rooms').select(ROOM_COLUMNS).eq('code', code.toUpperCase()).maybeSingle();
   return (data as RoomRow | null) ?? null;
 }
 
 export async function roomById(id: string): Promise<RoomRow | null> {
-  const { data } = await db().from('rooms').select('id, code, host_id, ruleset_id, options, status, seats, current_game_id, ledger').eq('id', id).maybeSingle();
+  const { data } = await db().from('rooms').select(ROOM_COLUMNS).eq('id', id).maybeSingle();
   return (data as RoomRow | null) ?? null;
 }
 
@@ -56,15 +62,26 @@ export async function createRoom(input: { code: string; hostId: string; hostName
   const { data, error } = await db()
     .from('rooms')
     .insert({ code: input.code, host_id: input.hostId, ruleset_id: input.rulesetId, options: input.options, seats })
-    .select('id, code, host_id, ruleset_id, options, status, seats, current_game_id, ledger')
+    .select(ROOM_COLUMNS)
     .single();
   if (error) throw error;
   return data as RoomRow;
 }
 
-export async function saveSeats(roomId: string, seats: Seats): Promise<void> {
-  const { error } = await db().from('rooms').update({ seats, updated_at: new Date().toISOString() }).eq('id', roomId);
+/**
+ * Write the seats only if the room is still as the caller read it. Returns
+ * the row's new `updated_at`, or null when someone else wrote first: the
+ * caller reloads and picks again rather than sitting two people in one seat.
+ */
+export async function saveSeats(roomId: string, seats: Seats, expectedUpdatedAt: string): Promise<string | null> {
+  const { data, error } = await db()
+    .from('rooms')
+    .update({ seats, updated_at: new Date().toISOString() })
+    .eq('id', roomId)
+    .eq('updated_at', expectedUpdatedAt)
+    .select('updated_at');
   if (error) throw error;
+  return data?.length === 1 ? (data[0] as { updated_at: string }).updated_at : null;
 }
 
 export async function gameById(id: string): Promise<GameRow | null> {
@@ -82,11 +99,18 @@ export async function startGame(room: RoomRow, seed: string, seats: Seats, state
   if (e2) throw e2;
   const { error: e3 } = await client.from('hands').insert({ game_id: g.id, hand_index: state.progress.handIndex, dealer: state.dealer, progress: state.progress });
   if (e3) throw e3;
-  const { error: e4 } = await client
+  const { data: rows, error: e4 } = await client
     .from('rooms')
     .update({ status: 'playing', current_game_id: g.id, seats, ledger: [0, 0, 0, 0], updated_at: new Date().toISOString() })
-    .eq('id', room.id);
+    .eq('id', room.id)
+    .eq('updated_at', room.updated_at)
+    .select('id');
   if (e4) throw e4;
+  if (rows?.length !== 1) {
+    // The seats moved after the host read them (someone sat down or stood up); dealing now could hand a seat to a bot. Drop the game and ask again.
+    await client.from('games').delete().eq('id', g.id);
+    throw new HttpError(409, 'the seats changed; start again');
+  }
   return g;
 }
 
@@ -154,13 +178,42 @@ export async function closeHand(gameId: string, room: RoomRow, state: HandState)
     await client.from('hand_results').insert({ game_id: gameId, hand_index: state.progress.handIndex, winner: null, pattern_id: null, settlement: {} });
   }
   await client.rpc('bump_hands_played', { p_game_id: gameId });
+  await recordHand(client, room.seats, result?.type === 'win' ? result.winner : null);
   return ledger;
+}
+
+/**
+ * Count the hand on each human's profile and move their stage with it, so a
+ * table's clocks quicken as it learns. Read-modify-write: the one way to
+ * lose a count is the same person finishing two hands at once, which a
+ * timer can bear.
+ */
+async function recordHand(client: ReturnType<typeof db>, seats: Seats, winner: Seat | null): Promise<void> {
+  const humans = seats.flatMap((s, i) => (s?.kind === 'human' ? [{ id: s.userId, won: i === winner }] : []));
+  if (humans.length === 0) return;
+  const ids = humans.map((h) => h.id);
+  const { data, error } = await client.from('profiles').select('id, stats').in('id', ids);
+  // The hand is already closed, so a failed tally is logged, not thrown: the clocks just stay where they were.
+  if (error) console.error('recordHand: could not read profiles', error.message);
+  await Promise.all(
+    (data ?? []).map(async (row) => {
+      const { id, stats } = row as { id: string; stats: ProfileStats | null };
+      const won = humans.some((h) => h.id === id && h.won);
+      const next = tallyHand(stats ?? {}, won);
+      const { error: e } = await client
+        .from('profiles')
+        .update({ stats: next, onboarding_stage: stageFromStats(next) })
+        .eq('id', id);
+      if (e) console.error('recordHand: could not write profile', id, e.message);
+    }),
+  );
 }
 
 export async function finishGame(gameId: string, roomId: string): Promise<void> {
   const client = db();
   await client.from('games').update({ status: 'finished', finished_at: new Date().toISOString(), ended_at: new Date().toISOString() }).eq('id', gameId);
   await client.from('rooms').update({ status: 'finished', updated_at: new Date().toISOString() }).eq('id', roomId);
+  await clearDeadlines(client, gameId);
 }
 
 /** The last human stood up: the game ends without a result and the room closes. */
@@ -168,21 +221,36 @@ export async function abandonGame(gameId: string, roomId: string): Promise<void>
   const client = db();
   await client.from('games').update({ status: 'abandoned', ended_at: new Date().toISOString() }).eq('id', gameId);
   await client.from('rooms').update({ status: 'finished', updated_at: new Date().toISOString() }).eq('id', roomId);
+  await clearDeadlines(client, gameId);
 }
 
-/** Games whose deadline has passed and nobody has poked since. */
+/** A game that is over waits on nobody: clear its clocks so the sweep has no reason to look at it. */
+async function clearDeadlines(client: ReturnType<typeof db>, gameId: string): Promise<void> {
+  await client.from('live_state').update({ claim_deadline: null, turn_deadline: null, updated_at: new Date().toISOString() }).eq('game_id', gameId);
+}
+
+/**
+ * Active games whose deadline has passed and nobody has poked since. The
+ * status filter matters: a finished or abandoned game keeps its live_state
+ * row, and one left with a deadline would be swept, and fail, every day.
+ */
 export async function expiredGames(now: number, limit = 50): Promise<string[]> {
   const iso = new Date(now).toISOString();
-  const { data } = await db().from('live_state').select('game_id').or(`claim_deadline.lte.${iso},turn_deadline.lte.${iso}`).limit(limit);
+  const { data } = await db()
+    .from('live_state')
+    .select('game_id, games!inner(status)')
+    .eq('games.status', 'active')
+    .or(`claim_deadline.lte.${iso},turn_deadline.lte.${iso}`)
+    .limit(limit);
   return (data ?? []).map((r) => (r as { game_id: string }).game_id);
 }
 
-/** Onboarding stages for the humans at the table, to size the timers. */
-export async function stagesFor(seats: Seats): Promise<string[]> {
+/** Player levels for the humans at the table, to size the timers: from what their profiles have recorded. */
+export async function stagesFor(seats: Seats): Promise<CoachStage[]> {
   const ids = seats.flatMap((s) => (s?.kind === 'human' ? [s.userId] : []));
   if (ids.length === 0) return [];
-  const { data } = await db().from('profiles').select('onboarding_stage').in('id', ids);
-  return (data ?? []).map((r) => (r as { onboarding_stage: string }).onboarding_stage);
+  const { data } = await db().from('profiles').select('stats').in('id', ids);
+  return (data ?? []).map((r) => stageFromStats((r as { stats: ProfileStats | null }).stats ?? {}));
 }
 
 export type { Seat };

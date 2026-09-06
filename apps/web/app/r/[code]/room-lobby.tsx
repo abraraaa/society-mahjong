@@ -130,8 +130,13 @@ export function RoomLobby({ code }: { code: string }) {
       const { gameId } = await api.start(code);
       goToGame(gameId);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not start.');
+      setError(err instanceof ApiError ? `Could not start: ${err.message}.` : 'Could not start.');
       setStarting(false);
+      // "the seats changed": the seats moved while the host was dealing; show them as they are now.
+      api
+        .room(code)
+        .then(setRoom)
+        .catch(() => {});
     }
   };
 
@@ -142,6 +147,7 @@ export function RoomLobby({ code }: { code: string }) {
       me={room.me}
       ruleset={RULESET_NAMES[room.rulesetId] ?? room.rulesetId}
       isHost={room.isHost}
+      again={room.status === 'finished'}
       onLeave={leave}
       starting={starting}
       error={error}

@@ -13,7 +13,8 @@ not the record of what exists. As of the last update:
 | M1 Solo table | Engine-driven, playable on a phone. Layout, hand-analysis, coach and bots all rebuilt on the analysis layer after a review round. Next: M1.5 polish (tablet sizing, hand-over-hand progression, sound), then M2. |
 | Karachi rules fidelity | Catalogue and scoring built from primary sources; several points still ⚠ in `docs/RULES-KARACHI.md`, blocked on one session at a real table. |
 | Taiwanese | Engine ruleset stubbed (patterns, House/Advanced/Standard scoring); no UI. |
-| M2 Multiplayer | Designed in `docs/MULTIPLAYER.md` (authoritative over this doc's §3 on realtime and schema). First slice built: rooms with codes and links, guest seats, authoritative table in route handlers with optimistic versioning, bots inline, deadlines with client tick + cron backstop, Realtime pokes, live table UI on the shared `Table`. Needs migration 0002 applied and env set; untested against a live project until then. Next: presence and away/stand-in, ledger across hands, profile upgrade (magic link/Google), replay archive. |
+| M2 Multiplayer | Live at societymahjong.app against the real Supabase project. Rooms with codes and links, guest seats behind an invisible hCaptcha, authoritative table in route handlers with optimistic versioning, bots inline, deadlines with client tick + cron backstop, Realtime pokes, ledger across hands with a final table, play again in the same room, leave with a bot stand-in, a visible turn clock, stand-in notices, link previews, a rules page. Tested with two and three humans through the server step. Next: presence (who is on the page), profile upgrade (magic link/Google), replay archive, pacing of bot moves on the live table. |
+| Web platform | Security headers (frame-ancestors, nosniff, referrer and permissions policies), one canonical host (the bare vercel.app alias redirects to societymahjong.app), a PWA manifest, and noindex on the lobby, tables and solo deal so search sees the front door and the rules page. |
 | Tutor | Deterministic coach layer landing now, grounded in engine analysis. Conversational layer not started. |
 
 Treat any other section below as intent, and defer to the code and to
@@ -292,7 +293,7 @@ notices ("You've won three on your own, want me to just watch?").
 
 ### Social
 
-- Rooms with a 6-character code and share sheet link; host controls ruleset,
+- Rooms with a KHI- code (five unambiguous characters) and share sheet link; host controls ruleset,
   bots, timers, whether the tutor is allowed for guests.
 - Quick reactions and short chat, no free-for-all video.
 - Ledger per room: running score across sessions, optional "stakes" as a

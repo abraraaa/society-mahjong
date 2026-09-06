@@ -2,9 +2,12 @@ import type { CoachStage } from '@/lib/coach';
 import type { TimerPolicy } from './types';
 
 /**
- * Claim windows and turn limits by player level (docs/MULTIPLAYER.md §3). A
- * table runs at the pace of its least experienced player, so one first-timer
- * makes everyone wait, and a table of regulars runs at seven seconds.
+ * Claim windows and turn limits by player level (docs/MULTIPLAYER.md §3). The
+ * level is the coach's stage, worked out from the tally on the player's
+ * profile (stage.ts), so a stage the table never advanced cannot pin the
+ * clocks. A table runs at the pace of its least experienced player, so one
+ * first-timer makes everyone wait, and a table of regulars runs at seven
+ * seconds.
  */
 const BY_STAGE: Readonly<Record<CoachStage, TimerPolicy>> = {
   new: { claimSeconds: 20, turnSeconds: 90 },

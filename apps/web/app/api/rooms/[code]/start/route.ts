@@ -1,6 +1,5 @@
 import type { NextRequest } from 'next/server';
 import { getRuleset } from '@society/engine';
-import type { CoachStage } from '@/lib/coach';
 import { currentUser } from '@/lib/live/auth';
 import { broadcast, roomPoke } from '@/lib/live/broadcast';
 import { errorResponse, json } from '@/lib/live/http';
@@ -11,7 +10,7 @@ import { stagesFor, startGame } from '@/lib/live/store';
 import { dealFirstHand } from '@/lib/live/table';
 import { newGameSeed } from '@/lib/seed';
 
-/** The host starts the table. Empty seats get bots; the seed is minted here and never leaves the server. */
+/** The host starts the table, or deals again after a game. Empty seats get bots; the seed is minted here and never leaves the server. */
 export async function POST(_req: NextRequest, ctx: { params: Promise<{ code: string }> }) {
   try {
     const user = await currentUser();
@@ -19,10 +18,11 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ code: str
     const { code } = await ctx.params;
     const room = await requireRoom(code);
     if (room.host_id !== user.id) throw new HttpError(403, 'only the host can start');
-    if (room.status !== 'lobby') throw new HttpError(409, 'already started');
+    // A finished room starts again with the same seats: the ledger resets, the seed is fresh.
+    if (room.status === 'playing') throw new HttpError(409, 'a game is in progress');
     const seats = withBots(room.seats);
     const ruleset = getRuleset(room.ruleset_id);
-    const policy = policyFor((await stagesFor(seats)) as CoachStage[], room.options['strict'] === true);
+    const policy = policyFor(await stagesFor(seats), room.options['strict'] === true);
     const now = Date.now();
     const first = dealFirstHand(ruleset, seats, newGameSeed(), policy, now);
     const game = await startGame(room, first.state.seed, seats, first.state, first.deadlines);
