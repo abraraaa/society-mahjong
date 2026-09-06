@@ -15,10 +15,15 @@ export interface ProfileStats {
  * as `new` anyway.
  */
 export function stageFromStats(stats: ProfileStats): CoachStage {
-  return stageFor({ handsFinished: stats.hands ?? 0, wins: stats.wins ?? 0, discardsMade: 0 });
+  return stageFor({ handsFinished: count(stats.hands), wins: count(stats.wins), discardsMade: 0 });
+}
+
+/** A non-negative whole number, or nought: the column is JSON and its shape is not the database's to enforce. */
+function count(n: unknown): number {
+  return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
 }
 
 /** The tally after one more hand. */
 export function tallyHand(stats: ProfileStats, won: boolean): ProfileStats {
-  return { ...stats, hands: (stats.hands ?? 0) + 1, wins: (stats.wins ?? 0) + (won ? 1 : 0) };
+  return { ...stats, hands: count(stats.hands) + 1, wins: count(stats.wins) + (won ? 1 : 0) };
 }

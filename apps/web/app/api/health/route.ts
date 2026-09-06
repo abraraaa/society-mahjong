@@ -7,9 +7,12 @@ import { secretMatches } from '@/lib/live/secret';
 /**
  * One URL that says whether the server can play: which settings are present
  * (never their values), and whether the tables the live table needs exist.
- * Open /api/health?key=<CRON_SECRET> in a browser before blaming the lobby.
- * Without the key, or without CRON_SECRET set at all, it is a 404 like any
- * other missing route: which settings exist is nobody else's business.
+ * Open /api/health?key=<HEALTH_KEY> in a browser before blaming the lobby,
+ * or send `Authorization: Bearer <CRON_SECRET>` from a script. The browser
+ * form gets its own key because a query string lands in request logs and
+ * history, and the cron secret must never sit there. Without a matching key
+ * it is a 404 like any other missing route: which settings exist is nobody
+ * else's business.
  */
 export async function GET(req: NextRequest) {
   if (!authorised(req)) return new Response(null, { status: 404 });
@@ -39,8 +42,9 @@ export async function GET(req: NextRequest) {
   );
 }
 
-/** The cron secret, as `Authorization: Bearer …` (how Vercel Cron sends it) or `?key=` (how a browser can). */
+/** `Authorization: Bearer <CRON_SECRET>` from a script, or `?key=<HEALTH_KEY>` from a browser. */
 function authorised(req: NextRequest): boolean {
-  const bearer = req.headers.get('authorization')?.replace(/^Bearer /, '');
-  return secretMatches(bearer ?? req.nextUrl.searchParams.get('key'), process.env.CRON_SECRET);
+  const auth = req.headers.get('authorization');
+  if (auth?.startsWith('Bearer ')) return secretMatches(auth.slice(7), process.env.CRON_SECRET);
+  return secretMatches(req.nextUrl.searchParams.get('key'), process.env.HEALTH_KEY);
 }

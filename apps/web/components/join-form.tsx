@@ -6,13 +6,17 @@ import { useRouter } from 'next/navigation';
 export function JoinForm() {
   const router = useRouter();
   const [code, setCode] = useState('');
-  const clean = code.toUpperCase().replace(/[^A-Z0-9-]/g, '');
+  // "KHI-4287Q", "KHI 4287Q", "khi4287q" and "4287Q" all mean the same room.
+  const bare = code
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .replace(/^KHI/, '');
   return (
     <form
       className="flex gap-2"
       onSubmit={(e) => {
         e.preventDefault();
-        if (clean.length >= 4) router.push(`/r/${clean.includes('-') ? clean : `KHI-${clean}`}`);
+        if (bare.length >= 4) router.push(`/r/KHI-${bare}`);
       }}
     >
       <input
@@ -20,11 +24,11 @@ export function JoinForm() {
         placeholder="KHI-4287Q"
         autoCapitalize="characters"
         autoCorrect="off"
-        maxLength={9}
+        maxLength={10}
         value={code}
         onChange={(e) => setCode(e.target.value)}
       />
-      <button className="btn btn-ghost" type="submit" disabled={clean.length < 4}>
+      <button className="btn btn-ghost" type="submit" disabled={bare.length < 4}>
         Join
       </button>
     </form>

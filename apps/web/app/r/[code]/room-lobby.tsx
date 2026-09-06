@@ -130,9 +130,9 @@ export function RoomLobby({ code }: { code: string }) {
       const { gameId } = await api.start(code);
       goToGame(gameId);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not start.');
+      setError(err instanceof ApiError ? `Could not start: ${err.message}.` : 'Could not start.');
       setStarting(false);
-      // "someone just sat down": the seats moved while the host was dealing; show them as they are now.
+      // "the seats changed": the seats moved while the host was dealing; show them as they are now.
       api
         .room(code)
         .then(setRoom)

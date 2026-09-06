@@ -12,6 +12,7 @@ const SECURITY_HEADERS = [
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
   { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
   { key: 'Content-Security-Policy', value: "frame-ancestors 'none'" },
+  { key: 'X-Frame-Options', value: 'DENY' },
 ];
 
 /** A year, immutable: a changed tile or icon must get a new filename, or phones keep the old one. */
@@ -31,11 +32,12 @@ const nextConfig: NextConfig = {
   ],
   redirects: async () => [
     // The bare Vercel alias serves the same site; search and shared links should know one host.
-    // Exact host only, previews live on other *.vercel.app names. /api stays put: Vercel Cron
-    // calls the deployment directly, and a cross-host redirect would drop its bearer token.
+    // The host value is a regex, so its dots are escaped: this one name only, previews live on
+    // other *.vercel.app names. /api stays put: Vercel Cron calls the deployment directly, and
+    // a cross-host redirect would drop its bearer token.
     {
-      source: '/:path((?!api/).*)',
-      has: [{ type: 'host', value: 'society-mahjong.vercel.app' }],
+      source: '/:path((?!api(?:/|$)).*)',
+      has: [{ type: 'host', value: 'society-mahjong\\.vercel\\.app' }],
       destination: `${SITE}/:path`,
       permanent: true,
     },

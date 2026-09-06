@@ -46,6 +46,8 @@ export async function joinRoom(room: RoomRow, userId: string, name: string): Pro
   for (let attempt = 1; ; attempt++) {
     if (seatOf(current.seats, userId) !== null) return { room: current, seated: false };
     if (current.status === 'playing') throw new HttpError(409, 'this table has already started');
+    // A code is enough to sit down, so a room does not stay open to strangers forever: a week after its last game, only its own people get back in.
+    if (current.status === 'finished' && Date.now() - Date.parse(current.updated_at) > STALE_ROOM_MS) throw new HttpError(410, 'this table has closed');
     const seats = seatJoiner(current.seats, current.status, { userId, name });
     if (!seats) throw new HttpError(409, 'this table is full');
     const updated_at = await saveSeats(current.id, seats, current.updated_at);
@@ -69,6 +71,9 @@ export async function leaveRoom(room: RoomRow, userId: string): Promise<RoomRow>
     current = await requireRoom(current.code);
   }
 }
+
+/** How long a finished room keeps taking newcomers. */
+const STALE_ROOM_MS = 7 * 24 * 60 * 60 * 1000;
 
 const BOT_NAMES = ['Bilal', 'Sana', 'Ayesha', 'Hamza', 'Zara', 'Omar'];
 

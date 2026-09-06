@@ -110,7 +110,9 @@ export async function actOnGame(gameId: string, userId: string | null, action: C
 
   await broadcast([gamePoke(gameId, version, { phase: result.state.phase, turn: result.state.turn, seq: result.state.seq, gameOver: result.gameOver })]);
   const snap = snapshot({ ...game, status: result.gameOver ? 'finished' : game.status }, settledRoom, version, result.deadlines, result.state, me, now, userId);
-  return result.standIns.length > 0 ? { ...snap, standIns: result.standIns } : snap;
+  // Only the caller's own stand-in moves: another seat's exchange carries the tiles it passed, which stay private.
+  const mine = me === null ? [] : result.standIns.filter((x) => x.seat === me);
+  return mine.length > 0 ? { ...snap, standIns: mine } : snap;
 }
 
 /**

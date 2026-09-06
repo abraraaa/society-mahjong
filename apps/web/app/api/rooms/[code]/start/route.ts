@@ -1,6 +1,5 @@
 import type { NextRequest } from 'next/server';
 import { getRuleset } from '@society/engine';
-import type { CoachStage } from '@/lib/coach';
 import { currentUser } from '@/lib/live/auth';
 import { broadcast, roomPoke } from '@/lib/live/broadcast';
 import { errorResponse, json } from '@/lib/live/http';
@@ -23,7 +22,7 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ code: str
     if (room.status === 'playing') throw new HttpError(409, 'a game is in progress');
     const seats = withBots(room.seats);
     const ruleset = getRuleset(room.ruleset_id);
-    const policy = policyFor((await stagesFor(seats)) as CoachStage[], room.options['strict'] === true);
+    const policy = policyFor(await stagesFor(seats), room.options['strict'] === true);
     const now = Date.now();
     const first = dealFirstHand(ruleset, seats, newGameSeed(), policy, now);
     const game = await startGame(room, first.state.seed, seats, first.state, first.deadlines);

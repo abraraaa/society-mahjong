@@ -107,9 +107,9 @@ export async function startGame(room: RoomRow, seed: string, seats: Seats, state
     .select('id');
   if (e4) throw e4;
   if (rows?.length !== 1) {
-    // Someone sat down after the host read the seats; dealing now would hand their seat to a bot. Drop the game and ask again.
+    // The seats moved after the host read them (someone sat down or stood up); dealing now could hand a seat to a bot. Drop the game and ask again.
     await client.from('games').delete().eq('id', g.id);
-    throw new HttpError(409, 'someone just sat down; start again');
+    throw new HttpError(409, 'the seats changed; start again');
   }
   return g;
 }
@@ -192,16 +192,19 @@ async function recordHand(client: ReturnType<typeof db>, seats: Seats, winner: S
   const humans = seats.flatMap((s, i) => (s?.kind === 'human' ? [{ id: s.userId, won: i === winner }] : []));
   if (humans.length === 0) return;
   const ids = humans.map((h) => h.id);
-  const { data } = await client.from('profiles').select('id, stats').in('id', ids);
+  const { data, error } = await client.from('profiles').select('id, stats').in('id', ids);
+  // The hand is already closed, so a failed tally is logged, not thrown: the clocks just stay where they were.
+  if (error) console.error('recordHand: could not read profiles', error.message);
   await Promise.all(
-    (data ?? []).map((row) => {
+    (data ?? []).map(async (row) => {
       const { id, stats } = row as { id: string; stats: ProfileStats | null };
       const won = humans.some((h) => h.id === id && h.won);
       const next = tallyHand(stats ?? {}, won);
-      return client
+      const { error: e } = await client
         .from('profiles')
         .update({ stats: next, onboarding_stage: stageFromStats(next) })
         .eq('id', id);
+      if (e) console.error('recordHand: could not write profile', id, e.message);
     }),
   );
 }
