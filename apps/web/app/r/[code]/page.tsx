@@ -11,8 +11,11 @@ export async function generateMetadata({ params }: { params: Promise<{ code: str
   return {
     title: `Join table ${upper}`,
     description,
-    openGraph: { title: `Join my mahjong table · ${upper}`, description },
+    // Next replaces a nested object whole, so the site fields from the root layout are repeated here.
+    openGraph: { siteName: 'Society Mahjong', type: 'website', locale: 'en_GB', url: `/r/${upper}`, title: `Join my mahjong table · ${upper}`, description },
     twitter: { card: 'summary_large_image', title: `Join my mahjong table · ${upper}`, description },
+    // The link is for the friends who hold it; the preview still works without an index entry.
+    robots: { index: false, follow: false },
   };
 }
 

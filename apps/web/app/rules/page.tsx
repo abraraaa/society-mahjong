@@ -7,6 +7,9 @@ import { GLOSSARY, TERMS } from '@/lib/coach/glossary';
 export const metadata: Metadata = {
   title: 'How it plays',
   description: 'How a table of mahjong plays, what Karachi rules ask for in each round, and the words you will hear.',
+  alternates: { canonical: '/rules' },
+  // Next replaces a nested object whole, so the site fields from the root layout are repeated here.
+  openGraph: { siteName: 'Society Mahjong', type: 'website', locale: 'en_GB', url: '/rules' },
 };
 
 const ROUNDS: readonly { wind: Wind; name: string }[] = [

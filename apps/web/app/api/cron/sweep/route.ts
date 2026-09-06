@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { errorResponse, json } from '@/lib/live/http';
 import { actOnGame } from '@/lib/live/service';
+import { secretMatches } from '@/lib/live/secret';
 import { expiredGames } from '@/lib/live/store';
 
 /**
@@ -9,8 +10,7 @@ import { expiredGames } from '@/lib/live/store';
  * tick does the real work and this is the backstop for abandoned tables.
  */
 export async function GET(req: NextRequest) {
-  const secret = process.env.CRON_SECRET;
-  if (!secret || req.headers.get('authorization') !== `Bearer ${secret}`) return json({ error: 'unauthorised' }, 401);
+  if (!secretMatches(req.headers.get('authorization')?.replace(/^Bearer /, ''), process.env.CRON_SECRET)) return json({ error: 'unauthorised' }, 401);
   try {
     const now = Date.now();
     const ids = await expiredGames(now);
