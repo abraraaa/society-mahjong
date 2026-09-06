@@ -1,6 +1,6 @@
 import 'server-only';
 import { NextResponse } from 'next/server';
-import { HttpError } from './service';
+import { HttpError } from './errors';
 
 export function json(body: unknown, status = 200): NextResponse {
   return NextResponse.json(body, { status });

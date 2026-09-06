@@ -1,7 +1,8 @@
 import 'server-only';
-import { HttpError } from './service';
+import { SEAT_ATTEMPTS, seatJoiner, vacate } from './seating';
+import { HttpError } from './errors';
 import { roomByCode, saveSeats, type RoomRow } from './store';
-import { seatOf, type SeatEntry, type Seats } from './types';
+import { seatOf, type Seats } from './types';
 
 /** What the lobby shows. Seat entries carry names only; user ids stay on the server. */
 export interface RoomSnapshot {
@@ -35,30 +36,38 @@ export async function requireRoom(code: string): Promise<RoomRow> {
 }
 
 /**
- * Sit the user down: their existing seat, else the first empty one. Between
- * games (a finished room) a bot's seat counts as empty, so a friend who turns
- * up late can take one before the host deals again.
+ * Sit the user down: their existing seat, else the first empty one (see
+ * seatJoiner). The write is optimistic on the room's `updated_at`: two
+ * friends who tap the link in the same instant both sit, the second of them
+ * on a fresh read, and nobody ends up in someone else's seat.
  */
 export async function joinRoom(room: RoomRow, userId: string, name: string): Promise<{ room: RoomRow; seated: boolean }> {
-  const existing = seatOf(room.seats, userId);
-  if (existing !== null) return { room, seated: false };
-  if (room.status === 'playing') throw new HttpError(409, 'this table has already started');
-  const free = room.seats.findIndex((s) => s === null || (room.status === 'finished' && s.kind === 'bot'));
-  if (free < 0) throw new HttpError(409, 'this table is full');
-  const seats = [...room.seats] as [SeatEntry, SeatEntry, SeatEntry, SeatEntry];
-  seats[free] = { kind: 'human', userId, name };
-  await saveSeats(room.id, seats);
-  return { room: { ...room, seats: seats as Seats }, seated: true };
+  let current = room;
+  for (let attempt = 1; ; attempt++) {
+    if (seatOf(current.seats, userId) !== null) return { room: current, seated: false };
+    if (current.status === 'playing') throw new HttpError(409, 'this table has already started');
+    const seats = seatJoiner(current.seats, current.status, { userId, name });
+    if (!seats) throw new HttpError(409, 'this table is full');
+    const updated_at = await saveSeats(current.id, seats, current.updated_at);
+    if (updated_at) return { room: { ...current, seats, updated_at }, seated: true };
+    if (attempt >= SEAT_ATTEMPTS) throw new HttpError(409, 'that seat was just taken; try again');
+    current = await requireRoom(current.code);
+  }
 }
 
 /** Stand up from the lobby. The seat empties; the room stays open for the others. */
 export async function leaveRoom(room: RoomRow, userId: string): Promise<RoomRow> {
-  const me = seatOf(room.seats, userId);
-  if (me === null) return room;
-  if (room.status !== 'lobby') throw new HttpError(409, 'the table has started; leave it from the game');
-  const seats = room.seats.map((s, i) => (i === me ? null : s)) as unknown as Seats;
-  await saveSeats(room.id, seats);
-  return { ...room, seats };
+  let current = room;
+  for (let attempt = 1; ; attempt++) {
+    const me = seatOf(current.seats, userId);
+    if (me === null) return current;
+    if (current.status !== 'lobby') throw new HttpError(409, 'the table has started; leave it from the game');
+    const seats = vacate(current.seats, me);
+    const updated_at = await saveSeats(current.id, seats, current.updated_at);
+    if (updated_at) return { ...current, seats, updated_at };
+    if (attempt >= SEAT_ATTEMPTS) throw new HttpError(409, 'the table changed under you; try again');
+    current = await requireRoom(current.code);
+  }
 }
 
 const BOT_NAMES = ['Bilal', 'Sana', 'Ayesha', 'Hamza', 'Zara', 'Omar'];

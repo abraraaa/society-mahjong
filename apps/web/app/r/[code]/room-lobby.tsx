@@ -132,6 +132,11 @@ export function RoomLobby({ code }: { code: string }) {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not start.');
       setStarting(false);
+      // "someone just sat down": the seats moved while the host was dealing; show them as they are now.
+      api
+        .room(code)
+        .then(setRoom)
+        .catch(() => {});
     }
   };
 

@@ -1,5 +1,8 @@
 import type { Action, HandState, Seat } from '@society/engine';
 
+/** Where a room is in its life: waiting for people, at the table, or between games. */
+export type RoomStatus = 'lobby' | 'playing' | 'finished';
+
 /** Who is in a seat. Bots are seats too, so the engine never has to know the difference. */
 export type SeatEntry = { readonly kind: 'human'; readonly userId: string; readonly name: string } | { readonly kind: 'bot'; readonly name: string } | null;
 export type Seats = readonly [SeatEntry, SeatEntry, SeatEntry, SeatEntry];
