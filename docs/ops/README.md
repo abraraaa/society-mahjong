@@ -120,10 +120,15 @@ Once a week, on a Monday, is enough to start with.
 Not a launch check: a key for when something looks wrong. The server writes each error as one line of JSON in Vercel's function logs (the project's **Logs** tab). Type an `event` name below into the search box to find every line of that kind. No line carries a request body, a header, a cookie, a token or a query string.
 
 - **`route_error`**: an API route answered 500 and the player saw "something went wrong". `route` names the route. A database failure reads `could not <what>: <why>`, and `code` holds Postgres's error code.
-- **`after_commit_failed`**: a move was saved and the game went on, but a write after it failed. `step` says which one:
+- **`after_commit_failed`**: a move was saved and the game went on, but a write after it failed. `step` says which one. Each is one write, and the ones after it still ran:
   - `log the move`: that hand's log is missing the move.
-  - `open the hand` or `close the hand`: the hand's row, result, scores or count may be missing. The message says which write failed.
-  - `finish the game`: the game stays active and the room stays "playing", so the host can't deal again yet. Anyone at the table pressing **Next hand** once more finishes it properly.
+  - `open the hand`: the new hand has no row in `hands`, so its log and its end aren't kept.
+  - `settle the scores`: the room's running totals missed that hand's points. Everyone's table shows the totals the room holds, so they all agree.
+  - `close the hand`: the hand's row isn't marked as ended. Its result was still recorded.
+  - `record the result`: the hand is missing from `hand_results`, so the funnel's hand counts are one short for that game.
+  - `count the hand`: the game's `hands_played` is one short.
+  - `tally the players`: the players' hand counts, which pace their clocks, missed that hand. A profile that couldn't be read or written is logged on its own line starting `recordHand:`.
+  - `finish the game`: the game's end didn't fully record, and the game is still active. Anyone at the table pressing **Next hand** once more finishes it. The room is written first, so if that much landed, the lobby already offers the host **Play again**. A room left "playing" by a game that has ended reads as finished, so it can always be dealt again.
 - **`request_error`**: an error nothing else caught, such as a page that failed to render. `digest` matches the code on an error page, and `routePath` and `routeType` say where it happened.
 - **`sweep_game_failed`**: the daily sweep couldn't settle one game (`gameId`). The others were still swept. A game someone else moved first isn't logged: it shows as `already moved` in the sweep's results.
 - **`stages_read_failed`**: the players' levels couldn't be read, so the table ran a first-timer's clocks, the slowest, for that move or deal. The move itself went through.

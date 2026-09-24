@@ -9,7 +9,25 @@ import { afterCommit, type CommitStep } from './commit';
 import { logError } from './log';
 import { policyFor } from './policy';
 import { SEAT_ATTEMPTS, vacate } from './seating';
-import { abandonGame, appendAction, closeHand, finishGame, gameById, loadLive, openHand, roomById, saveLive, saveSeats, stagesFor, type GameRow, type RoomRow } from './store';
+import {
+  abandonGame,
+  appendAction,
+  countHand,
+  endHand,
+  finishGame,
+  gameById,
+  loadLive,
+  openHand,
+  recordHand,
+  recordResult,
+  roomById,
+  saveLive,
+  saveSeats,
+  settleScores,
+  stagesFor,
+  type GameRow,
+  type RoomRow,
+} from './store';
 import { rejectionStatus, step } from './table';
 import { seatOf, type ClientAction, type Deadlines, type Seats } from './types';
 import { isUuid, parseClientAction } from './validate';
@@ -131,15 +149,24 @@ export async function actOnGame(gameId: string, userId: string | null, clientAct
   if (action && action.type !== 'nextHand') steps.push({ what: 'log the move', run: () => appendAction(gameId, handIndex, action) });
   if (action?.type === 'nextHand' && !result.gameOver) steps.push({ what: 'open the hand', run: () => openHand(gameId, next) });
   if (!wasFinished && next.phase === 'finished') {
-    steps.push({
-      what: 'close the hand',
-      run: async () => {
-        ledger = await closeHand(gameId, room, next);
+    // Closing the hand is five writes, each its own step, so one that fails costs only itself. The scores go first and the
+    // snapshot takes them the moment they land, so the caller's totals are the room's, whichever later write fails.
+    steps.push(
+      {
+        what: 'settle the scores',
+        run: async () => {
+          ledger = (await settleScores(gameId, room, next)) ?? ledger;
+        },
       },
-    });
+      { what: 'close the hand', run: () => endHand(gameId, next) },
+      { what: 'record the result', run: () => recordResult(gameId, next) },
+      { what: 'count the hand', run: () => countHand(gameId) },
+      { what: 'tally the players', run: () => recordHand(room.seats, next) },
+    );
   }
   if (result.gameOver) {
-    // A game whose end did not record stays active, so the next "next hand" finishes it again.
+    // The game's own status is finishGame's last write, so a finish that fails part way leaves the game active, and the next
+    // "next hand" finishes it again.
     steps.push({
       what: 'finish the game',
       run: async () => {
@@ -168,6 +195,9 @@ export async function leaveGame(gameId: string, userId: string, now = Date.now()
     const me = seatOf(room.seats, userId);
     if (me === null) return { abandoned: game.status === 'abandoned' };
     if (game.status !== 'active') return { abandoned: game.status === 'abandoned' };
+    // The host has dealt a newer game since this one, whose end did not fully record. The seats are that game's now, and
+    // not this one's to give up.
+    if (room.current_game_id !== gameId) return { abandoned: false };
     const vacated = vacate(room.seats, me);
     if (!vacated.some((s) => s?.kind === 'human')) {
       const live = await loadLive(gameId);

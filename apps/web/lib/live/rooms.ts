@@ -1,7 +1,7 @@
 import 'server-only';
 import { SEAT_ATTEMPTS, seatJoiner, vacate } from './seating';
 import { HttpError } from './errors';
-import { roomByCode, saveSeats, type RoomRow } from './store';
+import { gameById, roomByCode, saveSeats, type RoomRow } from './store';
 import { seatOf, type Seats } from './types';
 
 /** What the lobby shows. Seat entries carry names only; user ids stay on the server. */
@@ -29,10 +29,24 @@ export function roomSnapshot(room: RoomRow, userId: string): RoomSnapshot {
   };
 }
 
+/** The room with this code, as it stands: see withGameOver. */
 export async function requireRoom(code: string): Promise<RoomRow> {
   const room = await roomByCode(code);
   if (!room) throw new HttpError(404, 'no room with that code');
-  return room;
+  return withGameOver(room);
+}
+
+/**
+ * A room whose row says "playing" but whose game is over, or gone, reads as
+ * finished. finishGame and abandonGame write the room before the game, so
+ * they no longer leave one behind; but a room they left before they did
+ * would otherwise send everyone from the lobby back to a final table, and
+ * its host could never deal again.
+ */
+async function withGameOver(room: RoomRow): Promise<RoomRow> {
+  if (room.status !== 'playing') return room;
+  const game = room.current_game_id === null ? null : await gameById(room.current_game_id);
+  return game?.status === 'active' ? room : { ...room, status: 'finished' };
 }
 
 /**

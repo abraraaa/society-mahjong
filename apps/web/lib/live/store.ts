@@ -158,44 +158,63 @@ export async function openHand(gameId: string, state: HandState): Promise<void> 
   );
 }
 
-/**
- * Close the hand's row, record the result, and settle the room's ledger.
- * Returns the settled ledger. Each write throws if it fails; only the
- * players' tallies (recordHand) are best-effort, since the hand is already
- * settled by then.
+/*
+ * Closing a hand is five writes, and actOnGame runs each as its own step
+ * after the move is saved, in this order: settleScores, endHand,
+ * recordResult, countHand, recordHand. Each throws if it fails, except the
+ * players' tallies, which are best-effort; and one that fails does not stop
+ * the rest, so a blip costs that one write, not the hand's whole record.
  */
-export async function closeHand(gameId: string, room: RoomRow, state: HandState): Promise<readonly number[]> {
+
+/**
+ * Add a won hand's transfers to the room's running totals, and return the
+ * totals as written. A washout moves no points and writes nothing. The
+ * write lands only while the room still holds this game, so a room the host
+ * has already dealt again keeps its new game's totals. Null means nothing
+ * was written: the caller keeps the totals it had.
+ */
+export async function settleScores(gameId: string, room: RoomRow, state: HandState): Promise<readonly number[] | null> {
   const result = state.result;
-  const client = db();
+  if (result?.type !== 'win') return null;
   const ledger = [...(room.ledger.length === 4 ? room.ledger : [0, 0, 0, 0])];
-  if (result?.type === 'win') {
-    for (const t of result.settlement.transfers) {
-      ledger[t.from]! -= t.amount;
-      ledger[t.to]! += t.amount;
-    }
-    must(await client.from('rooms').update({ ledger, updated_at: new Date().toISOString() }).eq('id', room.id), 'settle the scores');
+  for (const t of result.settlement.transfers) {
+    ledger[t.from]! -= t.amount;
+    ledger[t.to]! += t.amount;
   }
+  const rows = must(
+    await db().from('rooms').update({ ledger, updated_at: new Date().toISOString() }).eq('id', room.id).eq('current_game_id', gameId).select('id'),
+    'settle the scores',
+  );
+  return rows?.length === 1 ? ledger : null;
+}
+
+/** Mark the hand's row as ended, with its result and settlement. */
+export async function endHand(gameId: string, state: HandState): Promise<void> {
+  const result = state.result;
   must(
-    await client
+    await db()
       .from('hands')
       .update({ result, settlement: result?.type === 'win' ? result.settlement : null, ended_at: new Date().toISOString() })
       .eq('game_id', gameId)
       .eq('hand_index', state.progress.handIndex),
     'close the hand',
   );
-  if (result?.type === 'win') {
-    must(
-      await client
-        .from('hand_results')
-        .insert({ game_id: gameId, hand_index: state.progress.handIndex, winner: result.winner, pattern_id: result.patternId, settlement: result.settlement }),
-      'record the result',
-    );
-  } else {
-    must(await client.from('hand_results').insert({ game_id: gameId, hand_index: state.progress.handIndex, winner: null, pattern_id: null, settlement: {} }), 'record the result');
-  }
-  must(await client.rpc('bump_hands_played', { p_game_id: gameId }), 'count the hand');
-  await recordHand(client, room.seats, result?.type === 'win' ? result.winner : null).catch((err: unknown) => console.error('recordHand: could not tally the hand', err));
-  return ledger;
+}
+
+/** One row per hand in hand_results: the winner and pattern, or none for a washout. */
+export async function recordResult(gameId: string, state: HandState): Promise<void> {
+  const result = state.result;
+  const hand = { game_id: gameId, hand_index: state.progress.handIndex };
+  const row: Record<string, unknown> =
+    result?.type === 'win'
+      ? { ...hand, winner: result.winner, pattern_id: result.patternId, settlement: result.settlement }
+      : { ...hand, winner: null, pattern_id: null, settlement: {} };
+  must(await db().from('hand_results').insert(row), 'record the result');
+}
+
+/** Add one to the game's count of hands played. Atomic on the database side. */
+export async function countHand(gameId: string): Promise<void> {
+  must(await db().rpc('bump_hands_played', { p_game_id: gameId }), 'count the hand');
 }
 
 /**
@@ -204,12 +223,14 @@ export async function closeHand(gameId: string, room: RoomRow, state: HandState)
  * lose a count is the same person finishing two hands at once, which a
  * timer can bear.
  */
-async function recordHand(client: ReturnType<typeof db>, seats: Seats, winner: Seat | null): Promise<void> {
+export async function recordHand(seats: Seats, state: HandState): Promise<void> {
+  const winner: Seat | null = state.result?.type === 'win' ? state.result.winner : null;
   const humans = seats.flatMap((s, i) => (s?.kind === 'human' ? [{ id: s.userId, won: i === winner }] : []));
   if (humans.length === 0) return;
+  const client = db();
   const ids = humans.map((h) => h.id);
   const { data, error } = await client.from('profiles').select('id, stats').in('id', ids);
-  // The hand is already closed, so a failed tally is logged, not thrown: the clocks just stay where they were.
+  // The hand is already settled, so a failed tally is logged, not thrown: the clocks just stay where they were.
   if (error) {
     console.error('recordHand: could not read profiles', error.message);
     return;
@@ -228,21 +249,39 @@ async function recordHand(client: ReturnType<typeof db>, seats: Seats, winner: S
   );
 }
 
+/**
+ * The last hand is over. Three writes, ordered so that any one can fail and
+ * be run again: the room first, so the lobby offers "Play again"; then the
+ * clocks; the game's own status last. Until that last write lands the game
+ * is still active, so the next "next hand" runs all three again. The room
+ * is written only while it still holds this game: one the host has already
+ * dealt again is left alone.
+ */
 export async function finishGame(gameId: string, roomId: string): Promise<void> {
   const client = db();
   const now = new Date().toISOString();
-  must(await client.from('games').update({ status: 'finished', finished_at: now, ended_at: now }).eq('id', gameId), 'finish the game');
-  must(await client.from('rooms').update({ status: 'finished', updated_at: now }).eq('id', roomId), 'close the room');
+  await closeRoom(client, gameId, roomId, now);
   await clearDeadlines(client, gameId);
+  must(await client.from('games').update({ status: 'finished', finished_at: now, ended_at: now }).eq('id', gameId), 'finish the game');
 }
 
-/** The last human stood up: the game ends without a result and the room closes. */
+/**
+ * The last human stood up: the game ends without a result and the room
+ * closes. The same order as finishGame, so a leave that fails part way
+ * leaves the game active with the leaver still in their seat, and leaving
+ * again finishes the job.
+ */
 export async function abandonGame(gameId: string, roomId: string): Promise<void> {
   const client = db();
   const now = new Date().toISOString();
-  must(await client.from('games').update({ status: 'abandoned', ended_at: now }).eq('id', gameId), 'abandon the game');
-  must(await client.from('rooms').update({ status: 'finished', updated_at: now }).eq('id', roomId), 'close the room');
+  await closeRoom(client, gameId, roomId, now);
   await clearDeadlines(client, gameId);
+  must(await client.from('games').update({ status: 'abandoned', ended_at: now }).eq('id', gameId), 'abandon the game');
+}
+
+/** The room's game is over: it goes back to the lobby's "finished", unless it has already moved on to another game. */
+async function closeRoom(client: ReturnType<typeof db>, gameId: string, roomId: string, now: string): Promise<void> {
+  must(await client.from('rooms').update({ status: 'finished', updated_at: now }).eq('id', roomId).eq('current_game_id', gameId), 'close the room');
 }
 
 /** A game that is over waits on nobody: clear its clocks so the sweep has no reason to look at it. */
