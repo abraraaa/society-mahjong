@@ -5,8 +5,8 @@ import { Tile } from '@/components/tile';
 import { GLOSSARY, TERMS } from '@/lib/coach/glossary';
 
 export const metadata: Metadata = {
-  title: 'How it plays',
-  description: 'How a table of mahjong plays, what Karachi rules ask for in each round, and the words you will hear.',
+  title: 'Karachi mahjong rules: how to play',
+  description: 'Karachi mahjong rules in plain English: the tiles, claiming a discard, the hand each wind round asks for, goulash and the exchange, scoring, and the words you will hear.',
   alternates: { canonical: '/rules' },
   // Next replaces a nested object whole, so the site fields from the root layout are repeated here.
   openGraph: { siteName: 'Society Mahjong', type: 'website', locale: 'en_GB', url: '/rules' },
@@ -43,9 +43,9 @@ export default function RulesPage() {
   return (
     <main className="rules">
       <header>
-        <p className="eyebrow">How it plays</p>
-        <h1 className="font-display">Mahjong, the way this table plays it</h1>
-        <p className="lede">Four seats, thirteen tiles each, one goal: complete a hand before anyone else. Here is everything a first-timer needs, and the tutor sits with you for the rest.</p>
+        <p className="eyebrow">The rules</p>
+        <h1 className="font-display">How to play Karachi mahjong</h1>
+        <p className="lede">Karachi mahjong blends Mumbai and Western play, and has been passed on by word of mouth in Karachi since at least the 1970s. Each wind round asks for a different hand. Four seats, thirteen tiles each, one goal: complete a hand before anyone else. Here is everything a first-timer needs. The tutor covers the rest at the table.</p>
       </header>
 
       <section>
@@ -89,8 +89,8 @@ export default function RulesPage() {
           <Tile kind="p2" size="sm" />
         </div>
         <p>
-          And if a discard completes your whole hand, you call <b>Mahjong</b> and the hand is over. In Karachi rules a <b>chow</b> (a run of three in one suit) is built only from tiles you draw
-          yourself; it cannot be claimed.
+          And if a discard completes your whole hand, you call <b>Mahjong</b> and the hand is over. In Karachi rules a <b>chow</b> (a run of three in one suit) is built from tiles you draw
+          yourself: you cannot claim a discard to make one, unless that tile completes your whole hand.
         </p>
         <p>On a live table a claim window opens for a few seconds after each discard. If nobody wants the tile, play moves on. The window is longer when a win is on offer.</p>
       </section>
@@ -98,7 +98,7 @@ export default function RulesPage() {
       <section>
         <h2 className="font-display">Karachi rules: four rounds, four asks</h2>
         <p>
-          A game is four rounds of four hands, and each round asks for a different kind of hand. The dealer keeps the deal after winning; otherwise it passes to the right. The tutor names the
+          A game is four rounds of four hands, and each round asks for a different kind of hand. Here the deal passes one seat to the right after every hand, so each of you deals once a round. The tutor names the
           round&apos;s hand at the top of the table and points you towards it.
         </p>
         <dl className="rounds">
@@ -118,15 +118,18 @@ export default function RulesPage() {
           ))}
         </dl>
         <p>
-          A <b>goulash</b> hand starts with an <b>exchange</b>: everyone passes three tiles to the right, then across, then to the left, before a tile is drawn. West round is nothing but goulash.
+          The first hand of the game and every hand of the West round are <b>goulash</b> hands. Each West hand starts with an <b>exchange</b>: everyone passes three tiles to the right, then
+          across, then to the left, before a tile is drawn. Elsewhere a goulash is the hand played after a washed-out hand; here it opens the game.
         </p>
       </section>
 
       <section>
         <h2 className="font-display">Scoring</h2>
         <p>
-          The winner is paid by the other three; the amount depends on the hand and on how it was completed. Winning on a tile you drew yourself (<b>self-drawn</b>) pays more than winning on a
-          discard. The table keeps a running tally; you will see it next to each name.
+          Most hands pay a flat stake: each of the other three pays the winner, and the dealer (East) pays and receives double. Here, if the winner holds their own flower or season (the one
+          numbered for their seat: 1 for East, 2 for South, and so on), the stake doubles; if they hold both, it quadruples. The goulash hands are scored differently: points for each set, pair
+          and flower, then doubled for each special feature, and winning <b>off the wall</b> is one of those features. It is points only, never money. The table keeps a running tally; you will
+          see it next to each name.
         </p>
       </section>
 
@@ -155,11 +158,14 @@ export default function RulesPage() {
       </section>
 
       <footer>
-        <Link href="/play/solo" className="btn btn-primary btn-block min-h-[52px] text-[18px]">
-          Play a hand alone
+        <Link href="/room" className="btn btn-primary btn-block min-h-[52px] text-[18px]">
+          Host a table for your friends
+        </Link>
+        <Link href="/play/solo" className="btn btn-ghost btn-block min-h-[52px] text-[18px]">
+          Practise on the bots
         </Link>
         <Link href="/" className="link-quiet">
-          Back to the front
+          Society Mahjong home
         </Link>
       </footer>
     </main>

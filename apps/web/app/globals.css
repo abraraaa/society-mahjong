@@ -1,5 +1,27 @@
 @import 'tailwindcss';
 
+/* Android ships neither Arial nor Times New Roman, so next/font's size-matched
+   fallbacks never load there and text jumps when the web fonts arrive. These
+   match Roboto and Noto Serif to Inter and Fraunces instead. They sit after the
+   next/font variable in --font-sans and --font-display, so next/font keeps its
+   own Arial and Times faces (passing `fallback` to next/font would drop them). */
+@font-face {
+  font-family: 'Inter Fallback Android';
+  src: local('Roboto'), local('Roboto-Regular');
+  size-adjust: 107.4%;
+  ascent-override: 90.2%;
+  descent-override: 22.5%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: 'Fraunces Fallback Android';
+  src: local('Noto Serif'), local('NotoSerif-Regular');
+  size-adjust: 97.1%;
+  ascent-override: 100.7%;
+  descent-override: 26.3%;
+  line-gap-override: 0%;
+}
+
 /*
   Design tokens. The material is the tile: warm ivory faces, deep engraved
   glyphs, a jade felt, brass for gold-state moments. Dark is the table's
@@ -29,8 +51,8 @@
   --color-danger: #c9553f;
 
   /* --font-inter / --font-fraunces come from next/font (see app/layout.tsx) */
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-display: var(--font-fraunces), ui-serif, Georgia, serif;
+  --font-sans: var(--font-inter), 'Inter Fallback Android', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: var(--font-fraunces), 'Fraunces Fallback Android', ui-serif, Georgia, serif;
   --ease-tile: cubic-bezier(0.2, 0.8, 0.2, 1);
 
   --radius-tile-sm: 3px;
@@ -916,8 +938,13 @@ b .term {
 .landing .hero h1 {
   font-size: clamp(2.75rem, 12vw, 3.5rem);
   line-height: 1;
-  margin: 0.25rem 0 0.75rem;
+  margin: 0 0 0.75rem;
   color: var(--color-ivory-50);
+}
+/* The eyebrow sits inside the h1 so the heading reads "Society Mahjong"; it keeps its own small sans look. */
+.landing .hero h1 .eyebrow {
+  display: block;
+  margin-bottom: 0.25rem;
 }
 .landing .lede {
   margin: 0;

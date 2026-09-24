@@ -5,5 +5,5 @@ export const size = OG_SIZE;
 export const contentType = 'image/png';
 
 export default function Image() {
-  return ogCard('Mahjong', 'A table for you and your friends, wherever they are.');
+  return ogCard('Mahjong', 'A private table for your friends.');
 }

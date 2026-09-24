@@ -14,3 +14,12 @@ export function generateRoomCode(prefix = 'KHI'): string {
   for (const b of crypto.getRandomValues(new Uint8Array(LENGTH))) s += ALPHABET[b >>> 3];
   return `${prefix}-${s}`;
 }
+
+/**
+ * A code this app could have issued: KHI-, then four (older rooms) or five
+ * symbols from the alphabet. Link cards check it so a made-up path cannot
+ * mint a branded invite that reads "Table FREE-MONEY".
+ */
+export function isRoomCode(code: string): boolean {
+  return /^KHI-[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4,5}$/.test(code);
+}

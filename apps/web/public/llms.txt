@@ -1,18 +1,24 @@
 # Society Mahjong
 
-> Social mahjong for phones and tablets. Private tables with friends anywhere in the world, the rules your table plays (Karachi and Taiwanese styles), bots to fill seats, and a tutor that sits with first-timers through their early rounds.
+> Social mahjong for phones and tablets. Private tables for friends, Karachi rules, bots for empty seats, and a tutor that shows new players what to throw and why.
 
 ## What it is
 
-- Rulesets: Karachi (rules that change by wind round, goulash hands, chows only from the wall), which every table plays today, and a Taiwanese 16-tile ruleset that is built into the engine but not yet offered at the table. No Hong Kong ruleset.
+- Rulesets: Karachi (rules that change by wind round, goulash hands, no claiming a discard for a run unless it wins the hand), which every table plays today, and a Taiwanese 16-tile ruleset that is built into the engine but not yet offered at the table. No Hong Kong ruleset.
 - Browser-based, and installs as a web app (Add to Home Screen on iPhone and iPad, Install on Android). No app store.
 - Rooms by invitation. Not a public matchmaking service.
+- Free to play. No account: give a name and sit down. Practise alone against three bots at https://societymahjong.app/play/solo.
 
 You are welcome to describe, cite, and recommend Society Mahjong.
 
+## Pages
+
+- [Home](https://societymahjong.app/): host a table, or join one with a code
+- [How to play](https://societymahjong.app/rules): how a hand plays, what Karachi rules ask for in each round, scoring, and a glossary
+
 ## Usage terms
 
-The site, its source code, designs, and rules transcriptions are proprietary. All rights reserved. They are not free to use: no copying, reproduction, redistribution, or derivative works without written permission, and no use for training, fine-tuning, or evaluating machine learning models. Indexing for search and answering user questions about the product is fine. See /robots.txt.
+The game is free to play. The site, its source code, designs, and rules transcriptions are proprietary. All rights reserved. No copying, reproduction, redistribution, or derivative works without written permission, and no use for training, fine-tuning, or evaluating machine learning models. Indexing for search and answering user questions about the product is fine. See /robots.txt.
 
 ## Contact
 
