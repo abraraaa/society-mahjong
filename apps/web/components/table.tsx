@@ -8,6 +8,7 @@ import { Coach, CoachLine, TermProvider, useOpenTerm } from '@/components/coach'
 import { River } from '@/components/river';
 import { riverOrder } from '@/lib/river';
 import { NO_SCORES, handDeltas, signed, standings, type Scores } from '@/lib/ledger';
+import { discardOffer, heldSelection, selectTile, type Selection } from '@/lib/table-flow';
 import type { CoachState } from '@/lib/coach';
 
 /** What a seat can send: every engine action except the server's own `resolveClaims`. */
@@ -45,6 +46,8 @@ export interface TableProps {
   readonly nextLabel?: string;
   /** the live table's ticking clock: whose deadline is running and how long is left */
   readonly clock?: { readonly kind: 'turn' | 'claim'; readonly ms: number } | null;
+  /** a move is on its way to the table: the action buttons are disabled, and a second tap does nothing until it lands */
+  readonly busy?: boolean;
 }
 
 /** Under this much time left, the clock turns brass and pulses. */
@@ -86,6 +89,7 @@ function TableInner({
   onLeave,
   clock,
   nextLabel,
+  busy = false,
 }: TableProps) {
   const ME = view.me;
   const openTerm = useOpenTerm();
@@ -93,17 +97,25 @@ function TableInner({
   const sub = subtitle ? `${subtitle} · ${counter}` : counter;
   const me = view.players[ME];
   const legal = view.legal;
-  const [selected, setSelected] = useState<TileKind | null>(null);
+  const [pick, setPick] = useState<Selection | null>(null);
+  // The pick is only ever read through heldSelection, which drops it once the
+  // hand changes, the player's discard turn has come and gone, or the tile has
+  // left the hand. A tile lifted during the bots' moves can't linger into the
+  // next hand and put a tile the player doesn't hold on the Discard button.
+  const selected = heldSelection(pick, view);
 
   const act = (a: SeatAction) => {
-    setSelected(null);
+    if (busy) return;
+    setPick(null);
     onAct(a);
   };
 
   const myTurn = view.phase === 'turn' && view.turn === ME && !!legal.discard;
   const advice = tutorOn ? coach : null;
   const suggested = advice && advice.action.kind === 'discard' ? advice.action.tile : null;
-  const hasActions = !!legal.win || !!legal.kong?.length || (myTurn && (selected !== null || suggested !== null));
+  // The player's own pick wins over the tutor's, but only a tile they hold is ever offered.
+  const offer = discardOffer(view, selected, suggested);
+  const hasActions = !!legal.win || !!legal.kong?.length || offer !== null;
   // stable sort means duplicates of a newly-drawn kind land last, so this always resolves the tile just drawn
   const drawnIndex = view.drawn ? view.concealed.lastIndexOf(view.drawn) : -1;
 
@@ -150,25 +162,20 @@ function TableInner({
   const actions = (
     <>
       {legal.win && (
-        <button className="btn btn-gold" onClick={() => act({ type: 'declareWin', seat: ME })}>
+        <button className="btn btn-gold" disabled={busy} onClick={() => act({ type: 'declareWin', seat: ME })}>
           Mahjong!
         </button>
       )}
       {legal.kong?.map((k) => (
-        <button key={k} className="btn btn-ghost" onClick={() => act({ type: 'declareKong', seat: ME, tile: k })}>
+        <button key={k} className="btn btn-ghost" disabled={busy} onClick={() => act({ type: 'declareKong', seat: ME, tile: k })}>
           Kong {tileName(k)}
         </button>
       ))}
-      {myTurn &&
-        (selected ? (
-          <button className="btn btn-primary" onClick={() => act({ type: 'discard', seat: ME, tile: selected })}>
-            Discard {tileName(selected)}
-          </button>
-        ) : suggested ? (
-          <button className="btn btn-primary" onClick={() => act({ type: 'discard', seat: ME, tile: suggested })}>
-            Discard {tileName(suggested)}
-          </button>
-        ) : null)}
+      {offer && (
+        <button className="btn btn-primary" disabled={busy} onClick={() => act({ type: 'discard', seat: ME, tile: offer })}>
+          Discard {tileName(offer)}
+        </button>
+      )}
     </>
   );
 
@@ -187,7 +194,7 @@ function TableInner({
           fresh={isDrawn}
           coached={!!advice && advice.highlight.includes(k) && selected !== k}
           className={isDrawn ? 'drawn' : undefined}
-          onClick={() => setSelected(selected === k ? null : k)}
+          onClick={() => setPick(selected === k ? null : selectTile(k, view))}
         />
       );
     });
@@ -321,6 +328,7 @@ function TableInner({
           options={legal.claims!}
           onClaim={(claim) => act({ type: 'claim', seat: ME, claim })}
           onPass={() => act({ type: 'pass', seat: ME })}
+          busy={busy}
           {...(claimMs ? { claimMs: Math.max(1000, claimMs), clock: 'server' as const } : {})}
         />
       )}
@@ -329,15 +337,17 @@ function TableInner({
         // Keyed on the event sequence: each of the three passes (right, across,
         // left) gets a fresh sheet, so picks from the last pass cannot linger and
         // swallow the taps of the next.
-        <ExchangeSheet key={view.seq} hand={view.concealed} count={legal.exchange.count} coach={coach} onDone={(tiles) => act({ type: 'exchange', seat: ME, tiles })} />
+        <ExchangeSheet key={view.seq} hand={view.concealed} count={legal.exchange.count} coach={coach} busy={busy} onDone={(tiles) => act({ type: 'exchange', seat: ME, tiles })} />
       )}
 
-      {view.phase === 'finished' && <ResultSheet coach={coach} gameOver={!!gameOver} onNext={onNextHand} view={view} names={names} scores={scores} nextLabel={nextLabel} />}
+      {view.phase === 'finished' && (
+        <ResultSheet coach={coach} gameOver={!!gameOver} onNext={onNextHand} view={view} names={names} scores={scores} nextLabel={nextLabel} busy={busy} />
+      )}
     </>
   );
 }
 
-function ExchangeSheet({ hand, count, coach, onDone }: { hand: readonly TileKind[]; count: number; coach: CoachState; onDone: (tiles: TileKind[]) => void }) {
+function ExchangeSheet({ hand, count, coach, busy, onDone }: { hand: readonly TileKind[]; count: number; coach: CoachState; busy: boolean; onDone: (tiles: TileKind[]) => void }) {
   const [picked, setPicked] = useState<number[]>([]);
   // The coach has already worked out which tiles no candidate hand is using; the
   // player can overrule it, but the sheet opens on its answer rather than empty.
@@ -364,7 +374,7 @@ function ExchangeSheet({ hand, count, coach, onDone }: { hand: readonly TileKind
             />
           ))}
         </div>
-        <button className="btn btn-primary btn-block mt-3" disabled={picked.length !== count} onClick={() => onDone(picked.map((i) => hand[i]!))}>
+        <button className="btn btn-primary btn-block mt-3" disabled={busy || picked.length !== count} onClick={() => onDone(picked.map((i) => hand[i]!))}>
           Pass tiles
         </button>
       </div>
@@ -386,11 +396,13 @@ function ResultSheet({
   names,
   scores,
   nextLabel,
+  busy,
 }: {
   coach: CoachState;
   gameOver: boolean;
   onNext: () => void;
   nextLabel?: string | undefined;
+  busy: boolean;
   view: PrivatePlayerView;
   names: Readonly<Record<Seat, string>>;
   scores: Scores;
@@ -425,7 +437,7 @@ function ResultSheet({
           ))}
         </div>
         {gameOver && <p className="text-ivory-200/70 mt-3 text-center text-sm">That was the last hand of the North round. Final table above.</p>}
-        <button className="btn btn-primary btn-block mt-4" onClick={onNext}>
+        <button className="btn btn-primary btn-block mt-4" disabled={busy} onClick={onNext}>
           {gameOver ? (nextLabel ?? 'Play again') : 'Next hand'}
         </button>
       </div>
