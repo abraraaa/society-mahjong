@@ -12,6 +12,8 @@ export const metadata: Metadata = {
   description: 'Host a private mahjong table, send friends the link and play on your phones. Karachi rules, no sign-up, bots for empty seats and a tutor for new players.',
   openGraph: { siteName: 'Society Mahjong', type: 'website', locale: 'en_GB' },
   twitter: { card: 'summary_large_image' },
+  // Facebook's Sharing Debugger asks for this; it names the app, it is not a secret.
+  facebook: { appId: '1601622318138301' },
   appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'Society' },
 };
 
