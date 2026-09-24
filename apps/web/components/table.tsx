@@ -11,6 +11,9 @@ import { NO_SCORES, handDeltas, signed, standings, type Scores } from '@/lib/led
 import { discardOffer, handBoundary, heldSelection, selectTile, settling, type Selection } from '@/lib/table-flow';
 import type { CoachState } from '@/lib/coach';
 
+/** A player's name inside a sentence, isolated so a right-to-left name can't reorder the words and clock around it. */
+const isolate = (name: string | undefined): string => `\u2068${name ?? ''}\u2069`;
+
 /** What a seat can send: every engine action except the server's own `resolveClaims`. */
 export type SeatAction = Exclude<Action, { type: 'resolveClaims' }>;
 
@@ -259,7 +262,7 @@ function TableInner({
     if (clock.kind === 'turn' && view.phase === 'turn' && view.turn === ME) clockLine = `Your turn · ${mmss(clock.ms)}`;
     else if (clock.kind === 'turn' && view.phase === 'preplay' && legal.exchange) clockLine = `Your exchange · ${mmss(clock.ms)}`;
     else if (clock.kind === 'claim' && view.phase === 'claim' && !claimOpen) {
-      const waiting = view.players.filter((p) => p.seat !== ME && p.seat !== view.lastDiscard?.from && !p.responded).map((p) => names[p.seat]);
+      const waiting = view.players.filter((p) => p.seat !== ME && p.seat !== view.lastDiscard?.from && !p.responded).map((p) => isolate(names[p.seat]));
       if (waiting.length > 0) clockLine = `Waiting for ${waiting.join(' and ')} · ${mmss(clock.ms)}`;
     }
   }

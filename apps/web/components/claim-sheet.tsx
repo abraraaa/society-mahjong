@@ -82,7 +82,7 @@ export function ClaimSheet({
           <Tile kind={discardKind} size="lg" />
           <div className="flex flex-col gap-1">
             <h2 className="font-display text-xl">
-              {discarderName} discards {tileName(discardKind)}
+              <bdi>{discarderName}</bdi> discards {tileName(discardKind)}
             </h2>
             <p className="text-ivory-200/70 text-sm">
               <CoachLine say={coach.say} />
