@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError } from './live/client';
 import type { Seats } from './live/types';
@@ -92,20 +90,17 @@ describe('isClosedRoom', () => {
     expect(isClosedRoom({ status: 'finished', updated_at: '2026-09-01T10:00:00.123456+00:00' }, NOW)).toBe(true);
     expect(isClosedRoom({ status: 'finished', updated_at: '2026-09-20T10:00:00.123456+00:00' }, NOW)).toBe(false);
   });
-
-  it('keeps the same week as the join rule in lib/live/rooms.ts', () => {
-    const rooms = readFileSync(fileURLToPath(new URL('./live/rooms.ts', import.meta.url)), 'utf8');
-    const rule = /const STALE_ROOM_MS = ([\d\s*]+);/.exec(rooms);
-    expect(rule, 'STALE_ROOM_MS in rooms.ts').not.toBeNull();
-    const ms = rule![1]!.split('*').reduce((n, f) => n * Number(f.trim()), 1);
-    expect(ms).toBe(ROOM_OPEN_MS);
-  });
 });
 
 describe('retryCanHelp', () => {
   it('offers no retry for a code with no table or a closed table', () => {
     expect(retryCanHelp(new ApiError(404, 'no room with that code'))).toBe(false);
+    expect(retryCanHelp(new ApiError(404, 'no such game'))).toBe(false);
     expect(retryCanHelp(new ApiError(410, 'this table has closed'))).toBe(false);
+  });
+
+  it('offers no retry for a game the visitor has no seat in, since another go gets the same answer', () => {
+    expect(retryCanHelp(new ApiError(403, 'not at this table'))).toBe(false);
   });
 
   it('offers a retry for anything another go might fix', () => {

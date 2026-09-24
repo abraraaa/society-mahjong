@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HttpError, SupabaseError } from './errors';
-import { errorFacts, errorLine, logError, pathOnly, requestErrorLine } from './log';
+import { errorFacts, errorLine, logError, pathOnly, requestErrorLine, safeJson } from './log';
 // The file Next loads at the app's root: its onRequestError is tested here, with the logger it uses.
 import { onRequestError } from '../../instrumentation';
 
@@ -37,6 +37,18 @@ describe('errorFacts', () => {
   it('describes a cause that adds something, and a digest', () => {
     const err = Object.assign(new Error('render failed', { cause: new Error('socket hang up') }), { digest: '1234567' });
     expect(errorFacts(err)).toMatchObject({ name: 'Error', message: 'render failed', cause: 'socket hang up', digest: '1234567' });
+  });
+
+  it("leaves out PostgREST's hint and details, which can quote the row a write was refused for", () => {
+    const err = new SupabaseError('record the result', {
+      message: 'new row violates check constraint',
+      code: '23514',
+      details: 'Failing row contains (g-1, seed-never-log-me, ...)',
+      hint: 'Check the winner column',
+    } as { message: string; code: string });
+    const line = errorLine('route_error', err);
+    expect(JSON.parse(line)).toMatchObject({ message: 'could not record the result: new row violates check constraint', code: '23514' });
+    for (const leak of ['seed-never-log-me', 'Failing row', 'winner column', 'details', 'hint']) expect(line).not.toContain(leak);
   });
 
   it('copes with whatever else is thrown', () => {
@@ -87,6 +99,34 @@ describe('errorLine and logError', () => {
     );
     const line = JSON.parse(errorLine('route_error', hostile, { route: '/api/rooms' })) as Record<string, unknown>;
     expect(line).toEqual({ level: 'error', event: 'route_error', message: 'the error could not be described' });
+  });
+});
+
+describe('safeJson', () => {
+  // An 8-bit CSI, NEL, DEL, the line and paragraph separators, and the bidi controls.
+  const nasty = 'c1:\u{9b}31mRED nel:\u{85} del:\u{7f} ls:\u{2028} ps:\u{2029} rlo:\u{202e}evil lri:\u{2066}x\u{2069} alm:\u{61c} rlm:\u{200f}';
+
+  it('escapes what JSON.stringify leaves raw, so the line still parses to the same value', () => {
+    const line = safeJson({ message: nasty });
+    expect(line).not.toMatch(/[\x7f-\x9f\u{61c}\u{200e}\u{200f}\u{2028}\u{2029}\u{202a}-\u{202e}\u{2066}-\u{2069}]/u);
+    expect(line).toContain('\\u009b31mRED nel:\\u0085 del:\\u007f ls:\\u2028 ps:\\u2029 rlo:\\u202eevil lri:\\u2066x\\u2069 alm:\\u061c rlm:\\u200f');
+    expect(JSON.parse(line)).toEqual({ message: nasty });
+  });
+
+  it('leaves everything else as JSON.stringify writes it', () => {
+    const plain = { level: 'error', message: 'Zoë played 🀄 萬 with a\ttab and a "quote"\n', n: 3, none: null };
+    expect(safeJson(plain)).toBe(JSON.stringify(plain));
+  });
+
+  it('is what errorLine and requestErrorLine write', () => {
+    const err = new Error(nasty);
+    for (const line of [
+      errorLine('route_error', err, { route: '/api/rooms/[code]/join' }),
+      requestErrorLine(err, { path: `/r/\u{202e}x`, method: 'GET' }, { routePath: '/r/[code]', routeType: 'render' }),
+    ]) {
+      expect(line).not.toMatch(/[\x7f-\x9f\u{2028}\u{2029}\u{202e}]/u);
+      expect((JSON.parse(line) as { message: string }).message).toBe(nasty);
+    }
   });
 });
 

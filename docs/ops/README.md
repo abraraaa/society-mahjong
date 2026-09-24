@@ -117,7 +117,7 @@ Once a week, on a Monday, is enough to start with.
 
 ## Reading the server's error lines
 
-Not a launch check: a key for when something looks wrong. The server writes each error as one line of JSON in Vercel's function logs (the project's **Logs** tab). Type an `event` name below into the search box to find every line of that kind. No line carries a request body, a header, a cookie, a token or a query string.
+Not a launch check: a key for when something looks wrong. The server writes each error as one line of JSON in Vercel's function logs (the project's **Logs** tab). Type an `event` name below into the search box to find every line of that kind. No line carries a request body, a cookie, a token or a query string, and the only header any line keeps is the user agent on `client_error` lines. Control characters, line separators and bidi controls in a JSON line are written escaped (`\u009b`, `\u2028`, `\u202e` and so on), so each line stays one line and reads in the order it was written.
 
 - **`route_error`**: an API route answered 500 and the player saw "something went wrong". `route` names the route. A database failure reads `could not <what>: <why>`, and `code` holds Postgres's error code.
 - **`after_commit_failed`**: a move was saved and the game went on, but a write after it failed. `step` says which one. Each is one write, and the ones after it still ran:
@@ -130,6 +130,7 @@ Not a launch check: a key for when something looks wrong. The server writes each
   - `tally the players`: the players' hand counts, which pace their clocks, missed that hand. A profile that couldn't be read or written is logged on its own line starting `recordHand:`.
   - `finish the game`: the game's end didn't fully record, and the game is still active. Anyone at the table pressing **Next hand** once more finishes it. The room is written first, so if that much landed, the lobby already offers the host **Play again**. A room left "playing" by a game that has ended reads as finished, so it can always be dealt again.
 - **`request_error`**: an error nothing else caught, such as a page that failed to render. `digest` matches the code on an error page, and `routePath` and `routeType` say where it happened.
+- **`client_error`**: a page crashed in a player's browser and its error page sent word. `message` and `path` are what the browser reported, with anything shaped like a credential replaced by `[redacted]`. `userAgent` says which phone and browser. A `digest` ties it to the server's `request_error` line for the same failure, when there is one.
 - **`sweep_game_failed`**: the daily sweep couldn't settle one game (`gameId`). The others were still swept. A game someone else moved first isn't logged: it shows as `already moved` in the sweep's results.
 - **`stages_read_failed`**: the players' levels couldn't be read, so the table ran a first-timer's clocks, the slowest, for that move or deal. The move itself went through.
 - **`leave_settle_failed`**: someone stood up and the bot in their seat couldn't move straight away. The next clock or the sweep plays its move.

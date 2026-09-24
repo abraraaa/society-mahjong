@@ -17,7 +17,8 @@ vi.mock('./store', () => ({
   saveSeats: vi.fn(async () => '2026-09-24T00:00:01Z'),
 }));
 
-import { SupabaseError } from './errors';
+import { ROOM_OPEN_MS } from '../front-door';
+import { HttpError, SupabaseError } from './errors';
 import { joinRoom, requireRoom } from './rooms';
 import * as store from './store';
 
@@ -80,5 +81,29 @@ describe('a room, as it stands', () => {
     const { room: back, seated } = await joinRoom(await requireRoom('ABCD'), 'u-abrar', 'Abrar');
     expect(seated).toBe(false);
     expect(back.status).toBe('finished');
+  });
+});
+
+describe('a finished room, a week on', () => {
+  // The front door's rule (isClosedRoom in lib/front-door.ts) is the join's too, so the two can't drift apart.
+  const finished = (ageMs: number): RoomRow => ({ ...room, status: 'finished', updated_at: new Date(Date.now() - ageMs).toISOString() });
+  const MINUTE = 60_000;
+
+  it('turns a newcomer away once the week is up', async () => {
+    const err = await joinRoom(finished(ROOM_OPEN_MS + MINUTE), 'u-sana', 'Sana').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpError);
+    expect(err).toMatchObject({ status: 410, message: 'this table has closed' });
+    expect(store.saveSeats).not.toHaveBeenCalled();
+  });
+
+  it('still seats a newcomer within the week', async () => {
+    const { room: after, seated } = await joinRoom(finished(ROOM_OPEN_MS - MINUTE), 'u-sana', 'Sana');
+    expect(seated).toBe(true);
+    expect(after.seats[1]).toEqual({ kind: 'human', userId: 'u-sana', name: 'Sana' });
+  });
+
+  it('lets its own people back in after the week', async () => {
+    const { seated } = await joinRoom(finished(30 * ROOM_OPEN_MS), 'u-abrar', 'Abrar');
+    expect(seated).toBe(false);
   });
 });

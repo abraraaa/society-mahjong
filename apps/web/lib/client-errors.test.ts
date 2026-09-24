@@ -36,6 +36,22 @@ describe('scrub', () => {
     ['{"access_token": "abc.def", "expires_in": 3600}', '{"access_token": "[redacted]", "expires_in": 3600}'],
     ['{"refresh_token":"r-123","user":"x"}', '{"refresh_token":"[redacted]","user":"x"}'],
     ['(api_secret=zzz)', '(api_secret=[redacted])'],
+    // The auth cookie split into chunks, as @supabase/ssr writes it when the session is large.
+    [
+      'Cookie: sb-abc-auth-token.0=base64-eyJhY2Nlc3NfdG9rZW4iOiJ4In0; sb-abc-auth-token.1=c3NfdG9rZW4iOiJ4In0; theme=dark',
+      'Cookie: sb-abc-auth-token.0=[redacted]; sb-abc-auth-token.1=[redacted]; theme=dark',
+    ],
+    ['session read failed: base64-eyJhY2Nlc3NfdG9rZW4iOiJ4In0', 'session read failed: [redacted]'],
+    ['refresh_token: v1.MRjcabcdef', 'refresh_token: [redacted]'],
+    ["{access_token: 'abc123opaque'}", "{access_token: '[redacted]'}"],
+    ["'access_token': 'opaque123'", "'access_token': '[redacted]'"],
+    ['password: hunter2', 'password: [redacted]'],
+    ["{ apiKey: 'k-123', session: { accessToken: 'opaque' } }", "{ apiKey: '[redacted]', session: { accessToken: '[redacted]' } }"],
+    ['Authorization: Token abcdef123', 'Authorization: Token [redacted]'],
+    ['key sb_secret_abcdefghijkl123 was refused', 'key [redacted] was refused'],
+    ['sb_publishable_abcdefghijkl123', '[redacted]'],
+    // An hCaptcha answer: a JWT behind a prefix.
+    ['captcha P1_eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJwYXNza2V5IjoiYWJjIn0.x failed', 'captcha P1_[redacted] failed'],
   ])('redacts %s', (input, output) => {
     expect(scrub(input)).toBe(output);
   });
@@ -46,12 +62,32 @@ describe('scrub', () => {
     'statusCode=409 errorCode=E156',
     'Loading chunk 812 failed. (error: https://societymahjong.app/_next/static/chunks/0e-btmb9lff-7.js)',
     '{"seat":2,"phase":"claim"}',
+    'Session: expired',
+    'TypeError: Failed to fetch',
+    'Unexpected token u in JSON at position 0',
+    `SyntaxError: Unexpected token '<', "<!DOCTYPE "... is not valid JSON`,
+    'key: 3, token count: 12',
+    'window.location.href=https://societymahjong.app/g/abc',
   ])('leaves an ordinary message alone: %s', (message) => {
     expect(scrub(message)).toBe(message);
   });
 
   it('stays quick on a hostile message the size of the largest body', () => {
-    const hostile = ['token-'.repeat(700), 'eyJ-'.repeat(1000), '"key'.repeat(1000), 'a='.repeat(2000), 'Bearer '.repeat(600)];
+    const hostile = [
+      'token-'.repeat(700),
+      'eyJ-'.repeat(1000),
+      '_eyJ'.repeat(1000),
+      '"key'.repeat(1000),
+      'a='.repeat(2000),
+      'a.'.repeat(2000),
+      "'a".repeat(2000),
+      'x: '.repeat(1400),
+      "'token': ".repeat(450),
+      'Bearer '.repeat(600),
+      'Token '.repeat(700),
+      'base64-'.repeat(600),
+      `'${'a'.repeat(4000)}`,
+    ];
     const start = performance.now();
     for (const text of hostile) scrub(text.slice(0, REPORT_BODY_MAX));
     expect(performance.now() - start).toBeLessThan(250);

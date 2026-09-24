@@ -1,4 +1,5 @@
 import { ALL_TILE_KINDS, RULESETS, type ClaimOption, type RulesetId, type Seat, type TileKind } from '@society/engine';
+import { NAME_MAX } from '../name-gate';
 import type { ClientAction } from './types';
 
 /**
@@ -128,21 +129,70 @@ export function parseRoomOptions(input: unknown): RoomOptions | null {
   return out;
 }
 
-/** The longest name a seat shows. The name gate trims to the same length. */
-export const MAX_NAME_LENGTH = 24;
+/**
+ * Characters in a name that print nothing. Every format character goes: the
+ * bidi controls (U+202E and friends), which would turn the rest of "Waiting
+ * for …" round for everyone at the table, and zero-width spaces, soft hyphens
+ * and byte-order marks, which make a name that looks like another or like
+ * nothing. So do the fillers Unicode counts as letters or symbols but draws
+ * blank (U+115F, U+1160, U+3164, U+FFA0, U+2800). KEPT_FORMAT says which
+ * format characters stay.
+ */
+const INVISIBLE = /[\p{Cf}\u{115f}\u{1160}\u{3164}\u{ffa0}\u{2800}]/gu;
+
+/**
+ * The joiners and tag characters stay: emoji are built from U+200D and the
+ * tags (a family, a Scottish flag), and Urdu and Persian spelling uses U+200C
+ * between letters that mustn't join. None of them reorders anything, and a
+ * name made of nothing else is refused anyway.
+ */
+const KEPT_FORMAT = /^[\u{200c}\u{200d}\u{e0020}-\u{e007f}]$/u;
+
+/**
+ * At most this many code points in all, however few characters they make:
+ * one letter can carry any number of accents and still count as one
+ * character, so without this a name could run to any length. It leaves room
+ * for NAME_MAX of nearly anything, or six family emoji at seven each.
+ */
+const NAME_CODE_POINTS_MAX = NAME_MAX * 2;
+
+/** The characters of a text as a reader counts them, or its code points where the runtime has no Intl.Segmenter. */
+function* characters(text: string): Generator<string> {
+  if (typeof Intl.Segmenter === 'function') {
+    for (const { segment } of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) yield segment;
+  } else {
+    yield* text;
+  }
+}
+
+/** The first NAME_MAX characters, whole: an emoji or an accented letter is kept or dropped, never cut. */
+function firstCharacters(text: string): string {
+  let out = '';
+  let count = 0;
+  let points = 0;
+  for (const c of characters(text)) {
+    points += Array.from(c).length;
+    if (++count > NAME_MAX || points > NAME_CODE_POINTS_MAX) break;
+    out += c;
+  }
+  // Counting by code point can end on a joiner, which then joins nothing.
+  return out.replace(/[\u{200c}\u{200d}]+$/u, '');
+}
 
 /**
  * A display name as the table shows it, or null when nothing usable is left.
- * Control characters become spaces, runs of space collapse, and the result
- * is capped at MAX_NAME_LENGTH characters, counted by code point so a
- * character outside the basic plane is never cut in half.
+ * Control characters become spaces, characters that print nothing go (see
+ * INVISIBLE), runs of space collapse, and the result is capped at NAME_MAX
+ * characters, the name gate's limit too. A name with no letter, number or
+ * symbol left (nothing but dots, say) is no name at all.
  */
 export function cleanDisplayName(input: unknown): string | null {
   if (typeof input !== 'string') return null;
   const flat = input
     .replace(/\p{Cc}/gu, ' ')
+    .replace(INVISIBLE, (c) => (KEPT_FORMAT.test(c) ? c : ''))
     .replace(/\s+/g, ' ')
     .trim();
-  const capped = Array.from(flat).slice(0, MAX_NAME_LENGTH).join('').trimEnd();
-  return capped === '' ? null : capped;
+  const capped = firstCharacters(flat).trimEnd();
+  return /[\p{L}\p{N}\p{S}]/u.test(capped) ? capped : null;
 }

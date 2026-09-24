@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { SEATS, analysisBot, karachi, legalActions, reduce, startHand, viewFor, type Action, type GameProgress, type HandState } from '@society/engine';
+import { NAME_MAX } from '../name-gate';
 import { CLIENT_ACTION_TYPES, PLAYER_ACTION_TYPES } from './types';
-import { MAX_NAME_LENGTH, cleanDisplayName, isUuid, parseClaim, parseClientAction, parseRoomOptions, parseRoomRequest, parseSeat, parseTile } from './validate';
+import { cleanDisplayName, isUuid, parseClaim, parseClientAction, parseRoomOptions, parseRoomRequest, parseSeat, parseTile } from './validate';
 
 /** What the route sees: the action after a trip through JSON. */
 const wire = (x: unknown): unknown => JSON.parse(JSON.stringify(x));
@@ -181,26 +182,90 @@ describe('parseRoomRequest', () => {
 });
 
 describe('cleanDisplayName', () => {
+  const family = '\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}';
+  const astronaut = '\u{1f469}\u{1f3fd}\u{200d}\u{1f680}';
+  const scotland = '\u{1f3f4}\u{e0067}\u{e0062}\u{e0073}\u{e0063}\u{e0074}\u{e007f}';
+
   it('keeps an ordinary name as typed', () => {
     expect(cleanDisplayName('Abrar')).toBe('Abrar');
     expect(cleanDisplayName('  Mary Jane  ')).toBe('Mary Jane');
     expect(cleanDisplayName('Zoë')).toBe('Zoë');
+    expect(cleanDisplayName('\u{639}\u{627}\u{626}\u{634}\u{6c1}')).toBe('\u{639}\u{627}\u{626}\u{634}\u{6c1}');
+    expect(cleanDisplayName('J.')).toBe('J.');
+    expect(cleanDisplayName('7')).toBe('7');
+    expect(cleanDisplayName('\u{1f004}')).toBe('\u{1f004}');
   });
 
-  it(`caps a name at ${MAX_NAME_LENGTH} characters`, () => {
-    expect(MAX_NAME_LENGTH).toBe(24);
-    expect(cleanDisplayName('x'.repeat(5000))).toBe('x'.repeat(24));
-    expect(cleanDisplayName('a'.repeat(23) + ' b')).toBe('a'.repeat(23));
-    // Counted by character, so an emoji at the edge is kept whole or not at all.
-    const emoji = cleanDisplayName('😀'.repeat(30))!;
-    expect(Array.from(emoji)).toHaveLength(24);
-    expect(emoji).toBe('😀'.repeat(24));
+  it(`caps a name at ${NAME_MAX} characters, the name gate's limit`, () => {
+    expect(cleanDisplayName('x'.repeat(5000))).toBe('x'.repeat(NAME_MAX));
+    expect(cleanDisplayName('a'.repeat(NAME_MAX - 1) + ' b')).toBe('a'.repeat(NAME_MAX - 1));
+    expect(cleanDisplayName('😀'.repeat(30))).toBe('😀'.repeat(NAME_MAX));
+  });
+
+  it('counts characters as a reader does, so an emoji made of several code points is kept whole', () => {
+    expect(cleanDisplayName(family.repeat(6))).toBe(family.repeat(6));
+    expect(cleanDisplayName(`Sana ${astronaut}`)).toBe(`Sana ${astronaut}`);
+    expect(cleanDisplayName(`Iain ${scotland}`)).toBe(`Iain ${scotland}`);
+    expect(cleanDisplayName('\u{1f1f5}\u{1f1f0}'.repeat(30))).toBe('\u{1f1f5}\u{1f1f0}'.repeat(NAME_MAX));
+    // An accent typed as its own code point counts with its letter.
+    expect(cleanDisplayName('e\u{301}'.repeat(30))).toBe('e\u{301}'.repeat(NAME_MAX));
+  });
+
+  it('stops at a whole character once the code points run long', () => {
+    // A seventh family would pass 48 code points.
+    expect(cleanDisplayName(family.repeat(10))).toBe(family.repeat(6));
+    // A letter under a pile of accents is one character, but not an endless one.
+    expect(cleanDisplayName(`Abrar${'\u{301}'.repeat(100)}`)).toBe('Abra');
+    expect(cleanDisplayName(`A${'\u{301}'.repeat(100)}`)).toBeNull();
+  });
+
+  it('without Intl.Segmenter, counts code points and never ends on a joiner', () => {
+    const { Segmenter } = Intl;
+    Object.defineProperty(Intl, 'Segmenter', { value: undefined, configurable: true, writable: true });
+    try {
+      expect(cleanDisplayName('x'.repeat(40))).toBe('x'.repeat(NAME_MAX));
+      // 'a', three families (21 code points), then a man and the joiner after him make 24: the joiner goes.
+      expect(cleanDisplayName(`a${family.repeat(4)}`)).toBe(`a${family.repeat(3)}\u{1f468}`);
+      expect(cleanDisplayName('\u{202e}Abrar')).toBe('Abrar');
+    } finally {
+      Object.defineProperty(Intl, 'Segmenter', { value: Segmenter, configurable: true, writable: true });
+    }
+    expect(typeof Intl.Segmenter).toBe('function');
   });
 
   it('flattens control characters and runs of space', () => {
     expect(cleanDisplayName('Sana\n\n\tKhan')).toBe('Sana Khan');
     expect(cleanDisplayName('Bi\u0000lal')).toBe('Bi lal');
-    expect(cleanDisplayName('A B')).toBe('A B');
+    expect(cleanDisplayName('Bi\u{85}lal')).toBe('Bi lal');
+    expect(cleanDisplayName('A\u{2028}B')).toBe('A B');
+  });
+
+  it('takes out bidi controls, which would turn the rest of a line round for everyone at the table', () => {
+    expect(cleanDisplayName('\u{202e}Abrar')).toBe('Abrar');
+    expect(cleanDisplayName('Ab\u{2066}rar')).toBe('Abrar');
+    for (const c of ['\u{61c}', '\u{200e}', '\u{200f}', '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}', '\u{2067}', '\u{2068}', '\u{2069}']) {
+      expect(cleanDisplayName(`Sa${c}na`), c.codePointAt(0)!.toString(16)).toBe('Sana');
+    }
+  });
+
+  it('takes out characters that print nothing, and refuses a name made only of them', () => {
+    for (const c of ['\u{200b}', '\u{ad}', '\u{3164}', '\u{115f}', '\u{1160}', '\u{ffa0}', '\u{2800}', '\u{feff}', '\u{2060}', '\u{180e}']) {
+      expect(cleanDisplayName(c), c.codePointAt(0)!.toString(16)).toBeNull();
+      expect(cleanDisplayName(`Bi${c}lal`), c.codePointAt(0)!.toString(16)).toBe('Bilal');
+    }
+    expect(cleanDisplayName('\u{200b}\u{3164} \u{2800}\u{202e}')).toBeNull();
+  });
+
+  it('keeps the joiners that emoji and Urdu or Persian spelling are made with, but not one left joining nothing', () => {
+    const alireza = '\u{639}\u{644}\u{6cc}\u{200c}\u{631}\u{636}\u{627}';
+    expect(cleanDisplayName(alireza)).toBe(alireza);
+    expect(cleanDisplayName(`Abrar\u{200d}`)).toBe('Abrar');
+    expect(cleanDisplayName('\u{200d}')).toBeNull();
+    expect(cleanDisplayName('\u{200c}')).toBeNull();
+  });
+
+  it('refuses a name with no letter, number or symbol in it', () => {
+    for (const x of ['...', '- -', '!?', '()', '\u{301}', '\u{e0067}\u{e007f}']) expect(cleanDisplayName(x), x).toBeNull();
   });
 
   it('gives null when there is no name to use', () => {

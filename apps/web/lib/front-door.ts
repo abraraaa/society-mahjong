@@ -1,11 +1,7 @@
 import { isRoomCode } from './room-code';
 import { seatOf, type RoomStatus, type Seats } from './live/types';
 
-/**
- * How long a finished room keeps taking newcomers: a week after its last game.
- * Joining enforces this as STALE_ROOM_MS in lib/live/rooms.ts, which doesn't
- * export it, so the two must change together.
- */
+/** How long a finished room keeps taking newcomers: a week after its last game. */
 export const ROOM_OPEN_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** What an invite link shows first: the lobby (name gate, then a seat), or a table that isn't there. */
@@ -18,7 +14,7 @@ export interface DoorRoom {
   readonly seats: Seats;
 }
 
-/** Whether a room has stopped taking newcomers, by the same rule the join follows. */
+/** Whether a room has stopped taking newcomers. The one rule for it: the front door and the join (lib/live/rooms.ts) both ask this. */
 export function isClosedRoom(room: Pick<DoorRoom, 'status' | 'updated_at'>, now: number): boolean {
   return room.status === 'finished' && now - Date.parse(room.updated_at) > ROOM_OPEN_MS;
 }
@@ -56,10 +52,10 @@ export async function frontDoor(code: string, look: DoorLookup, now = Date.now()
 
 /**
  * Whether Try again could help after a table failed to load. A code with no
- * room behind it (404) or a table that has closed (410) stays that way, so the
- * way out is home, not another go.
+ * room behind it (404), a table that has closed (410), or a game the visitor
+ * has no seat in (403) stays that way, so the way out is home, not another go.
  */
 export function retryCanHelp(err: unknown): boolean {
   const status = (err as { status?: unknown } | null)?.status;
-  return status !== 404 && status !== 410;
+  return status !== 403 && status !== 404 && status !== 410;
 }

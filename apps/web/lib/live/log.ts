@@ -12,6 +12,24 @@
  * this too, and Next may run that in either runtime.
  */
 
+/**
+ * Characters JSON.stringify leaves raw that can still spoil a log line: DEL
+ * and the C1 controls (U+007F to U+009F), which some terminals act on; the
+ * line and paragraph separators (U+2028, U+2029), which some log viewers
+ * break a line at; and the bidi controls, which can make a line read in a
+ * different order from the one it was written in.
+ */
+const UNSAFE_IN_LOG = /[\x7f-\x9f\u{061c}\u{200e}\u{200f}\u{2028}\u{2029}\u{202a}-\u{202e}\u{2066}-\u{2069}]/gu;
+
+/**
+ * One log line as JSON, with the characters above escaped as \uXXXX. They
+ * only ever sit inside a string, so the line still parses to exactly the
+ * same value. Every JSON line the server writes goes through this.
+ */
+export function safeJson(line: Readonly<Record<string, unknown>>): string {
+  return JSON.stringify(line).replace(UNSAFE_IN_LOG, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
 /** Plain values that say where a failure happened. Keys must not reuse the names in ErrorFacts, which win. */
 export type LogContext = Readonly<Record<string, string | number | boolean | null | undefined>>;
 
@@ -63,9 +81,9 @@ export function errorFacts(err: unknown): ErrorFacts {
 /** The JSON line for one failure. It never throws: a value that cannot be described still gets a line. */
 export function errorLine(event: string, err: unknown, context: LogContext = {}): string {
   try {
-    return JSON.stringify({ level: 'error', event, ...context, ...errorFacts(err) });
+    return safeJson({ level: 'error', event, ...context, ...errorFacts(err) });
   } catch {
-    return JSON.stringify({ level: 'error', event, message: 'the error could not be described' });
+    return safeJson({ level: 'error', event, message: 'the error could not be described' });
   }
 }
 
@@ -104,7 +122,7 @@ export interface RouteFacts {
 export function requestErrorLine(err: unknown, request: RequestFacts, context: RouteFacts): string {
   try {
     const { name, message, digest } = errorFacts(err);
-    return JSON.stringify({
+    return safeJson({
       level: 'error',
       event: 'request_error',
       name,
@@ -116,6 +134,6 @@ export function requestErrorLine(err: unknown, request: RequestFacts, context: R
       routeType: context.routeType,
     });
   } catch {
-    return JSON.stringify({ level: 'error', event: 'request_error', message: 'the error could not be described' });
+    return safeJson({ level: 'error', event: 'request_error', message: 'the error could not be described' });
   }
 }

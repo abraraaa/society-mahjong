@@ -33,20 +33,39 @@ export function pathOnly(value: unknown): unknown {
 // anyone can post a message. A bare `code` is an OAuth sign-in code; a
 // statusCode or errorCode is kept.
 const SECRET_NAME = /token|secret|key|password|session|auth|^code$/i;
+// A `name: value` pair is common in ordinary messages ("TypeError: …",
+// "Session: expired"), so there the name must be one of these, whole, however
+// it is cased or joined: access_token, accessToken and session.access-token
+// all count.
+const SECRET_KEY = /^(?:(?:access|refresh|provider|providerrefresh|id|captcha)?token|password|passwd|(?:client)?secret|apikey)$/i;
+
+function isSecretKey(name: string): boolean {
+  const last = name.slice(name.lastIndexOf('.') + 1);
+  return SECRET_KEY.test(last.replace(/[-_]/g, ''));
+}
+
 const REDACTED = '[redacted]';
 
 /** The text with anything that looks like a credential replaced. */
 export function scrub(text: string): string {
   return (
     text
-      // A JWT: a Supabase access token, or the inside of its auth cookie.
-      .replace(/(?<!\w)eyJ[\w-]{4,}\.[\w-]{4,}(?:\.[\w-]*)?/g, REDACTED)
-      // An Authorization header's value.
+      // A JWT: a Supabase access token, the inside of its auth cookie, or the body of an hCaptcha answer (P1_eyJ…).
+      .replace(/(?<![A-Za-z0-9])eyJ[\w-]{4,}\.[\w-]{4,}(?:\.[\w-]*)?/g, REDACTED)
+      // Supabase's newer API keys, and the value of its auth cookie however the cookie is split.
+      .replace(/\bsb_(?:secret|publishable)_[\w-]+/g, REDACTED)
+      .replace(/\bbase64-[A-Za-z0-9+/=_-]{16,}/g, REDACTED)
+      // An Authorization header's value. `Token` only as a header writes it: "unexpected token u in JSON" is an ordinary parse error.
       .replace(/\b(Bearer|Basic)\s+[\w.~+/=-]+/gi, `$1 ${REDACTED}`)
-      // token=…, api_key=…, sb-…-auth-token=…, code=… in a query string or a cookie header.
-      .replace(/(?<![\w-])([\w-]+)=([^\s&;,'"()<>[\]{}]+)/g, (all, name: string) => (SECRET_NAME.test(name) ? `${name}=${REDACTED}` : all))
+      .replace(/\bToken\s+[\w.~+/=-]+/g, `Token ${REDACTED}`)
+      // token=…, api_key=…, sb-…-auth-token=… or its chunks (sb-…-auth-token.0=…), code=… in a query string or a cookie header.
+      .replace(/(?<![\w.-])([\w.-]+)=([^\s&;,'"()<>[\]{}]+)/g, (all, name: string) => (SECRET_NAME.test(name) ? `${name}=${REDACTED}` : all))
       // "access_token": "…" in quoted JSON.
       .replace(/"([\w-]+)"(\s*:\s*)"[^"]*"/g, (all, name: string, colon: string) => (SECRET_NAME.test(name) ? `"${name}"${colon}"${REDACTED}"` : all))
+      // password: …, {access_token: '…'}, 'refresh_token': '…', unquoted or single-quoted.
+      .replace(/(?<![\w.-])(['"]?)([\w.-]+)\1(\s*:\s*)(['"]?)[^\s,;'"}]+\4/g, (all, q: string, name: string, colon: string, v: string) =>
+        isSecretKey(name) ? `${q}${name}${q}${colon}${v}${REDACTED}${v}` : all,
+      )
   );
 }
 

@@ -30,10 +30,6 @@ describe('api requests give up after about ten seconds', () => {
     vi.unstubAllGlobals();
   });
 
-  it('is about ten seconds', () => {
-    expect(REQUEST_TIMEOUT_MS).toBe(10_000);
-  });
-
   it('rejects a request with no answer as timed out, with no status, and aborts the fetch', async () => {
     const fetch = hangingFetch();
     vi.stubGlobal('fetch', fetch);

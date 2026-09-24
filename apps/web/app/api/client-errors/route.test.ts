@@ -136,6 +136,21 @@ describe('POST /api/client-errors', () => {
     expect(log).not.toHaveBeenCalled();
   });
 
+  it('answers 400 and logs nothing when the body is cut off part way', async () => {
+    // A phone that leaves mid-report: the first chunk arrives, then the connection drops.
+    let pulled = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulled++ === 0) controller.enqueue(new TextEncoder().encode('{"message":"bo'));
+        else controller.error(new Error('aborted'));
+      },
+    });
+    const res = await POST(new Request(ENDPOINT, { method: 'POST', body: stream, duplex: 'half' } as RequestInit));
+    expect(res.status).toBe(400);
+    expect(pulled).toBe(2);
+    expect(log).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['not JSON', 'message=boom'],
     ['an empty body', ''],
@@ -151,5 +166,17 @@ describe('POST /api/client-errors', () => {
   it('keeps a message with line breaks on one log line', async () => {
     await post(JSON.stringify({ message: 'first\nsecond\r\nthird', path: '/' }));
     expect(logged().message).toBe('first\nsecond\r\nthird');
+  });
+
+  it('escapes the characters JSON leaves raw that a terminal or log viewer acts on, and the line still reads back the same', async () => {
+    // An 8-bit CSI (U+009B), a line separator (U+2028) and a right-to-left override (U+202E); a header can carry C1 bytes such as NEL (U+0085).
+    const message = 'c1:\u{9b}31mRED ls:\u{2028}FAKE bidi:\u{202e}evil';
+    const userAgent = 'UA\u{9b}2J\u{85}next';
+    await post(JSON.stringify({ message, path: '/' }), { 'user-agent': userAgent });
+    const raw = log.mock.calls[0]?.[0] as string;
+    expect(raw).not.toMatch(/[\x7f-\x9f\u{2028}\u{2029}\u{202e}]/u);
+    expect(raw).toContain('\\u009b31mRED ls:\\u2028FAKE bidi:\\u202eevil');
+    expect(raw).toContain('UA\\u009b2J\\u0085next');
+    expect(logged()).toMatchObject({ message, userAgent });
   });
 });

@@ -19,7 +19,12 @@ export interface SupabaseFailure {
 /**
  * A Supabase call that failed. It is deliberately not an HttpError: nothing
  * in it reaches a player. errorResponse answers 500 with a generic message
- * and logs this, with the original error (hint, details and all) as `cause`.
+ * and logs this, but only its message (which carries Supabase's own) and its
+ * code, plus the cause's message if it ever says more (see errorFacts in
+ * log.ts). The original error is kept as `cause`, but its `hint` and
+ * `details` are left out of the log on purpose: PostgREST's details can
+ * quote the row a write was refused for, such as a game's seed or every
+ * seat's tiles in live_state.
  */
 export class SupabaseError extends Error {
   readonly code: string | undefined;
