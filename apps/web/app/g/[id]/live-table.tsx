@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getRuleset, tileName, type Action, type PrivatePlayerView, type Seat, type TileKind } from '@society/engine';
+import { getRuleset, type Seat } from '@society/engine';
 import { Table } from '@/components/table';
 import { NameGate } from '@/components/name-gate';
 import { ConfirmSheet } from '@/components/confirm-sheet';
@@ -17,8 +17,8 @@ import type { ClientAction } from '@/lib/live/types';
 import { NeedsCaptcha, ensureSession } from '@/lib/supabase/session';
 import { useGuestName } from '@/lib/supabase/use-guest-name';
 import { scoresFrom } from '@/lib/ledger';
-import { canDiscard } from '@/lib/table-flow';
-import { POLL_MS, sendMove, shouldPoll } from '@/lib/table-sync';
+import { canDiscard, discardRefusal, standInNotice } from '@/lib/table-flow';
+import { POLL_MS, afterFailedLook, sendMove, shouldPoll, singleFlight, type LookQueue } from '@/lib/table-sync';
 
 interface Progress {
   readonly handsFinished: number;
@@ -67,6 +67,9 @@ export function LiveTable({ gameId }: { gameId: string }) {
   const take = useCallback((s: GameSnapshot) => {
     if (latestRef.current && s.version < latestRef.current.version) return; // an older reply arriving late
     latestRef.current = s;
+    // A table in hand answers whatever went wrong before it.
+    setError(null);
+    setDeadEnd(false);
     setClaimMs(s.deadlines.claim === null ? null : s.deadlines.claim - s.now);
     const at = Date.now();
     setSync({ serverNow: s.now, at });
@@ -82,18 +85,32 @@ export function LiveTable({ gameId }: { gameId: string }) {
     return () => clearInterval(id);
   }, [running]);
 
-  // `quiet` is for the poll: a look that fails every twelve seconds while the
-  // phone is offline would otherwise say so every twelve seconds.
+  // One look at a time: pokes, rejoins and wake-ups that come in while a look
+  // is on its way share one more look after it (singleFlight). A look that
+  // fails says nothing if a newer table has come in since it set out or
+  // another look is about to go, and speaks up over the table only once there
+  // is one (afterFailedLook). `quiet` is for the poll: a look that fails every
+  // twelve seconds while the phone is offline would otherwise say so every twelve seconds.
+  const looksRef = useRef<{ gameId: string; queue: LookQueue } | null>(null);
   const refetch = useCallback(
-    async (quiet = false) => {
-      try {
-        take(await api.view(gameId));
-      } catch (err) {
-        const msg = plainError(err);
-        setError(msg);
-        setDeadEnd(!retryCanHelp(err));
-        if (!quiet) setNotice(msg);
+    (quiet = false) => {
+      if (looksRef.current?.gameId !== gameId) {
+        const queue = singleFlight(async (quietly, another) => {
+          const before = latestRef.current;
+          try {
+            take(await api.view(gameId));
+          } catch (err) {
+            const next = afterFailedLook({ before, latest: latestRef.current, another: another(), quiet: quietly });
+            if (next === 'ignore') return;
+            const msg = plainError(err);
+            setError(msg);
+            setDeadEnd(!retryCanHelp(err));
+            if (next === 'tell') setNotice(msg);
+          }
+        });
+        looksRef.current = { gameId, queue };
       }
+      return looksRef.current.queue.ask(quiet);
     },
     [gameId, take],
   );
@@ -150,12 +167,14 @@ export function LiveTable({ gameId }: { gameId: string }) {
   }, [name, captcha, gameId, refetch, attempt, askAgain]);
 
   // The slow poll: every twelve seconds while the game is in play and on
-  // screen, and never over the top of a move of ours.
+  // screen, and never over the top of a move of ours or a look already on its way.
   const inPlay = snap?.status === 'active';
   useEffect(() => {
     if (!inPlay) return;
     const id = setInterval(() => {
-      if (shouldPoll({ status: latestRef.current?.status ?? null, visible: document.visibilityState === 'visible', sending: sendingRef.current })) void refetch(true);
+      const visible = document.visibilityState === 'visible';
+      const looking = looksRef.current?.queue.looking() ?? false;
+      if (shouldPoll({ status: latestRef.current?.status ?? null, visible, sending: sendingRef.current, looking })) void refetch(true);
     }, POLL_MS);
     return () => clearInterval(id);
   }, [inPlay, refetch]);
@@ -189,7 +208,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
           .then((s) => {
             take(s);
             const mine = s.standIns?.find((x) => x.seat === s.me);
-            if (mine) setNotice(standInText(mine.action));
+            if (mine) setNotice(standInNotice(mine.action));
           })
           .catch(() => refetch()),
       wait,
@@ -240,6 +259,8 @@ export function LiveTable({ gameId }: { gameId: string }) {
         take,
         () => latestRef.current,
       );
+      // Let go without the table attached: look, so the player sees where things now stand.
+      if (out.kind === 'quiet' && out.look) void refetch();
       if (out.kind !== 'failed') return;
       const err = out.err;
       setNotice(plainError(err));
@@ -276,6 +297,8 @@ export function LiveTable({ gameId }: { gameId: string }) {
               ? undefined
               : () => {
                   setError(null);
+                  // What went wrong is on screen already; it mustn't pop up again over the table that loads.
+                  setNotice(null);
                   // A captcha token is spent once it's been tried; with no session yet, a retry goes back to the gate for a fresh one.
                   setCaptcha(null);
                   setAttempt((n) => n + 1);
@@ -331,7 +354,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
         key={gameId}
         view={view}
         label={ruleset.handSpec(view.progress).label}
-        subtitle={`Room ${snap.roomCode}`}
+        subtitle={`Table ${snap.roomCode}`}
         onLeave={() => setLeaving('asking')}
         clock={clock}
         nextLabel={snap.isHost ? 'Play again' : 'Back to the room'}
@@ -357,30 +380,4 @@ export function LiveTable({ gameId }: { gameId: string }) {
       />
     </>
   );
-}
-
-/** What a stand-in did while the player was away, in the player's words. */
-function standInText(a: Action): string {
-  switch (a.type) {
-    case 'discard':
-      return `You ran out of time, so a stand-in discarded ${tileName(a.tile)} for you.`;
-    case 'pass':
-      return 'You ran out of time, so a stand-in passed on that discard for you.';
-    case 'claim':
-      return a.claim.type === 'win' ? 'You ran out of time, so a stand-in took your Mahjong for you.' : `You ran out of time, so a stand-in took a ${a.claim.type} for you.`;
-    case 'exchange':
-      return 'You ran out of time, so a stand-in made the exchange for you.';
-    case 'declareWin':
-      return 'You ran out of time, so a stand-in declared your Mahjong.';
-    case 'declareKong':
-      return 'You ran out of time, so a stand-in declared a kong for you.';
-    default:
-      return 'You ran out of time, so a stand-in moved for you.';
-  }
-}
-
-/** Why a discard wasn't sent, in the player's words, with what to do instead. */
-function discardRefusal(view: PrivatePlayerView | null, tile: TileKind): string {
-  if (view && view.phase === 'turn' && view.turn === view.me) return `You're not holding ${tileName(tile)} any more. Pick another tile to discard.`;
-  return "It's not your turn to discard yet. Hang on until it comes round to you.";
 }

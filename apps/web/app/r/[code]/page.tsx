@@ -49,8 +49,8 @@ export default async function RoomPage({ params }: { params: Promise<{ code: str
   const upper = code.toUpperCase();
   const door = await frontDoor(upper, {
     configured: !!supabaseUrl() && !!supabaseServiceKey(),
-    // Read-only, with the service role: the visitor may have no session yet. It answers null
-    // when the query itself fails, so until it throws on that, an outage reads as no table.
+    // Read-only, with the service role: the visitor may have no session yet. A failed read
+    // throws; frontDoor then opens the lobby and the join has the final say.
     room: roomByCode,
     userId: async () => (await currentUser())?.id ?? null,
   });

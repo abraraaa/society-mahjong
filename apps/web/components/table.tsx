@@ -1,5 +1,5 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { acrossFrom, leftOf, rightOf, tileName, type Action, type PrivatePlayerView, type Seat, type TileKind } from '@society/engine';
 import { Tile } from '@/components/tile';
 import { SeatPill } from '@/components/seat-pill';
@@ -8,7 +8,7 @@ import { Coach, CoachLine, TermProvider, useOpenTerm } from '@/components/coach'
 import { River } from '@/components/river';
 import { riverOrder } from '@/lib/river';
 import { NO_SCORES, handDeltas, signed, standings, type Scores } from '@/lib/ledger';
-import { discardOffer, heldSelection, selectTile, type Selection } from '@/lib/table-flow';
+import { discardOffer, handBoundary, heldSelection, selectTile, settling, type Selection } from '@/lib/table-flow';
 import type { CoachState } from '@/lib/coach';
 
 /** What a seat can send: every engine action except the server's own `resolveClaims`. */
@@ -104,8 +104,19 @@ function TableInner({
   // next hand and put a tile the player doesn't hold on the Discard button.
   const selected = heldSelection(pick, view);
 
+  // When the hand last started or finished. A tap that comes hard on its heels
+  // (the second tap of a double tap on Next hand, landing on the new hand's
+  // tiles or its Discard button) was meant for the table before, so it's let go.
+  const boundary = handBoundary(view);
+  const boundaryAt = useRef(0);
+  // Before paint, so the new hand is never on screen without its grace period.
+  useLayoutEffect(() => {
+    boundaryAt.current = performance.now();
+  }, [boundary]);
+  const tooSoon = () => settling(boundaryAt.current, performance.now());
+
   const act = (a: SeatAction) => {
-    if (busy) return;
+    if (busy || tooSoon()) return;
     setPick(null);
     onAct(a);
   };
@@ -194,7 +205,7 @@ function TableInner({
           fresh={isDrawn}
           coached={!!advice && advice.highlight.includes(k) && selected !== k}
           className={isDrawn ? 'drawn' : undefined}
-          onClick={() => setPick(selected === k ? null : selectTile(k, view))}
+          onClick={() => !tooSoon() && setPick(selected === k ? null : selectTile(k, view))}
         />
       );
     });
@@ -337,17 +348,50 @@ function TableInner({
         // Keyed on the event sequence: each of the three passes (right, across,
         // left) gets a fresh sheet, so picks from the last pass cannot linger and
         // swallow the taps of the next.
-        <ExchangeSheet key={view.seq} hand={view.concealed} count={legal.exchange.count} coach={coach} busy={busy} onDone={(tiles) => act({ type: 'exchange', seat: ME, tiles })} />
+        <ExchangeSheet
+          key={view.seq}
+          hand={view.concealed}
+          count={legal.exchange.count}
+          coach={coach}
+          busy={busy}
+          tooSoon={tooSoon}
+          onDone={(tiles) => act({ type: 'exchange', seat: ME, tiles })}
+        />
       )}
 
       {view.phase === 'finished' && (
-        <ResultSheet coach={coach} gameOver={!!gameOver} onNext={onNextHand} view={view} names={names} scores={scores} nextLabel={nextLabel} busy={busy} />
+        <ResultSheet
+          coach={coach}
+          gameOver={!!gameOver}
+          // A tap meant for the table just as the hand ended mustn't skip the debrief.
+          onNext={() => !tooSoon() && onNextHand()}
+          view={view}
+          names={names}
+          scores={scores}
+          nextLabel={nextLabel}
+          busy={busy}
+        />
       )}
     </>
   );
 }
 
-function ExchangeSheet({ hand, count, coach, busy, onDone }: { hand: readonly TileKind[]; count: number; coach: CoachState; busy: boolean; onDone: (tiles: TileKind[]) => void }) {
+function ExchangeSheet({
+  hand,
+  count,
+  coach,
+  busy,
+  tooSoon,
+  onDone,
+}: {
+  hand: readonly TileKind[];
+  count: number;
+  coach: CoachState;
+  busy: boolean;
+  /** true just after the hand was dealt, when a tap is a leftover from the hand before */
+  tooSoon: () => boolean;
+  onDone: (tiles: TileKind[]) => void;
+}) {
   const [picked, setPicked] = useState<number[]>([]);
   // The coach has already worked out which tiles no candidate hand is using; the
   // player can overrule it, but the sheet opens on its answer rather than empty.
@@ -370,7 +414,7 @@ function ExchangeSheet({ hand, count, coach, busy, onDone }: { hand: readonly Ti
               selectable
               selected={picked.includes(i)}
               coached={picked.length === 0 && suggested.includes(k)}
-              onClick={() => setPicked((p) => (p.includes(i) ? p.filter((x) => x !== i) : p.length < count ? [...p, i] : p))}
+              onClick={() => !tooSoon() && setPicked((p) => (p.includes(i) ? p.filter((x) => x !== i) : p.length < count ? [...p, i] : p))}
             />
           ))}
         </div>

@@ -5,8 +5,8 @@ import { REPORT_URL, reportBody, reportFor } from './client-errors';
 /** What both error pages say. The global one can't share the other's markup, only its words. */
 export const ERROR_COPY = {
   eyebrow: 'Something went wrong',
-  heading: 'That wasn’t meant to happen.',
-  line: 'The fault’s ours, not yours. Try again, and if it keeps happening, head back to the start.',
+  heading: "That wasn't meant to happen.",
+  line: "The fault's ours, not yours. Try again, and if it keeps happening, head back to the start.",
   retry: 'Try again',
   home: 'Back to the start',
 } as const;
@@ -33,6 +33,20 @@ export function sendReport(body: string, nav: Partial<Beacon> | null = globalThi
   } catch {
     return false;
   }
+}
+
+/**
+ * A sender that passes on its first report and drops every one after it, for
+ * something that could otherwise report itself every few hundred milliseconds
+ * for as long as the page is open.
+ */
+export function onceOnly(send: (body: string) => boolean = sendReport): (body: string) => void {
+  let sent = false;
+  return (body) => {
+    if (sent) return;
+    sent = true;
+    send(body);
+  };
 }
 
 const reported = new WeakSet<object>();

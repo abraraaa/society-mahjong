@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { REPORT_URL } from './client-errors';
-import { ERROR_COPY, firstSighting, sendReport } from './report-error';
+import { ERROR_COPY, firstSighting, onceOnly, sendReport } from './report-error';
 
 const BODY = '{"message":"boom","digest":null,"path":"/g/1"}';
 
@@ -66,11 +66,33 @@ describe('firstSighting', () => {
   });
 });
 
+describe('onceOnly', () => {
+  it('passes on the first report and drops the rest', () => {
+    const send = vi.fn(() => true);
+    const report = onceOnly(send);
+    report('first');
+    report('second');
+    report('first');
+    expect(send).toHaveBeenCalledExactlyOnceWith('first');
+  });
+
+  it('keeps its own count: two senders report once each', () => {
+    const send = vi.fn(() => true);
+    onceOnly(send)('a');
+    onceOnly(send)('b');
+    expect(send.mock.calls).toEqual([['a'], ['b']]);
+  });
+});
+
 describe('ERROR_COPY', () => {
   it('offers another go and a way home, in plain words', () => {
     expect(ERROR_COPY.retry).toBe('Try again');
     expect(ERROR_COPY.home).toBe('Back to the start');
     const all = Object.values(ERROR_COPY).join(' ');
     expect(all).not.toMatch(/\b(error|exception|server|version|stale|race|token|digest|crash)\b/i);
+  });
+
+  it("uses the straight apostrophe, as the app's other lines do", () => {
+    expect(Object.values(ERROR_COPY).join(' ')).not.toMatch(/[\u2018\u2019]/);
   });
 });

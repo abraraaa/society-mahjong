@@ -76,15 +76,29 @@ export function afterConflict(action: ClientAction, sent: GameSnapshot, fresh: G
   return sameStretch && stillLegal(action, fresh.view) ? 'retry' : 'tell';
 }
 
-/** How sending one move ended: it landed, it was let go without a word, or it failed with `err` for the player to hear about. */
-export type MoveOutcome = { readonly kind: 'landed' } | { readonly kind: 'quiet' } | { readonly kind: 'failed'; readonly err: unknown };
+/**
+ * How sending one move ended: it landed, it was let go without a word, or it
+ * failed with `err` for the player to hear about. A quiet end with `look` set
+ * came back without the table attached, so the page should look at it again.
+ */
+export type MoveOutcome = { readonly kind: 'landed' } | { readonly kind: 'quiet'; readonly look?: boolean } | { readonly kind: 'failed'; readonly err: unknown };
+
+/**
+ * The server's refusal of any move once the game has ended. It carries no
+ * table, so afterConflict never sees it; for a Next hand tap it means someone
+ * else's tap already ended the game, which is no news to the player.
+ */
+function gameOverRefusal(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 409 && err.message === 'game is over';
+}
 
 /**
  * Send one move made on `sent` (the table the player tapped on). A 409 that
  * carries the table as it now stands is handed to `take` at once, and the move
  * goes once more, against the newest table held (`latest`, normally that very
  * snapshot), when afterConflict says so. Never against the version that was
- * just refused, and never more than twice in all.
+ * just refused, and never more than twice in all. A Next hand tap refused
+ * because the game has ended goes quietly too, with word to look again.
  */
 export async function sendMove(
   action: ClientAction,
@@ -99,6 +113,7 @@ export async function sendMove(
       take(await act(against.version));
       return { kind: 'landed' };
     } catch (err) {
+      if (action.type === 'nextHand' && gameOverRefusal(err)) return { kind: 'quiet', look: true };
       if (!(err instanceof ApiError) || !err.snapshot) return { kind: 'failed', err };
       take(err.snapshot);
       const fresh = latest() ?? err.snapshot;
@@ -109,7 +124,99 @@ export async function sendMove(
   }
 }
 
-/** Whether the slow poll should look at the table now: a game still in play, on screen, with no move of ours on its way. */
-export function shouldPoll({ status, visible, sending }: { status: GameSnapshot['status'] | null; visible: boolean; sending: boolean }): boolean {
-  return status === 'active' && visible && !sending;
+/** Whether the slow poll should look at the table now: a game still in play, on screen, with no move of ours or look already on its way. */
+export function shouldPoll({
+  status,
+  visible,
+  sending,
+  looking = false,
+}: {
+  status: GameSnapshot['status'] | null;
+  visible: boolean;
+  sending: boolean;
+  looking?: boolean;
+}): boolean {
+  return status === 'active' && visible && !sending && !looking;
+}
+
+/**
+ * What a look at the table that failed should do about it:
+ *
+ * - `ignore` — nothing. A newer table has come in since the look set out (a
+ *   move's answer, a tick, another look), or another look is about to go:
+ *   either answers for it, and a working table mustn't be told otherwise.
+ * - `record` — keep the error for the Trouble screen, without a notice: there's
+ *   no table on screen yet for a notice to sit over, or the look was the poll's.
+ * - `tell` — keep the error and say so over the table.
+ *
+ * `before` is the newest table held when the look set out, `latest` the newest
+ * held now (the same object when nothing newer has come in).
+ */
+export function afterFailedLook({
+  before,
+  latest,
+  another,
+  quiet,
+}: {
+  before: GameSnapshot | null;
+  latest: GameSnapshot | null;
+  another: boolean;
+  quiet: boolean;
+}): 'ignore' | 'record' | 'tell' {
+  if (latest !== before || another) return 'ignore';
+  return quiet || latest === null ? 'record' : 'tell';
+}
+
+/** Looks at the table one at a time: `ask` asks for a look, and `looking` says whether one is on its way. */
+export interface LookQueue {
+  readonly ask: (quiet?: boolean) => Promise<void>;
+  readonly looking: () => boolean;
+}
+
+/**
+ * One look at the table at a time, however many pokes, rejoins and wake-ups
+ * ask for one. An ask while a look is on its way doesn't start another
+ * request. It's folded into a single look straight after that one, because the
+ * look on its way may have left before whatever prompted the ask (a poke, a
+ * rejoin after a dropped connection) and so can't answer it. However many asks
+ * come in meanwhile, exactly one more look follows.
+ *
+ * `look` handles its own failures. It's told whether another look is already
+ * waiting to go after it, in which case a failure needn't be reported: the
+ * next look will answer for it. That look is quiet only if every ask it
+ * answers was quiet. Each ask's promise settles once the look that answers it
+ * is done.
+ */
+export function singleFlight(look: (quiet: boolean, another: () => boolean) => Promise<void>): LookQueue {
+  let running = false;
+  let queued: { quiet: boolean; done: Promise<void>; settle: () => void } | null = null;
+  const another = () => queued !== null;
+
+  const run = async (quiet: boolean): Promise<void> => {
+    running = true;
+    try {
+      await look(quiet, another);
+    } catch {
+      // A look reports its own failures; a throw must not stop the next one.
+    }
+    const next = queued;
+    queued = null;
+    running = false;
+    if (next) void run(next.quiet).then(next.settle);
+  };
+
+  return {
+    ask: (quiet = false) => {
+      if (!running) return run(quiet);
+      if (queued) {
+        queued.quiet &&= quiet;
+        return queued.done;
+      }
+      let settle = () => {};
+      const done = new Promise<void>((resolve) => (settle = resolve));
+      queued = { quiet, done, settle };
+      return done;
+    },
+    looking: () => running,
+  };
 }
