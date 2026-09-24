@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getRuleset, tileName, type Action, type PrivatePlayerView, type Seat, type TileKind } from '@society/engine';
+import { getRuleset, type Seat } from '@society/engine';
 import { Table } from '@/components/table';
 import { NameGate } from '@/components/name-gate';
 import { ConfirmSheet } from '@/components/confirm-sheet';
@@ -17,7 +17,7 @@ import type { ClientAction } from '@/lib/live/types';
 import { NeedsCaptcha, ensureSession } from '@/lib/supabase/session';
 import { useGuestName } from '@/lib/supabase/use-guest-name';
 import { scoresFrom } from '@/lib/ledger';
-import { canDiscard } from '@/lib/table-flow';
+import { canDiscard, discardRefusal, standInNotice } from '@/lib/table-flow';
 import { POLL_MS, afterFailedLook, sendMove, shouldPoll, singleFlight, type LookQueue } from '@/lib/table-sync';
 
 interface Progress {
@@ -208,7 +208,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
           .then((s) => {
             take(s);
             const mine = s.standIns?.find((x) => x.seat === s.me);
-            if (mine) setNotice(standInText(mine.action));
+            if (mine) setNotice(standInNotice(mine.action));
           })
           .catch(() => refetch()),
       wait,
@@ -354,7 +354,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
         key={gameId}
         view={view}
         label={ruleset.handSpec(view.progress).label}
-        subtitle={`Room ${snap.roomCode}`}
+        subtitle={`Table ${snap.roomCode}`}
         onLeave={() => setLeaving('asking')}
         clock={clock}
         nextLabel={snap.isHost ? 'Play again' : 'Back to the room'}
@@ -380,30 +380,4 @@ export function LiveTable({ gameId }: { gameId: string }) {
       />
     </>
   );
-}
-
-/** What a stand-in did while the player was away, in the player's words. */
-function standInText(a: Action): string {
-  switch (a.type) {
-    case 'discard':
-      return `You ran out of time, so a stand-in discarded ${tileName(a.tile)} for you.`;
-    case 'pass':
-      return 'You ran out of time, so a stand-in passed on that discard for you.';
-    case 'claim':
-      return a.claim.type === 'win' ? 'You ran out of time, so a stand-in took your Mahjong for you.' : `You ran out of time, so a stand-in took a ${a.claim.type} for you.`;
-    case 'exchange':
-      return 'You ran out of time, so a stand-in made the exchange for you.';
-    case 'declareWin':
-      return 'You ran out of time, so a stand-in declared your Mahjong.';
-    case 'declareKong':
-      return 'You ran out of time, so a stand-in declared a kong for you.';
-    default:
-      return 'You ran out of time, so a stand-in moved for you.';
-  }
-}
-
-/** Why a discard wasn't sent, in the player's words, with what to do instead. */
-function discardRefusal(view: PrivatePlayerView | null, tile: TileKind): string {
-  if (view && view.phase === 'turn' && view.turn === view.me) return `You're not holding ${tileName(tile)} any more. Pick another tile to discard.`;
-  return "It's not your turn to discard yet. Hang on until it comes round to you.";
 }

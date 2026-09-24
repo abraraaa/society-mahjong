@@ -7,7 +7,7 @@ import { RoomWaiting } from '@/components/room-waiting';
 import { Trouble, Waiting } from '@/components/trouble';
 import { retryCanHelp } from '@/lib/front-door';
 import { api, listen, type RoomSnapshot } from '@/lib/live/client';
-import { plainError } from '@/lib/live/plain';
+import { joinRetryLabel, plainError } from '@/lib/live/plain';
 import { NeedsCaptcha, ensureSession } from '@/lib/supabase/session';
 import { useGuestName } from '@/lib/supabase/use-guest-name';
 
@@ -26,6 +26,8 @@ export function RoomLobby({ code }: { code: string }) {
   const [error, setError] = useState<string | null>(null);
   // A code with no table behind it, or a closed table: Try again can't change that.
   const [deadEnd, setDeadEnd] = useState(false);
+  // A game under way or a full table: the button checks again rather than promising another go will work.
+  const [retryLabel, setRetryLabel] = useState('Try again');
   const [attempt, setAttempt] = useState(0);
   const [starting, setStarting] = useState(false);
   const supabaseRef = useRef<SupabaseClient | null>(null);
@@ -50,6 +52,7 @@ export function RoomLobby({ code }: { code: string }) {
         else {
           setError(plainError(err));
           setDeadEnd(!retryCanHelp(err));
+          setRetryLabel(joinRetryLabel(err));
         }
       }
     })();
@@ -86,7 +89,7 @@ export function RoomLobby({ code }: { code: string }) {
   if (!name) {
     return (
       <NameGate
-        title={`Room ${code}`}
+        title={`Table ${code}`}
         initialName={initialName}
         onDone={(n, token) => {
           setCaptcha(token);
@@ -101,6 +104,7 @@ export function RoomLobby({ code }: { code: string }) {
       return (
         <Trouble
           message={error}
+          retryLabel={retryLabel}
           onRetry={
             deadEnd
               ? undefined

@@ -91,4 +91,8 @@ describe('ERROR_COPY', () => {
     const all = Object.values(ERROR_COPY).join(' ');
     expect(all).not.toMatch(/\b(error|exception|server|version|stale|race|token|digest|crash)\b/i);
   });
+
+  it("uses the straight apostrophe, as the app's other lines do", () => {
+    expect(Object.values(ERROR_COPY).join(' ')).not.toMatch(/[\u2018\u2019]/);
+  });
 });

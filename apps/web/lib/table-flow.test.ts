@@ -18,6 +18,7 @@ import {
   SETTLE_MS,
   alwaysLegalMove,
   discardOffer,
+  discardRefusal,
   handBoundary,
   heldSelection,
   playFor,
@@ -25,6 +26,7 @@ import {
   selectTile,
   selectionEpoch,
   settling,
+  standInNotice,
   tableFlow,
   tryReduce,
   type Refusal,
@@ -376,5 +378,49 @@ describe('refusalMessage', () => {
     expect(refusalMessage({ seat: 3, tried: null, instead: { type: 'pass', seat: 3 }, why: 'nothing was chosen' })).toBe(
       'solo table: seat 3 chose no move though one was due, so it played pass instead',
     );
+  });
+});
+
+describe('standInNotice', () => {
+  it('says a bot moved for the player, never a stand-in', () => {
+    const lines = [
+      standInNotice({ type: 'discard', seat: ME, tile: 'm7' }),
+      standInNotice({ type: 'pass', seat: ME }),
+      standInNotice({ type: 'claim', seat: ME, claim: { type: 'pung', tiles: ['m7', 'm7'] } }),
+      standInNotice({ type: 'claim', seat: ME, claim: { type: 'win' } }),
+      standInNotice({ type: 'exchange', seat: ME, tiles: ['m1', 'm2', 'm3'] }),
+      standInNotice({ type: 'declareWin', seat: ME }),
+      standInNotice({ type: 'declareKong', seat: ME, tile: 'm7' }),
+      standInNotice({ type: 'resolveClaims' }),
+    ];
+    for (const line of lines) {
+      expect(line).toMatch(/\ba bot\b/);
+      expect(line).not.toMatch(/stand-in/);
+    }
+  });
+
+  it('names one tile as one tile', () => {
+    expect(standInNotice({ type: 'discard', seat: ME, tile: 'm7' })).toBe('You ran out of time, so a bot discarded the 7 Characters for you.');
+  });
+
+  it('says plainly that a bot called or declared the Mahjong', () => {
+    expect(standInNotice({ type: 'claim', seat: ME, claim: { type: 'win' } })).toBe('Time ran out, so a bot called Mahjong for you.');
+    expect(standInNotice({ type: 'declareWin', seat: ME })).toBe('Time ran out, so a bot declared your Mahjong.');
+  });
+});
+
+describe('discardRefusal', () => {
+  const turn = (t: Seat) => ({ me: ME, phase: 'turn' as const, turn: t });
+
+  it("on the player's turn, names the one tile that has gone and asks for another", () => {
+    expect(discardRefusal(turn(ME), 'm7')).toBe("You're not holding the 7 Characters any more. Pick another tile to discard.");
+    expect(discardRefusal(turn(ME), 'DR')).toBe("You're not holding the Red Dragon any more. Pick another tile to discard.");
+  });
+
+  it('otherwise, says to wait for the turn to come round', () => {
+    const wait = "It's not your turn to discard yet. Hang on until it comes round to you.";
+    expect(discardRefusal(turn(2), 'm7')).toBe(wait);
+    expect(discardRefusal({ me: ME, phase: 'claim', turn: ME }, 'm7')).toBe(wait);
+    expect(discardRefusal(null, 'm7')).toBe(wait);
   });
 });

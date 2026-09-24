@@ -1,4 +1,4 @@
-import { reduce, viewFor, type Action, type HandState, type LegalActions, type PrivatePlayerView, type Ruleset, type Seat, type TileKind } from '@society/engine';
+import { reduce, tileName, viewFor, type Action, type HandState, type LegalActions, type PrivatePlayerView, type Ruleset, type Seat, type TileKind } from '@society/engine';
 
 /**
  * Whose move the solo table is waiting on, from the local seat's legal actions.
@@ -186,4 +186,30 @@ export function refusalMessage(r: Refusal): string {
   const move = (a: Action) => (a.type === 'discard' ? `discard ${a.tile}` : a.type);
   const what = r.tried === null ? `seat ${r.seat} chose no move though one was due` : `seat ${r.seat}'s ${move(r.tried)} was refused (${r.why})`;
   return `solo table: ${what}, so it played ${move(r.instead)} instead`;
+}
+
+/** What a bot did for the player when their clock ran out, in the player's words, for the notice at the top of the live table. */
+export function standInNotice(a: Action): string {
+  switch (a.type) {
+    case 'discard':
+      return `You ran out of time, so a bot discarded the ${tileName(a.tile)} for you.`;
+    case 'pass':
+      return 'You ran out of time, so a bot passed on that discard for you.';
+    case 'claim':
+      return a.claim.type === 'win' ? 'Time ran out, so a bot called Mahjong for you.' : `You ran out of time, so a bot took a ${a.claim.type} for you.`;
+    case 'exchange':
+      return 'You ran out of time, so a bot made the exchange for you.';
+    case 'declareWin':
+      return 'Time ran out, so a bot declared your Mahjong.';
+    case 'declareKong':
+      return 'You ran out of time, so a bot declared a kong for you.';
+    default:
+      return 'You ran out of time, so a bot moved for you.';
+  }
+}
+
+/** Why a discard wasn't sent, in the player's words, with what to do instead. */
+export function discardRefusal(view: Pick<PrivatePlayerView, 'me' | 'phase' | 'turn'> | null, tile: TileKind): string {
+  if (view && view.phase === 'turn' && view.turn === view.me) return `You're not holding the ${tileName(tile)} any more. Pick another tile to discard.`;
+  return "It's not your turn to discard yet. Hang on until it comes round to you.";
 }

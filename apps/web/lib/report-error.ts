@@ -5,8 +5,8 @@ import { REPORT_URL, reportBody, reportFor } from './client-errors';
 /** What both error pages say. The global one can't share the other's markup, only its words. */
 export const ERROR_COPY = {
   eyebrow: 'Something went wrong',
-  heading: 'That wasn’t meant to happen.',
-  line: 'The fault’s ours, not yours. Try again, and if it keeps happening, head back to the start.',
+  heading: "That wasn't meant to happen.",
+  line: "The fault's ours, not yours. Try again, and if it keeps happening, head back to the start.",
   retry: 'Try again',
   home: 'Back to the start',
 } as const;

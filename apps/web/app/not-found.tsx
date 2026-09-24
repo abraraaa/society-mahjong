@@ -9,7 +9,7 @@ export default function NotFound() {
     <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-6 px-6 py-10">
       <div className="space-y-2">
         <p className="eyebrow">Not found</p>
-        <h1 className="font-display text-3xl">There’s nothing at this address.</h1>
+        <h1 className="font-display text-3xl">There&apos;s nothing at this address.</h1>
         <p className="text-ivory-200/70 text-sm">If a friend sent you a table link, check it with them. Or start a table of your own.</p>
       </div>
       <div className="flex flex-col items-center gap-3">
