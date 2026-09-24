@@ -1,9 +1,10 @@
 -- Society Mahjong: the whole schema, for a fresh Supabase project.
 --
--- This is migrations 0001 and 0002 in order, so it can be pasted into the
+-- This is migrations 0001 to 0004 in order, so it can be pasted into the
 -- SQL editor once. The editor runs it as a single transaction: if any line
 -- fails, nothing is applied and you can run it again after the fix.
--- (0001 creates two tables that 0002 immediately drops; that is expected.)
+-- (0001 creates two tables that 0002 immediately drops, and two profile
+-- policies that 0004 replaces; that is expected.)
 
 -- Society Mahjong: initial schema. See docs/PLAN.md §3 "Data model".
 create extension if not exists "pgcrypto";
@@ -290,3 +291,45 @@ revoke execute on function public.bump_hands_played(uuid) from public, anon, aut
 -- service-role client, which writes the tally, is unaffected.
 revoke update on public.profiles from anon, authenticated;
 grant update (display_name, avatar_url, preferences, handle) on public.profiles to authenticated;
+
+-- 0004: a profile is its owner's business.
+--
+-- 0001 let anyone holding the public key read every profile (name, handle,
+-- stats), and its "for all" own-row policy let a guest delete their row and
+-- insert a fresh one: a reset tally, which 0003's column grants (UPDATE
+-- only) did not stop. Nothing needs either policy. Profiles are created by
+-- the security-definer trigger public.handle_new_user and renamed by
+-- public.handle_user_updated; the server reads and writes them only through
+-- the service role; no view, function, policy or broadcast reads another
+-- person's row. The triggers (running as their owner), the service role and
+-- foreign-key checks are bound neither by RLS nor by the grants below.
+--
+-- From here a signed-in person may read their own row and update the
+-- columns 0003 allows on it, and nothing else. Safe to run more than once.
+
+drop policy if exists "profiles are readable by everyone" on public.profiles;
+drop policy if exists "users manage their own profile" on public.profiles;
+
+drop policy if exists "users read their own profile" on public.profiles;
+create policy "users read their own profile" on public.profiles
+  for select to authenticated
+  using (auth.uid() = id);
+
+drop policy if exists "users update their own profile" on public.profiles;
+create policy "users update their own profile" on public.profiles
+  for update to authenticated
+  using (auth.uid() = id)
+  with check (auth.uid() = id);
+
+-- No insert or delete policy, and no privilege either, so a missing policy
+-- is not the only thing in the way. TRUNCATE ignores RLS, so it goes too.
+revoke insert, delete, truncate on public.profiles from anon, authenticated;
+
+-- 0003's column grants, restated so this file alone leaves the right
+-- privileges whether or not 0003 was run. Revoking UPDATE on the table also
+-- revokes it on every column, so the pair always ends in the same place.
+revoke update on public.profiles from anon, authenticated;
+grant update (display_name, avatar_url, preferences, handle) on public.profiles to authenticated;
+
+-- On since 0001; restated so the policies above are what decides.
+alter table public.profiles enable row level security;

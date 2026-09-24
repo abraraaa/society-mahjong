@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SEATS, analysisBot, karachi, legalActions, viewFor, type Action, type Seat } from '@society/engine';
-import { dealFirstHand, resolveExpired, step } from './table';
-import { isHuman, type LiveGame, type Seats } from './types';
+import { NotYourMove, dealFirstHand, resolveExpired, step } from './table';
+import { isHuman, type ClientAction, type LiveGame, type Seats } from './types';
 import { policyFor } from './policy';
 
 /**
@@ -124,6 +124,35 @@ describe('two humans and two bots', () => {
     const s = resolveExpired(g, karachi, two, g.deadlines.claim!);
     expect(s).not.toBeNull();
     expect(s!.phase).not.toBe('claim');
+  });
+
+  /**
+   * The review's attack: while one human is deciding on a discard, the other
+   * sends the server's own move for their own seat. It used to close the
+   * window and turn the unanswered claim into a pass, even on a Mahjong.
+   */
+  it("refuses a player who sends resolveClaims to close someone else's claim window", { timeout: 120_000 }, () => {
+    let found: LiveGame | null = null;
+    for (const seed of ['guard-1', 'guard-2', 'guard-3']) {
+      playHand(two, seed, (g) => {
+        if (!found && g.state.phase === 'claim' && pending(g, two).length === 1) found = g;
+      });
+      if (found) break;
+    }
+    expect(found, 'no claim window with one human answering').not.toBeNull();
+    const g: LiveGame = found!;
+    const victim = pending(g, two)[0]!;
+    const attacker = (victim === 0 ? 1 : 0) as Seat;
+    expect(g.deadlines.claim).toBeGreaterThan(T0);
+    const forged = { type: 'resolveClaims', seat: attacker } as unknown as ClientAction;
+    expect(() => step({ game: g, ruleset: karachi, seats: two, policy, now: T0, action: forged, actor: attacker, seed: 'guard' })).toThrow(NotYourMove);
+    // Nothing moved: the window is still open, still on the clock, and still the victim's to answer.
+    const after = step({ game: g, ruleset: karachi, seats: two, policy, now: T0 });
+    expect(after.changed).toBe(false);
+    expect(after.state.phase).toBe('claim');
+    expect(after.deadlines).toEqual(g.deadlines);
+    expect(pending({ state: after.state, deadlines: after.deadlines }, two)).toEqual([victim]);
+    expect(legalActions(after.state, karachi, victim).claims!.length).toBeGreaterThan(0);
   });
 
   it('carries on when a human stands up mid-hand and a bot takes the seat', { timeout: 120_000 }, () => {

@@ -1,5 +1,5 @@
 import { IllegalAction, SEATS, analysisBot, legalActions, nextHand, reduce, startHand, viewFor, type Action, type HandState, type Ruleset, type Seat } from '@society/engine';
-import { isBot, isHuman, type ClientAction, type Deadlines, type LiveGame, type Seats, type TimerPolicy } from './types';
+import { isBot, isClientActionType, isHuman, type ClientAction, type Deadlines, type LiveGame, type Seats, type TimerPolicy } from './types';
 
 /**
  * The authoritative table, as pure functions over the engine's HandState.
@@ -147,7 +147,7 @@ export interface StepInput {
   readonly seats: Seats;
   readonly policy: TimerPolicy;
   readonly now: number;
-  /** the caller's action, already checked to be for their own seat; omit for a sweep */
+  /** the caller's action, already validated by parseClientAction; omit for a sweep */
   readonly action?: ClientAction;
   readonly actor?: Seat;
   /** the game's seed, needed only to deal the next hand */
@@ -181,6 +181,10 @@ export function step(input: StepInput): StepResult {
 
   let gameOver = false;
   if (input.action) {
+    // The route validates what a client sends, but the table does not rely on
+    // it: a server-only move (resolveClaims closes everyone's claim window at
+    // once) is never a player's to make, whichever seat it names.
+    if (!isClientActionType((input.action as { readonly type: unknown }).type)) throw new NotYourMove('only the table makes that move');
     if (input.action.type === 'nextHand') {
       if (s.phase !== 'finished') throw new IllegalAction('hand not finished');
       if (input.seed === undefined) throw new Error('nextHand needs the seed');
@@ -214,6 +218,7 @@ export function dealFirstHand(ruleset: Ruleset, seats: Seats, seed: string, poli
 
 /** Whether `action` is one this seat may send at all (shape check; the engine judges legality). */
 export function actionIsForSeat(action: ClientAction, seat: Seat): boolean {
+  if (!isClientActionType((action as { readonly type: unknown }).type)) return false;
   return action.type === 'nextHand' || action.seat === seat;
 }
 
