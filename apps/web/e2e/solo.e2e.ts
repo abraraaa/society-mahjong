@@ -45,69 +45,79 @@ function read(page: Page): Promise<TableState> {
 }
 
 test('(g) solo: a tile lifted while the bots move is let go at the next hand, and Discard never breaks the page', async ({ page }) => {
-  test.setTimeout(150_000);
+  test.setTimeout(240_000);
   const pageErrors: string[] = [];
   page.on('pageerror', (e) => pageErrors.push(String(e)));
   await stayLocal(page);
   await page.clock.install();
 
+  const stage = page.locator('.table-stage');
+  const tiles = stage.locator('.hand-tray button.tile');
+  const tileOf = (kind: string) => stage.locator(`.hand-tray button.tile[style*="/tiles/${kind}.svg"]`).first();
+
   // The deal is random per visit. Read this visit's seed from the page to know the next hand's tiles, and make
-  // sure the first hand holds one of them: that's the tile the test keeps lifting.
+  // sure the first hand holds one of them: that's the tile the test keeps lifting. A first hand that ends on the
+  // player's own move (a discard the wall can't answer, or a Pass; either lets go of the pick) ends with nothing
+  // lifted and can't show the rule, so the test deals again rather than pass without having looked. About one
+  // deal in five does; eight in a row is out of reach.
   let next: TileKind[] = [];
+  let lifted: string | null = null;
   for (let visit = 0; ; visit++) {
+    expect(visit, 'a deal whose first hand ends with a tile of the second lifted').toBeLessThan(8);
+    await page.clock.resume();
     const res = await page.goto('/play/solo');
     const seed = /solo-[0-9a-z]+-[0-9a-z]+/.exec((await res?.text()) ?? '')?.[0];
     expect(seed, 'the solo seed in the page').toBeTruthy();
     next = secondHand(seed!);
     const first = startHand(karachi, { seed: seed!, progress: { roundWind: 'E', roundIndex: 0, handInRound: 0, handIndex: 0 }, dealer: 0 }).players[0].concealed;
-    if (first.some((k) => next.includes(k))) break;
-    expect(visit, 'a deal whose first hand shares a tile with the second').toBeLessThan(5);
-  }
-  const stage = page.locator('.table-stage');
-  const tiles = stage.locator('.hand-tray button.tile');
-  const tileOf = (kind: string) => stage.locator(`.hand-tray button.tile[style*="/tiles/${kind}.svg"]`).first();
-  // Hydrated and past the deal's grace period, then the clock stops: the bots move only when the test lets time run.
-  await tapUntilLifted(tiles.first());
-  await tiles.first().click();
-  await expect(tiles.first()).not.toHaveAttribute('data-selected', 'true');
-  await pauseClock(page);
+    if (!first.some((k) => next.includes(k))) continue;
 
-  // Play the first hand out. On each turn, throw a tile the next hand won't hold; then, while the bots move,
-  // lift one it will. The last lift before the hand ends is the one that must not survive into the next.
-  let lifted: string | null = null;
-  let discards = 0;
-  for (let i = 0; ; i++) {
-    expect(i, 'the first hand ends').toBeLessThan(MAX_STEPS);
-    const s = await read(page);
-    expect(s.broken, 'the error page').toBe(false);
-    if (s.over) break;
-    if (s.claim) {
-      await page.locator('.sheet').getByRole('button', { name: 'Pass', exact: true }).click();
-      continue;
-    }
-    if (s.discard) {
-      const spare = s.hand.find((t) => !next.includes(t.kind as TileKind));
-      if (spare) {
-        await tileOf(spare.kind).click();
-        await expect(tileOf(spare.kind)).toHaveAttribute('data-selected', 'true');
+    // Hydrated and past the deal's grace period, then the clock stops: the bots move only when the test lets time run.
+    await tapUntilLifted(tiles.first());
+    await tiles.first().click();
+    await expect(tiles.first()).not.toHaveAttribute('data-selected', 'true');
+    await pauseClock(page);
+
+    // Play the first hand out. On each turn, throw a tile the next hand won't hold; before every round of bot
+    // moves, make sure one it will hold is lifted. The one lifted when the hand ends must not survive into the next.
+    let discards = 0;
+    lifted = null;
+    for (let i = 0; ; i++) {
+      expect(i, 'the first hand ends').toBeLessThan(MAX_STEPS);
+      const s = await read(page);
+      expect(s.broken, 'the error page').toBe(false);
+      if (s.over) break;
+      if (s.claim) {
+        await page.locator('.sheet').getByRole('button', { name: 'Pass', exact: true }).click();
+        lifted = null;
+        continue;
       }
-      const before = s.hand.length;
-      await stage.locator('.action-row button', { hasText: /^Discard / }).click();
-      await expect(tiles).toHaveCount(before - 1);
-      discards++;
-      lifted = null;
-      const keep = (await read(page)).hand.find((t) => next.includes(t.kind as TileKind));
-      if (keep) {
-        await tileOf(keep.kind).click();
-        await expect(tileOf(keep.kind)).toHaveAttribute('data-selected', 'true');
-        lifted = keep.kind;
+      if (s.discard) {
+        const spare = s.hand.find((t) => !next.includes(t.kind as TileKind));
+        if (spare) {
+          await tileOf(spare.kind).click();
+          await expect(tileOf(spare.kind)).toHaveAttribute('data-selected', 'true');
+        }
+        const before = s.hand.length;
+        await stage.locator('.action-row button', { hasText: /^Discard / }).click();
+        await expect(tiles).toHaveCount(before - 1);
+        discards++;
+        lifted = null;
+        continue;
       }
-      continue;
+      if (!s.hand.some((t) => t.selected)) {
+        const keep = s.hand.find((t) => next.includes(t.kind as TileKind));
+        if (keep) {
+          await tileOf(keep.kind).click();
+          await expect(tileOf(keep.kind)).toHaveAttribute('data-selected', 'true');
+        }
+        lifted = keep?.kind ?? null;
+      }
+      await page.clock.runFor(BOT_STEP_MS);
     }
-    await page.clock.runFor(BOT_STEP_MS);
+    expect(discards).toBeGreaterThan(0);
+    if (lifted !== null) break;
   }
-  expect(discards).toBeGreaterThan(0);
-  expect(lifted, 'a tile lifted during the bots’ last moves').not.toBeNull();
 
   // Next hand, once the grace period after the hand ended has passed.
   await page.clock.runFor(SETTLE_MS + 100);
