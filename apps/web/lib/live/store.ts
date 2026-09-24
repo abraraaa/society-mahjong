@@ -6,7 +6,8 @@ import { createServiceClient } from '../supabase/service';
 import { HttpError, must } from './errors';
 import { stageFromStats, tallyHand, type ProfileStats } from './stage';
 import type { Deadlines, RoomStatus, Seats } from './types';
-import { cleanDisplayName } from './validate';
+import { logError } from './log';
+import { cleanDisplayName, isUuid } from './validate';
 
 export type { RoomStatus } from './types';
 
@@ -83,7 +84,9 @@ export async function saveSeats(roomId: string, seats: Seats, expectedUpdatedAt:
   return data?.length === 1 ? (data[0] as { updated_at: string }).updated_at : null;
 }
 
+/** The game with this id, or null when there is none. An id that is not a uuid finds nothing without asking. A read that fails throws. */
 export async function gameById(id: string): Promise<GameRow | null> {
+  if (!isUuid(id)) return null;
   const data = must(await db().from('games').select('id, room_id, seed, status, hands_played').eq('id', id).maybeSingle(), 'read the game');
   return (data as GameRow | null) ?? null;
 }
@@ -261,11 +264,23 @@ export async function expiredGames(now: number, limit = 50): Promise<string[]> {
   return (data ?? []).map((r) => (r as { game_id: string }).game_id);
 }
 
-/** Player levels for the humans at the table, to size the timers: from what their profiles have recorded. */
+/**
+ * Player levels for the humans at the table, to size the timers: from what
+ * their profiles have recorded. The levels only size the clocks, so a failed
+ * read is logged rather than failing the move, tick or deal it was for, and
+ * everyone counts as new: the table gets the most patient clocks, never ones
+ * too quick for a first-timer. (No levels at all would mean the quickest.)
+ */
 export async function stagesFor(seats: Seats): Promise<CoachStage[]> {
   const ids = seats.flatMap((s) => (s?.kind === 'human' ? [s.userId] : []));
   if (ids.length === 0) return [];
-  const data = must(await db().from('profiles').select('stats').in('id', ids), 'read the player levels');
+  let data;
+  try {
+    data = must(await db().from('profiles').select('stats').in('id', ids), 'read the player levels');
+  } catch (err) {
+    logError('stages_read_failed', err);
+    return ids.map(() => 'new');
+  }
   return (data ?? []).map((r) => stageFromStats((r as { stats: ProfileStats | null }).stats ?? {}));
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SEATS, analysisBot, karachi, legalActions, reduce, startHand, viewFor, type Action, type GameProgress, type HandState } from '@society/engine';
 import { CLIENT_ACTION_TYPES, PLAYER_ACTION_TYPES } from './types';
-import { MAX_NAME_LENGTH, cleanDisplayName, parseClaim, parseClientAction, parseRoomOptions, parseRoomRequest, parseSeat, parseTile } from './validate';
+import { MAX_NAME_LENGTH, cleanDisplayName, isUuid, parseClaim, parseClientAction, parseRoomOptions, parseRoomRequest, parseSeat, parseTile } from './validate';
 
 /** What the route sees: the action after a trip through JSON. */
 const wire = (x: unknown): unknown => JSON.parse(JSON.stringify(x));
@@ -205,5 +205,24 @@ describe('cleanDisplayName', () => {
 
   it('gives null when there is no name to use', () => {
     for (const x of [undefined, null, '', '   ', '\n\t', 42, { name: 'x' }, ['x']]) expect(cleanDisplayName(x), JSON.stringify(x) ?? 'undefined').toBeNull();
+  });
+});
+
+describe('isUuid', () => {
+  it('takes an id as the database mints it, in either case', () => {
+    expect(isUuid('6f1c2a9e-4b7d-4e3a-9c5f-2d8b0a7e1f34')).toBe(true);
+    expect(isUuid('6F1C2A9E-4B7D-4E3A-9C5F-2D8B0A7E1F34')).toBe(true);
+  });
+
+  it('refuses a truncated, padded or hand-edited one, and anything not a string', () => {
+    const cut = [
+      'not-a-uuid',
+      '',
+      '6f1c2a9e-4b7d-4e3a-9c5f-2d8b0a7e1f3',
+      '6f1c2a9e-4b7d-4e3a-9c5f-2d8b0a7e1f345',
+      ' 6f1c2a9e-4b7d-4e3a-9c5f-2d8b0a7e1f34',
+      '6f1c2a9e4b7d4e3a9c5f2d8b0a7e1f34',
+    ];
+    for (const x of [...cut, '6f1c2a9e-4b7d-4e3a-9c5f-2d8b0a7e1f3g', "6f1c2a9e-4b7d-4e3a-9c5f-2d8b0a7e1f34' or 1=1", 42, null, undefined]) expect(isUuid(x), String(x)).toBe(false);
   });
 });

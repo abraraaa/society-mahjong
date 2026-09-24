@@ -12,7 +12,7 @@ import { SEAT_ATTEMPTS, vacate } from './seating';
 import { abandonGame, appendAction, closeHand, finishGame, gameById, loadLive, openHand, roomById, saveLive, saveSeats, stagesFor, type GameRow, type RoomRow } from './store';
 import { rejectionStatus, step } from './table';
 import { seatOf, type ClientAction, type Deadlines, type Seats } from './types';
-import { parseClientAction } from './validate';
+import { isUuid, parseClientAction } from './validate';
 
 export type { GameSnapshot };
 
@@ -21,6 +21,8 @@ function publicSeats(seats: Seats): GameSnapshot['seats'] {
 }
 
 async function loadGame(gameId: string): Promise<{ game: GameRow; room: RoomRow }> {
+  // A truncated or hand-edited link is a game that isn't there, not a database failure: answer it before any query.
+  if (!isUuid(gameId)) throw new HttpError(404, 'no such game');
   const game = await gameById(gameId);
   if (!game) throw new HttpError(404, 'no such game');
   const room = await roomById(game.room_id);
@@ -189,4 +191,31 @@ export async function leaveGame(gameId: string, userId: string, now = Date.now()
     }
     if (attempt >= SEAT_ATTEMPTS) throw new HttpError(409, 'the table changed under you; try again');
   }
+}
+
+/**
+ * The daily sweep: settle each table whose clock has run out, one at a time,
+ * so one stuck table never stops the rest. Returns what happened to each.
+ *
+ * A refusal (a 4xx) means the table moved on its own between the query and
+ * the settle: a player or a tick saved first, or the game ended. That is
+ * the sweep having nothing left to do, so it is recorded as 'already moved'
+ * and not logged. Anything else is logged as sweep_game_failed.
+ */
+export async function sweepGames(gameIds: readonly string[], now = Date.now()): Promise<Record<string, string>> {
+  const results: Record<string, string> = {};
+  for (const id of gameIds) {
+    try {
+      await actOnGame(id, null, null, null, now);
+      results[id] = 'ok';
+    } catch (err) {
+      if (err instanceof HttpError && err.status < 500) {
+        results[id] = 'already moved';
+      } else {
+        logError('sweep_game_failed', err, { route: '/api/cron/sweep', gameId: id });
+        results[id] = err instanceof Error ? err.message : String(err);
+      }
+    }
+  }
+  return results;
 }

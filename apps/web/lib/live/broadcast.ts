@@ -10,13 +10,20 @@ export interface BroadcastMessage {
 }
 
 /**
+ * How long a poke may take. The mover's own request waits on it, and the
+ * client gives up at 10 s, so a Realtime that hangs must not make a move
+ * that landed look like one that didn't.
+ */
+export const BROADCAST_TIMEOUT_MS = 3000;
+
+/**
  * Send Realtime Broadcast messages over HTTP from the server. No socket: the
  * route handler posts and moves on. Channels are private and authorised by the
  * `realtime.messages` policy in migration 0002.
  *
  * Best-effort, and never throws: by the time anyone is poked the move is
- * already saved, so a failed poke is logged rather than turned into a 500
- * for a move that landed.
+ * already saved, so a failed or slow poke is logged rather than turned into
+ * a 500, or a wait, for a move that landed.
  */
 export async function broadcast(messages: readonly BroadcastMessage[]): Promise<void> {
   if (messages.length === 0) return;
@@ -28,6 +35,7 @@ export async function broadcast(messages: readonly BroadcastMessage[]): Promise<
       method: 'POST',
       headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages: messages.map((m) => ({ ...m, private: m.private ?? true })) }),
+      signal: AbortSignal.timeout(BROADCAST_TIMEOUT_MS),
     });
     if (!res.ok) console.error('broadcast failed', res.status, await res.text().catch(() => ''));
   } catch (err) {

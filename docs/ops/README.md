@@ -23,7 +23,7 @@ The sweep only runs if Vercel sends the right secret. Vercel adds `Authorization
 1. Trigger a run now, rather than waiting for 04:00 UTC. Use **Settings → Cron Jobs**, where `/api/cron/sweep` has a **Run** button, or run `vercel crons run /api/cron/sweep` from a terminal that is linked to the project.
 2. Open the logs: **View Logs** next to the job, or the project's **Logs** tab filtered to the path `/api/cron/sweep`. Vercel's own calls carry the user agent `vercel-cron/1.0`.
 3. Read the status code on the latest call:
-   - **200**: the secret matched and the database answered. The body is `{"swept":N,"results":{...}}`, and N is usually 0.
+   - **200**: the secret matched and the database answered. The body is `{"swept":N,"results":{...}}`, and N is usually 0. Each result is `ok`, `already moved` (someone at the table moved it first, or the game ended, so there was nothing to do), or what went wrong.
    - **401**: `CRON_SECRET` is missing from Production, or was changed without a redeploy. Nothing reached the database. Go back to "Check it's set".
    - **500**: the secret is fine but the database didn't answer. The function log has a line containing `could not find tables past their clocks`. Open the Supabase dashboard. If the project says it's paused, restore it, then run the sweep again.
 4. The next day, check again. The Logs tab should show a 200 from `vercel-cron/1.0` a little after 04:00 UTC. On the Hobby plan Vercel runs a daily job at some point within that hour, not on the minute.
@@ -125,6 +125,7 @@ Not a launch check: a key for when something looks wrong. The server writes each
   - `open the hand` or `close the hand`: the hand's row, result, scores or count may be missing. The message says which write failed.
   - `finish the game`: the game stays active and the room stays "playing", so the host can't deal again yet. Anyone at the table pressing **Next hand** once more finishes it properly.
 - **`request_error`**: an error nothing else caught, such as a page that failed to render. `digest` matches the code on an error page, and `routePath` and `routeType` say where it happened.
-- **`sweep_game_failed`**: the daily sweep couldn't settle one game (`gameId`). The others were still swept.
+- **`sweep_game_failed`**: the daily sweep couldn't settle one game (`gameId`). The others were still swept. A game someone else moved first isn't logged: it shows as `already moved` in the sweep's results.
+- **`stages_read_failed`**: the players' levels couldn't be read, so the table ran a first-timer's clocks, the slowest, for that move or deal. The move itself went through.
 - **`leave_settle_failed`**: someone stood up and the bot in their seat couldn't move straight away. The next clock or the sweep plays its move.
 - **`poke_failed`**: the others weren't told the table moved. It's rare, because a failed Realtime call is caught first and logged as `broadcast failed`. Their next refresh or clock catches them up.

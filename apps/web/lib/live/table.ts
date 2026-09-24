@@ -166,10 +166,14 @@ export interface StepResult extends LiveGame {
 /**
  * One request against the table. Order matters: expired deadlines resolve
  * first, so an action sent after a window closed is judged against the table
- * as it now stands (and may be rejected as not the caller's move).
+ * as it now stands (and may be rejected as not the caller's move). The one
+ * exception is "next hand", which needs the hand the sender saw to be over.
  */
 export function step(input: StepInput): StepResult {
   const { ruleset, seats, policy, now } = input;
+  // A hand that ends inside this step, its clock run out, must be recorded as it closes, never dealt over. A finished
+  // hand has no clock to resolve, so this refuses nothing the client offers.
+  if (input.action?.type === 'nextHand' && input.game.state.phase !== 'finished') throw new IllegalAction('hand not finished');
   let s = input.game.state;
   let changed = false;
 

@@ -75,9 +75,12 @@ import {
   startGame,
   type RoomRow,
 } from './store';
+import { policyFor } from './policy';
 import type { Seats } from './types';
 
 const DOWN = { message: 'TypeError: fetch failed', code: '' };
+/** Game ids are uuids, as the database mints them. */
+const GAME = '6f1c2a9e-4b7d-4e3a-9c5f-2d8b0a7e1f34';
 const ok = (data: unknown = null): Result => ({ data, error: null });
 const failed = (): Result => ({ data: null, error: DOWN });
 
@@ -131,10 +134,11 @@ describe('reads', () => {
   it('say "nothing there" only when the database says so', async () => {
     expect(await roomByCode('abcd')).toBeNull();
     expect(await roomById('r-1')).toBeNull();
-    expect(await gameById('g-1')).toBeNull();
+    expect(await gameById(GAME)).toBeNull();
     expect(await loadLive('g-1')).toBeNull();
     expect(await expiredGames(0)).toEqual([]);
     expect(await stagesFor(seats)).toEqual([]);
+    expect(ran()).toContain('games:select');
   });
 
   it('hand back what they found', async () => {
@@ -146,8 +150,26 @@ describe('reads', () => {
 
   it('throw when the database fails, instead of passing for "no such room" or an empty table', async () => {
     answerAll(() => true);
-    const reads = [() => roomByCode('ABCD'), () => roomById('r-1'), () => gameById('g-1'), () => loadLive('g-1'), () => expiredGames(0), () => stagesFor(seats)];
+    const reads = [() => roomByCode('ABCD'), () => roomById('r-1'), () => gameById(GAME), () => loadLive('g-1'), () => expiredGames(0)];
     for (const read of reads) await expect(read()).rejects.toBeInstanceOf(SupabaseError);
+  });
+
+  it('find no game for an id that is not a uuid, without asking the database, which would fail the query', async () => {
+    supabase.answer = () => ({ data: null, error: { message: 'invalid input syntax for type uuid: "not-a-uuid"', code: '22P02' } });
+    for (const id of ['not-a-uuid', '', `${GAME}x`, GAME.slice(0, -1)]) expect(await gameById(id)).toBeNull();
+    expect(supabase.log).toHaveLength(0);
+    await expect(gameById(GAME)).rejects.toBeInstanceOf(SupabaseError);
+  });
+
+  it('count everyone as new when the player levels cannot be read, so the clocks are the most patient, and log it', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    answerAll(is('profiles'));
+    const stages = await stagesFor(seats);
+    expect(stages).toEqual(['new', 'new']);
+    expect(policyFor(stages)).toEqual(policyFor(['new']));
+    expect(log).toHaveBeenCalledTimes(1);
+    const line = JSON.parse(log.mock.calls[0]![0] as string) as Record<string, unknown>;
+    expect(line).toMatchObject({ level: 'error', event: 'stages_read_failed', name: 'SupabaseError', message: 'could not read the player levels: TypeError: fetch failed' });
   });
 
   it('skip the database when there is nobody to look up', async () => {

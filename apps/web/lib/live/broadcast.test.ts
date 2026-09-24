@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { broadcast, gamePoke } from './broadcast';
+import { BROADCAST_TIMEOUT_MS, broadcast, gamePoke } from './broadcast';
 
 const KEY = 'service-role-key-for-tests';
 
@@ -12,6 +12,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -49,6 +50,38 @@ describe('broadcast', () => {
     await expect(broadcast([gamePoke('g-1', 4)])).resolves.toBeUndefined();
     expect(log).toHaveBeenCalledWith('broadcast failed', 'fetch failed');
     expect(JSON.stringify(log.mock.calls)).not.toContain(KEY);
+  });
+
+  it('gives up after 3 s when Realtime never answers, and logs it', async () => {
+    vi.useFakeTimers();
+    // Node's AbortSignal.timeout runs on its own timer, which fake timers cannot move, so stand in one that runs on setTimeout.
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      const c = new AbortController();
+      setTimeout(() => c.abort(new DOMException('The operation was aborted due to timeout', 'TimeoutError')), ms);
+      return c.signal;
+    });
+    // A fetch that never settles unless its signal gives up, as a hung connection would.
+    const fetch = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(init.signal!.reason));
+        }),
+    );
+    vi.stubGlobal('fetch', fetch);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    let done = false;
+    const sent = broadcast([gamePoke('g-1', 4)]).then(() => {
+      done = true;
+    });
+    await vi.advanceTimersByTimeAsync(BROADCAST_TIMEOUT_MS - 1);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await sent;
+    expect(done).toBe(true);
+    expect(BROADCAST_TIMEOUT_MS).toBe(3000);
+    expect(timeout).toHaveBeenCalledWith(BROADCAST_TIMEOUT_MS);
+    expect(log).toHaveBeenCalledWith('broadcast failed', 'The operation was aborted due to timeout');
   });
 
   it('sends nothing when Supabase is not configured', async () => {

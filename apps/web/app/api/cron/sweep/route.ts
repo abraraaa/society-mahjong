@@ -1,7 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { errorResponse, json } from '@/lib/live/http';
-import { logError } from '@/lib/live/log';
-import { actOnGame } from '@/lib/live/service';
+import { sweepGames } from '@/lib/live/service';
 import { secretMatches } from '@/lib/live/secret';
 import { expiredGames } from '@/lib/live/store';
 
@@ -19,18 +18,8 @@ export async function GET(req: NextRequest) {
   try {
     const now = Date.now();
     const ids = await expiredGames(now);
-    const results: Record<string, string> = {};
-    for (const id of ids) {
-      try {
-        await actOnGame(id, null, null, null, now);
-        results[id] = 'ok';
-      } catch (err) {
-        // One stuck table must not stop the rest; the log keeps the detail for whoever reads it.
-        logError('sweep_game_failed', err, { route: '/api/cron/sweep', gameId: id });
-        results[id] = (err as Error).message;
-      }
-    }
-    return json({ swept: ids.length, results });
+    // One stuck table does not stop the rest; see sweepGames for what each result means.
+    return json({ swept: ids.length, results: await sweepGames(ids, now) });
   } catch (err) {
     return errorResponse(err, '/api/cron/sweep');
   }

@@ -54,6 +54,17 @@ export function parseClaim(x: unknown): ClaimOption | null {
   return null;
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Whether an id from a URL could name a row: games are keyed by uuid, and
+ * Postgres fails a query that filters a uuid column by anything else, where
+ * a truncated or hand-edited link should simply find nothing.
+ */
+export function isUuid(x: unknown): x is string {
+  return typeof x === 'string' && UUID.test(x);
+}
+
 /**
  * The action in a POST to /act, or null when it is not one a player may send.
  * Server-only moves (resolveClaims) and unknown types are refused outright.
