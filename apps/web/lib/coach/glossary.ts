@@ -62,7 +62,7 @@ export const GLOSSARY: Readonly<Record<Term, TermEntry>> = {
   chow: {
     label: 'Run',
     short: 'three in a row, one suit',
-    long: 'Three tiles in sequence in one suit, like 3-4-5 of bamboo. Also called a chow. In Karachi rules a run can only be made from tiles you draw; nobody’s discard ever completes one.',
+    long: 'Three tiles in sequence in one suit, like 3-4-5 of bamboo. Also called a chow. In Karachi rules you build runs from tiles you draw: you cannot claim a discard to make one, unless that tile completes your whole hand.',
     example: ['s3', 's4', 's5'],
     aliases: ['runs', 'run', 'chows', 'chow', 'sequence'],
   },

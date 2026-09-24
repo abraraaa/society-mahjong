@@ -12,24 +12,35 @@ export const metadata: Metadata = {
   openGraph: { siteName: 'Society Mahjong', type: 'website', locale: 'en_GB', url: '/' },
 };
 
-/** What this is, for search engines and answer agents; the same facts as /llms.txt. */
-const APP_LD = {
+/**
+ * The site's name for Google's site-name system, and what the app is; the same
+ * facts as /llms.txt. Never add ratings or reviews that are not real and on the page.
+ */
+const SITE_LD = {
   '@context': 'https://schema.org',
-  '@type': 'WebApplication',
-  name: 'Society Mahjong',
-  url: 'https://societymahjong.app/',
-  applicationCategory: 'GameApplication',
-  operatingSystem: 'iOS, Android, Web',
-  offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+  '@graph': [
+    { '@type': 'WebSite', '@id': 'https://societymahjong.app/#website', name: 'Society Mahjong', url: 'https://societymahjong.app/' },
+    {
+      '@type': 'WebApplication',
+      '@id': 'https://societymahjong.app/#app',
+      name: 'Society Mahjong',
+      url: 'https://societymahjong.app/',
+      applicationCategory: 'GameApplication',
+      browserRequirements: 'Runs in a current web browser. Requires JavaScript.',
+      offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+    },
+  ],
 };
 
 export default function Home() {
   return (
     <main className="landing">
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(APP_LD).replace(/</g, '\\u003c') }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(SITE_LD).replace(/</g, '\\u003c') }} />
       <header className="hero">
-        <p className="eyebrow eyebrow-quiet">Society</p>
-        <h1 className="font-display">Mahjong</h1>
+        {/* One heading that reads "Society Mahjong", styled as the eyebrow over the word. */}
+        <h1 className="font-display">
+          <span className="eyebrow eyebrow-quiet">Society</span> Mahjong
+        </h1>
         <p className="lede">A private table for your friends. The tutor shows new players what to throw and why.</p>
       </header>
 

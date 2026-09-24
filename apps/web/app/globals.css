@@ -1,5 +1,25 @@
 @import 'tailwindcss';
 
+/* Android ships neither Arial nor Times New Roman, so next/font's size-matched
+   fallbacks never load there and text jumps when the web fonts arrive. These
+   match Roboto and Noto Serif to Inter and Fraunces instead. */
+@font-face {
+  font-family: 'Inter Fallback Android';
+  src: local('Roboto'), local('Roboto-Regular');
+  size-adjust: 107.4%;
+  ascent-override: 90.2%;
+  descent-override: 22.5%;
+  line-gap-override: 0%;
+}
+@font-face {
+  font-family: 'Fraunces Fallback Android';
+  src: local('Noto Serif'), local('NotoSerif-Regular');
+  size-adjust: 97.1%;
+  ascent-override: 100.7%;
+  descent-override: 26.3%;
+  line-gap-override: 0%;
+}
+
 /*
   Design tokens. The material is the tile: warm ivory faces, deep engraved
   glyphs, a jade felt, brass for gold-state moments. Dark is the table's
@@ -916,8 +936,13 @@ b .term {
 .landing .hero h1 {
   font-size: clamp(2.75rem, 12vw, 3.5rem);
   line-height: 1;
-  margin: 0.25rem 0 0.75rem;
+  margin: 0 0 0.75rem;
   color: var(--color-ivory-50);
+}
+/* The eyebrow sits inside the h1 so the heading reads "Society Mahjong"; it keeps its own small sans look. */
+.landing .hero h1 .eyebrow {
+  display: block;
+  margin-bottom: 0.25rem;
 }
 .landing .lede {
   margin: 0;

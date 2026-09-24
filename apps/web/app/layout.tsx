@@ -3,8 +3,8 @@ import { Fraunces, Inter } from 'next/font/google';
 import { Analytics } from '@vercel/analytics/next';
 import './globals.css';
 
-const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
-const fraunces = Fraunces({ subsets: ['latin'], variable: '--font-fraunces', display: 'swap' });
+const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap', fallback: ['Inter Fallback Android'] });
+const fraunces = Fraunces({ subsets: ['latin'], variable: '--font-fraunces', display: 'swap', fallback: ['Fraunces Fallback Android'] });
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://societymahjong.app'),
@@ -13,8 +13,6 @@ export const metadata: Metadata = {
   openGraph: { siteName: 'Society Mahjong', type: 'website', locale: 'en_GB' },
   twitter: { card: 'summary_large_image' },
   appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'Society' },
-  // The front door and the rules are for search; the lobby, tables and solo deal opt out on their own pages.
-  robots: { index: true, follow: true },
 };
 
 export const viewport: Viewport = {
@@ -22,7 +20,6 @@ export const viewport: Viewport = {
   viewportFit: 'cover',
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -32,7 +32,7 @@ export function NameGate({ title, initialName = '', onDone }: { title: string; i
       <div className="space-y-2">
         <p className="eyebrow">{title}</p>
         <h1 className="font-display text-3xl">What should the table call you?</h1>
-        <p className="text-ivory-200/70 text-sm">No account needed. You can add an email later to keep your history.</p>
+        <p className="text-ivory-200/70 text-sm">No account, no password. Just the name your friends know you by.</p>
       </div>
       <form className="flex flex-col gap-3" onSubmit={submit}>
         <input

@@ -52,7 +52,7 @@ export function karachiHandSpec(p: GameProgress): HandSpec {
       return {
         kind: 'noHonour',
         label: 'South: no honours',
-        description: 'Four pungs and a pair with no winds or dragons, or one of the Western special hands.',
+        description: 'Any four sets and a pair, with no winds or dragons at all, or one of the named South hands.',
         patterns: SOUTH,
       };
     case 'W':

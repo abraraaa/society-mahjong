@@ -21,14 +21,21 @@ function DragonTile({ height }: { height: number }) {
  * WhatsApp and iMessage show this before anyone has opened anything, so it
  * is the first thing a friend sees of the table.
  */
-export function ogCard(headline: string, line: string): ImageResponse {
+export function ogCard(headline: string | readonly string[], line: string): ImageResponse {
+  const parts = typeof headline === 'string' ? [headline] : headline;
   return new ImageResponse(
     (
       <div style={{ display: 'flex', width: '100%', height: '100%', background: '#0b2a26', color: '#fbf7ee', alignItems: 'center', padding: '0 96px', fontFamily: 'sans-serif' }}>
         <DragonTile height={360} />
         <div style={{ display: 'flex', flexDirection: 'column', marginLeft: 88, flex: 1 }}>
           <div style={{ display: 'flex', fontSize: 30, letterSpacing: 6, textTransform: 'uppercase', color: 'rgba(243,236,219,0.55)' }}>Society Mahjong</div>
-          <div style={{ display: 'flex', fontSize: 96, fontWeight: 600, lineHeight: 1.05, marginTop: 18, letterSpacing: -2 }}>{headline}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', fontSize: 96, fontWeight: 600, lineHeight: 1.05, marginTop: 18, letterSpacing: -2, columnGap: 28 }}>
+            {parts.map((p) => (
+              <div key={p} style={{ display: 'flex', whiteSpace: parts.length > 1 ? 'nowrap' : 'normal' }}>
+                {p}
+              </div>
+            ))}
+          </div>
           <div style={{ display: 'flex', fontSize: 36, marginTop: 28, color: 'rgba(243,236,219,0.8)', lineHeight: 1.3 }}>{line}</div>
         </div>
       </div>

@@ -26,8 +26,7 @@ const TRAINING_ONLY_CRAWLERS = [
 
 export default function robots(): MetadataRoute.Robots {
   return {
-    rules: [...TRAINING_ONLY_CRAWLERS.map((userAgent) => ({ userAgent, disallow: '/' })), { userAgent: '*', allow: '/', disallow: ['/api/'] }],
+    rules: [...TRAINING_ONLY_CRAWLERS.map((userAgent) => ({ userAgent, disallow: '/' })), { userAgent: '*', disallow: ['/api/'] }],
     sitemap: 'https://societymahjong.app/sitemap.xml',
-    host: 'https://societymahjong.app',
   };
 }

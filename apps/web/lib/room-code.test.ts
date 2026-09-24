@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { generateRoomCode } from './room-code';
+import { generateRoomCode, isRoomCode } from './room-code';
 
 const ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 
@@ -24,5 +24,18 @@ describe('generateRoomCode', () => {
     // The chance of one clash in a thousand draws is about 1.5%; of three, under one in a million.
     const codes = new Set(Array.from({ length: 1000 }, () => generateRoomCode()));
     expect(codes.size).toBeGreaterThanOrEqual(998);
+  });
+});
+
+describe('isRoomCode', () => {
+  it('accepts every code the generator makes, and the older four-symbol codes', () => {
+    for (let i = 0; i < 200; i++) expect(isRoomCode(generateRoomCode())).toBe(true);
+    expect(isRoomCode('KHI-4287')).toBe(true);
+    expect(isRoomCode('KHI-4287Q')).toBe(true);
+  });
+
+  it('refuses anything a link card should not print as a table', () => {
+    for (const s of ['FREE-MONEY-CLICK-HERE', 'KHI-4287QQ', 'KHI-428', 'KHI-4O87Q', 'KHI-4187Q', 'khi-4287q', 'LHR-4287Q', '100%', '<SCRIPT>', ''])
+      expect(isRoomCode(s)).toBe(false);
   });
 });
