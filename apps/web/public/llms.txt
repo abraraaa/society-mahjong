@@ -1,6 +1,6 @@
 # Society Mahjong
 
-> Social mahjong for phones and tablets. Private tables for friends, Karachi rules, bots for empty seats, and a tutor that suggests each discard and says why.
+> Social mahjong for phones and tablets. Private tables for friends, Karachi rules, bots for empty seats, and a tutor that shows new players what to throw and why.
 
 ## What it is
 

@@ -30,7 +30,7 @@ export default function Home() {
       <header className="hero">
         <p className="eyebrow eyebrow-quiet">Society</p>
         <h1 className="font-display">Mahjong</h1>
-        <p className="lede">A private table for your friends. The tutor suggests each discard and says why.</p>
+        <p className="lede">A private table for your friends. The tutor shows new players what to throw and why.</p>
       </header>
 
       <HeroTiles />
