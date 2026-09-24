@@ -3,7 +3,8 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { NameGate } from '@/components/name-gate';
 import { Trouble, Waiting } from '@/components/trouble';
-import { ApiError, api } from '@/lib/live/client';
+import { api } from '@/lib/live/client';
+import { plainError } from '@/lib/live/plain';
 import { NeedsCaptcha, ensureSession } from '@/lib/supabase/session';
 import { useGuestName } from '@/lib/supabase/use-guest-name';
 
@@ -26,7 +27,7 @@ export function CreateRoom() {
       } catch (err) {
         if (cancelled) return;
         if (err instanceof NeedsCaptcha) askAgain();
-        else setError(err instanceof Error && err.message ? `Could not open a room: ${err.message}` : 'Could not open a room.');
+        else setError(plainError(err));
       }
     })();
     return () => {
@@ -52,6 +53,8 @@ export function CreateRoom() {
         message={error}
         onRetry={() => {
           setError(null);
+          // A captcha token is spent once it's been tried; with no session yet, a retry goes back to the gate for a fresh one.
+          setCaptcha(null);
           setAttempt((n) => n + 1);
         }}
       />

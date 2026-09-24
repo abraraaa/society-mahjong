@@ -5,7 +5,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { NameGate } from '@/components/name-gate';
 import { RoomWaiting } from '@/components/room-waiting';
 import { Trouble, Waiting } from '@/components/trouble';
-import { ApiError, api, listen, type RoomSnapshot } from '@/lib/live/client';
+import { retryCanHelp } from '@/lib/front-door';
+import { api, listen, type RoomSnapshot } from '@/lib/live/client';
+import { plainError } from '@/lib/live/plain';
 import { NeedsCaptcha, ensureSession } from '@/lib/supabase/session';
 import { useGuestName } from '@/lib/supabase/use-guest-name';
 
@@ -22,6 +24,8 @@ export function RoomLobby({ code }: { code: string }) {
   const [captcha, setCaptcha] = useState<string | null>(null);
   const [room, setRoom] = useState<RoomSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A code with no table behind it, or a closed table: Try again can't change that.
+  const [deadEnd, setDeadEnd] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [starting, setStarting] = useState(false);
   const supabaseRef = useRef<SupabaseClient | null>(null);
@@ -43,7 +47,10 @@ export function RoomLobby({ code }: { code: string }) {
       } catch (err) {
         if (cancelled) return;
         if (err instanceof NeedsCaptcha) askAgain();
-        else setError(err instanceof Error && err.message ? `Could not join this room: ${err.message}` : 'Could not join this room.');
+        else {
+          setError(plainError(err));
+          setDeadEnd(!retryCanHelp(err));
+        }
       }
     })();
     return () => {
@@ -94,10 +101,16 @@ export function RoomLobby({ code }: { code: string }) {
       return (
         <Trouble
           message={error}
-          onRetry={() => {
-            setError(null);
-            setAttempt((n) => n + 1);
-          }}
+          onRetry={
+            deadEnd
+              ? undefined
+              : () => {
+                  setError(null);
+                  // A captcha token is spent once it's been tried; with no session yet, a retry goes back to the gate for a fresh one.
+                  setCaptcha(null);
+                  setAttempt((n) => n + 1);
+                }
+          }
         />
       );
     }
@@ -130,7 +143,7 @@ export function RoomLobby({ code }: { code: string }) {
       const { gameId } = await api.start(code);
       goToGame(gameId);
     } catch (err) {
-      setError(err instanceof ApiError ? `Could not start: ${err.message}.` : 'Could not start.');
+      setError(plainError(err));
       setStarting(false);
       // "the seats changed": the seats moved while the host was dealing; show them as they are now.
       api

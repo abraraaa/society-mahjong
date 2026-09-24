@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import { solveCaptcha } from '@/lib/captcha';
+import { plainError } from '@/lib/live/plain';
 import { NAME_MAX, seatName } from '@/lib/name-gate';
 
 /**
@@ -32,7 +33,8 @@ export function NameGate({ title, initialName = '', onDone }: { title: string; i
       const token = await solveCaptcha(captchaRef.current);
       onDone(n, token);
     } catch (err) {
-      setError(err instanceof Error && err.message.includes('load') ? 'Could not reach the bot check. Try again, or a different network.' : 'The bot check did not go through. Try again.');
+      // hCaptcha rejects with a bare code ('network-error', 'challenge-closed'); the loader with an Error.
+      setError(plainError(err));
       setBusy(false);
     }
   };

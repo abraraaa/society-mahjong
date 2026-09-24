@@ -9,7 +9,9 @@ import { ConfirmSheet } from '@/components/confirm-sheet';
 import { Notice } from '@/components/notice';
 import { Trouble, Waiting } from '@/components/trouble';
 import { analyseFor, coachFor, stageFor, type CoachState } from '@/lib/coach';
+import { retryCanHelp } from '@/lib/front-door';
 import { ApiError, api, listen } from '@/lib/live/client';
+import { plainError } from '@/lib/live/plain';
 import { isPrivate, type GameSnapshot } from '@/lib/live/snapshot';
 import type { ClientAction } from '@/lib/live/types';
 import { NeedsCaptcha, ensureSession } from '@/lib/supabase/session';
@@ -34,6 +36,8 @@ export function LiveTable({ gameId }: { gameId: string }) {
   const [captcha, setCaptcha] = useState<string | null>(null);
   const [snap, setSnap] = useState<GameSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A game that isn't there: Try again can't change that.
+  const [deadEnd, setDeadEnd] = useState(false);
   const [attempt, setAttempt] = useState(0);
   // Why the last tap did nothing, shown over the table for a moment.
   const [notice, setNotice] = useState<string | null>(null);
@@ -75,8 +79,9 @@ export function LiveTable({ gameId }: { gameId: string }) {
     try {
       take(await api.view(gameId));
     } catch (err) {
-      const msg = err instanceof ApiError ? err.message : 'Lost the table.';
+      const msg = plainError(err);
       setError(msg);
+      setDeadEnd(!retryCanHelp(err));
       setNotice(msg);
     }
   }, [gameId, take]);
@@ -100,7 +105,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
       } catch (err) {
         if (cancelled) return;
         if (err instanceof NeedsCaptcha) askAgain();
-        else setError(err instanceof Error && err.message ? `Could not sit down: ${err.message}` : 'Could not sit down.');
+        else setError(plainError(err));
       }
     })();
     const onVisible = () => document.visibilityState === 'visible' && void refetch();
@@ -187,13 +192,10 @@ export function LiveTable({ gameId }: { gameId: string }) {
         const moved = err.snapshot.view.seq !== snap.view.seq;
         take(err.snapshot);
         if (!moved && !retried) return send(action, true);
-        setNotice(moved ? explain(err, action) : err.message);
       } else if (err instanceof ApiError && (err.status === 400 || err.status === 403)) {
         void refetch();
-        setNotice(explain(err, action));
-      } else {
-        setNotice(err instanceof ApiError ? err.message : 'That did not reach the table. Check the connection and try again.');
       }
+      setNotice(plainError(err));
     }
   };
 
@@ -215,10 +217,16 @@ export function LiveTable({ gameId }: { gameId: string }) {
       return (
         <Trouble
           message={error}
-          onRetry={() => {
-            setError(null);
-            setAttempt((n) => n + 1);
-          }}
+          onRetry={
+            deadEnd
+              ? undefined
+              : () => {
+                  setError(null);
+                  // A captcha token is spent once it's been tried; with no session yet, a retry goes back to the gate for a fresh one.
+                  setCaptcha(null);
+                  setAttempt((n) => n + 1);
+                }
+          }
         />
       );
     }
@@ -236,7 +244,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
       router.replace('/');
     } catch (err) {
       setLeaving(null);
-      setNotice(err instanceof ApiError ? `Could not leave: ${err.message}.` : 'Could not leave. Check the connection and try again.');
+      setNotice(plainError(err));
     }
   };
 
@@ -319,15 +327,4 @@ function standInText(a: Action): string {
 function discardRefusal(view: PrivatePlayerView | null, tile: TileKind): string {
   if (view && view.phase === 'turn' && view.turn === view.me) return `You're not holding ${tileName(tile)} any more. Pick another tile to discard.`;
   return "It's not your turn to discard yet. Hang on until it comes round to you.";
-}
-
-/** The engine's reasons, in the player's words. */
-const TOO_LATE = new Set(['already responded', 'no discard to claim', 'no claims pending', 'not your turn', 'stale version']);
-function explain(err: ApiError, action: ClientAction): string {
-  if (TOO_LATE.has(err.message)) {
-    if (action.type === 'claim')
-      return action.claim.type === 'win' ? 'Too late: the window closed before your Mahjong reached the table.' : 'Too late: the window closed before that reached the table.';
-    return 'Too late: the table had moved on before that reached it.';
-  }
-  return `The table did not take that: ${err.message}.`;
 }
