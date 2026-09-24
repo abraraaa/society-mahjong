@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { karachi } from '@society/engine';
+import { analysisBot, karachi, viewFor } from '@society/engine';
 import type { GameRow, LiveRow, RoomRow } from './store';
 import { dealFirstHand } from './table';
 import type { ClientAction, Seats } from './types';
@@ -38,6 +38,8 @@ vi.mock('./broadcast', () => ({
 }));
 
 import { HttpError, actOnGame } from './service';
+import { SupabaseError } from './errors';
+import * as broadcaster from './broadcast';
 import * as store from './store';
 
 const T0 = 1_700_000_000_000;
@@ -150,5 +152,25 @@ describe('acting at a table', () => {
     expect(err.status).toBe(403);
     expect(store.saveLive).not.toHaveBeenCalled();
     expect(store.appendAction).not.toHaveBeenCalled();
+  });
+});
+
+describe('when the database fails after the table has moved', () => {
+  it('still tells the others the table moved, and gives the caller the failure', async () => {
+    const live = setTable();
+    const move = analysisBot(viewFor(live.state, karachi, 0), karachi) as ClientAction;
+    vi.mocked(store.appendAction).mockRejectedValueOnce(new SupabaseError('log the move', { message: 'TypeError: fetch failed' }));
+    await expect(actOnGame('g-1', 'u-abrar', move, live.version, T0 + 1000)).rejects.toBeInstanceOf(SupabaseError);
+    expect(store.saveLive).toHaveBeenCalledTimes(1);
+    expect(broadcaster.broadcast).toHaveBeenCalledTimes(1);
+    expect(broadcaster.gamePoke).toHaveBeenCalledWith('g-1', live.version + 1, expect.anything());
+  });
+
+  it('fails outright, saving nothing, when the table cannot be read', async () => {
+    setTable();
+    vi.mocked(store.loadLive).mockRejectedValueOnce(new SupabaseError('read the table', { message: 'TypeError: fetch failed' }));
+    await expect(actOnGame('g-1', 'u-abrar', null, null, T0)).rejects.toBeInstanceOf(SupabaseError);
+    expect(store.saveLive).not.toHaveBeenCalled();
+    expect(broadcaster.broadcast).not.toHaveBeenCalled();
   });
 });

@@ -107,14 +107,17 @@ export async function actOnGame(gameId: string, userId: string | null, action: C
   }
   const version = live.version + 1;
 
-  // The durable log: player actions per hand, results when a hand ends.
-  if (action && action.type !== 'nextHand') await appendAction(gameId, live.state.progress.handIndex, action);
-  if (action?.type === 'nextHand' && !result.gameOver) await openHand(gameId, result.state);
   let settledRoom = room;
-  if (!wasFinished && result.state.phase === 'finished') settledRoom = { ...room, ledger: await closeHand(gameId, room, result.state) };
-  if (result.gameOver) await finishGame(gameId, room.id);
-
-  await broadcast([gamePoke(gameId, version, { phase: result.state.phase, turn: result.state.turn, seq: result.state.seq, gameOver: result.gameOver })]);
+  try {
+    // The durable log: player actions per hand, results when a hand ends.
+    if (action && action.type !== 'nextHand') await appendAction(gameId, live.state.progress.handIndex, action);
+    if (action?.type === 'nextHand' && !result.gameOver) await openHand(gameId, result.state);
+    if (!wasFinished && result.state.phase === 'finished') settledRoom = { ...room, ledger: await closeHand(gameId, room, result.state) };
+    if (result.gameOver) await finishGame(gameId, room.id);
+  } finally {
+    // The table has moved whatever the log managed, so the others hear of it; a failed write still reaches the caller as a 500.
+    await broadcast([gamePoke(gameId, version, { phase: result.state.phase, turn: result.state.turn, seq: result.state.seq, gameOver: result.gameOver })]);
+  }
   const snap = snapshot({ ...game, status: result.gameOver ? 'finished' : game.status }, settledRoom, version, result.deadlines, result.state, me, now, userId);
   // Only the caller's own stand-in moves: another seat's exchange carries the tiles it passed, which stay private.
   const mine = me === null ? [] : result.standIns.filter((x) => x.seat === me);
