@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
   pull_request:
+# Both jobs only read the repository; the report upload uses the Actions runtime token, not GITHUB_TOKEN.
+permissions:
+  contents: read
 jobs:
   check:
     runs-on: ubuntu-latest
