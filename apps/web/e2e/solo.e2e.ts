@@ -9,7 +9,7 @@ const MAX_STEPS = 800;
 /** A little over the solo table's pause before each round of bot moves. */
 const BOT_STEP_MS = 500;
 
-/** The hand after the first, for seat 0 of a solo game dealt from `seed`. Seat 0 never wins here, so the deal passes to seat 1. */
+/** The hand after the first, for seat 0 of a solo game dealt from `seed`. Karachi rotates the deal after every hand (dealerRetainsOnWin is false), so the second hand is dealt by seat 1. */
 function secondHand(seed: string): TileKind[] {
   return startHand(karachi, { seed, progress: { roundWind: 'E', roundIndex: 0, handInRound: 1, handIndex: 1 }, dealer: 1 }).players[0].concealed.slice();
 }
