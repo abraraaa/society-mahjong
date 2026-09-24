@@ -315,6 +315,17 @@ function resolve(state: HandState, ruleset: Ruleset): HandState {
   return s;
 }
 
+/** True when `hand` holds every tile in `tiles`, counting repeats. */
+function holdsAll(hand: readonly TileKind[], tiles: readonly TileKind[]): boolean {
+  const left = [...hand];
+  for (const k of tiles) {
+    const i = left.indexOf(k);
+    if (i < 0) return false;
+    left.splice(i, 1);
+  }
+  return true;
+}
+
 export function reduce(state: HandState, action: Action, ruleset: Ruleset): HandState {
   if (state.phase === 'finished') throw new IllegalAction('hand is finished');
   switch (action.type) {
@@ -325,7 +336,8 @@ export function reduce(state: HandState, action: Action, ruleset: Ruleset): Hand
       if (!step) throw new IllegalAction('no exchange step');
       if (state.exchanges[action.seat]) throw new IllegalAction('already exchanged');
       if (action.tiles.length !== step.count) throw new IllegalAction(`exchange exactly ${step.count} tiles`);
-      removeMany(state.players[action.seat].concealed, action.tiles); // validates ownership
+      // A player can only pass tiles they hold; say so as a rule, not a crash.
+      if (!holdsAll(state.players[action.seat].concealed, action.tiles)) throw new IllegalAction('tile not in hand');
       const exchanges = { ...state.exchanges, [action.seat]: action.tiles };
       let s: HandState = { ...state, exchanges };
       if (SEATS.some((seat) => !exchanges[seat])) return s;
@@ -347,6 +359,7 @@ export function reduce(state: HandState, action: Action, ruleset: Ruleset): Hand
     case 'discard': {
       if (state.phase !== 'turn' || state.turn !== action.seat) throw new IllegalAction('not your turn');
       const p = state.players[action.seat];
+      if (!p.concealed.includes(action.tile)) throw new IllegalAction('tile not in hand');
       const concealed = removeOne(p.concealed, action.tile);
       let s: HandState = {
         ...state,

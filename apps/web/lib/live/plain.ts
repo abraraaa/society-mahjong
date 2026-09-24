@@ -24,6 +24,7 @@ const SIGNED_OUT = "We've lost track of who you are. Reload the page to sit back
 const CAPTCHA = "We couldn't run the quick security check. Try again, or switch between Wi-Fi and mobile data.";
 const OFFLINE = "We couldn't reach the table. Check your connection and try again.";
 const SLOW = "The table's taking too long to answer. Give it a moment, then try again if nothing's changed.";
+const NO_SETUP = "We couldn't set up that table. Head back to the start and host again.";
 const FALLBACK = 'Something went wrong. Try again.';
 
 /**
@@ -51,12 +52,15 @@ const BY_MESSAGE = new Map<string, string>(
     'hand not finished': TOO_LATE,
     // A move the rules don't allow from this hand.
     'illegal claim': NOT_ALLOWED,
+    'tile not in hand': NOT_ALLOWED,
     'not a winning hand': NOT_ALLOWED,
     'cannot claim your own discard': NOT_ALLOWED,
     'no kong available': NOT_ALLOWED,
     'no exchange step': NOT_ALLOWED,
     'action is not for your seat': NOT_ALLOWED,
     'an action is required': NOT_ALLOWED,
+    'that is not a move a player can make': NOT_ALLOWED,
+    'only the table makes that move': NOT_ALLOWED,
     'that seat is a bot': BOT_SEAT,
     // Rooms.
     'this table has already started': UNDER_WAY,
@@ -69,6 +73,10 @@ const BY_MESSAGE = new Map<string, string>(
     'a game is in progress': IN_PROGRESS,
     'the seats changed; start again': SEATS_CHANGED,
     'the table has started; leave it from the game': LEAVE_FROM_TABLE,
+    // Room set-up the app never sends: only a hand-made request meets these.
+    'rooms play karachi rules': NO_SETUP,
+    'that is not a room request': NO_SETUP,
+    'those room options are not ones we know': NO_SETUP,
     // Games.
     'no such game': NO_GAME,
     'no such room': NO_GAME,
