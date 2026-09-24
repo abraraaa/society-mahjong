@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { IllegalAction, analysisBot, karachi, legalActions, viewFor, type Seat } from '@society/engine';
-import type { LiveGame } from './types';
-import { NotYourMove, dealFirstHand, resolveExpired, settle, step } from './table';
+import type { ClientAction, LiveGame } from './types';
+import { NotYourMove, actionIsForSeat, dealFirstHand, resolveExpired, settle, step } from './table';
 import { isHuman, seatOf, type Seats } from './types';
 import { policyFor } from './policy';
 
@@ -60,6 +60,16 @@ describe('a table with one human and three bots', () => {
     const game = dealFirstHand(karachi, seats, 'live-3', policy, T0);
     expect(() => step({ game, ruleset: karachi, seats, policy, now: T0, action: { type: 'discard', seat: 1, tile: 'm1' }, actor: ME })).toThrow(NotYourMove);
     expect(() => step({ game, ruleset: karachi, seats, policy, now: T0, action: { type: 'declareWin', seat: ME }, actor: ME })).toThrow(IllegalAction);
+  });
+
+  it('treats resolveClaims as nobody’s move, whatever seat it names', () => {
+    const forged = { type: 'resolveClaims', seat: ME } as unknown as ClientAction;
+    expect(actionIsForSeat(forged, ME)).toBe(false);
+    expect(actionIsForSeat({ type: 'pass', seat: ME }, ME)).toBe(true);
+    expect(actionIsForSeat({ type: 'nextHand' }, ME)).toBe(true);
+    const game = dealFirstHand(karachi, seats, 'live-3', policy, T0);
+    expect(() => step({ game, ruleset: karachi, seats, policy, now: T0, action: forged, actor: ME })).toThrow(NotYourMove);
+    expect(() => step({ game, ruleset: karachi, seats, policy, now: T0, action: { type: 'dealMeIn', seat: ME } as unknown as ClientAction, actor: ME })).toThrow(NotYourMove);
   });
 
   it('a sweep with nothing expired changes nothing', () => {

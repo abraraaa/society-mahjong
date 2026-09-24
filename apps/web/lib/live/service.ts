@@ -67,12 +67,18 @@ export async function viewGame(gameId: string, userId: string, now = Date.now())
  * Apply one request to the table: the caller's action, or none for a sweep.
  * Optimistic versioning: the client says which version it acted on; a
  * mismatch is a 409 carrying the current snapshot so the client can catch up.
+ *
+ * `userId` null is the server itself (the cron sweep, a bot taking a seat).
+ * A person needs a seat to act; to tick (resolve expired clocks and read the
+ * table back) they need a seat or the host's chair, as viewing does, so a
+ * stranger holding a game id can neither move the table nor watch it.
  */
 export async function actOnGame(gameId: string, userId: string | null, action: ClientAction | null, expectedVersion: number | null, now = Date.now()): Promise<GameSnapshot> {
   const { game, room } = await loadGame(gameId);
   const ruleset = getRuleset(room.ruleset_id);
   const me = userId === null ? null : seatOf(room.seats, userId);
   if (action && me === null) throw new HttpError(403, 'not seated at this table');
+  if (userId !== null && me === null && room.host_id !== userId) throw new HttpError(403, 'not at this table');
   if (game.status !== 'active') throw new HttpError(409, 'game is over');
 
   const live = await loadLive(gameId);

@@ -5,6 +5,7 @@ import { createServiceClient } from '@/lib/supabase/service';
 import { HttpError } from './errors';
 import { stageFromStats, tallyHand, type ProfileStats } from './stage';
 import type { Deadlines, RoomStatus, Seats } from './types';
+import { cleanDisplayName } from './validate';
 
 export type { RoomStatus } from './types';
 
@@ -58,7 +59,8 @@ export async function roomById(id: string): Promise<RoomRow | null> {
 }
 
 export async function createRoom(input: { code: string; hostId: string; hostName: string; rulesetId: RulesetId; options: Record<string, unknown> }): Promise<RoomRow> {
-  const seats: Seats = [{ kind: 'human', userId: input.hostId, name: input.hostName }, null, null, null];
+  // The host's name is capped where it enters the room, whoever the caller is.
+  const seats: Seats = [{ kind: 'human', userId: input.hostId, name: cleanDisplayName(input.hostName) ?? 'Guest' }, null, null, null];
   const { data, error } = await db()
     .from('rooms')
     .insert({ code: input.code, host_id: input.hostId, ruleset_id: input.rulesetId, options: input.options, seats })

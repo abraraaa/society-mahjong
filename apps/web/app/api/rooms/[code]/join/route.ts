@@ -4,6 +4,7 @@ import { broadcast, roomPoke } from '@/lib/live/broadcast';
 import { errorResponse, json } from '@/lib/live/http';
 import { joinRoom, requireRoom, roomSnapshot } from '@/lib/live/rooms';
 import { HttpError } from '@/lib/live/service';
+import { cleanDisplayName } from '@/lib/live/validate';
 
 /** A room code is enough to sit down. Idempotent: a returning player gets their seat back. */
 export async function POST(req: NextRequest, ctx: { params: Promise<{ code: string }> }) {
@@ -11,8 +12,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ code: stri
     const user = await currentUser();
     if (!user) throw new HttpError(401, 'sign in first');
     const { code } = await ctx.params;
-    const body = (await req.json().catch(() => ({}))) as { name?: string };
-    const name = (body.name ?? user.name).trim().slice(0, 24) || user.name;
+    const body = (await req.json().catch(() => null)) as { name?: unknown } | null;
+    const name = cleanDisplayName(body?.name) ?? user.name;
     const { room, seated } = await joinRoom(await requireRoom(code), user.id, name);
     const snap = roomSnapshot(room, user.id);
     if (seated) await broadcast([roomPoke(room.id, 'seats', { seats: snap.seats })]);
