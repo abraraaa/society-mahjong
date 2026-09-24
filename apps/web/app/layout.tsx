@@ -3,8 +3,8 @@ import { Fraunces, Inter } from 'next/font/google';
 import { Analytics } from '@vercel/analytics/next';
 import './globals.css';
 
-const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap', fallback: ['Inter Fallback Android'] });
-const fraunces = Fraunces({ subsets: ['latin'], variable: '--font-fraunces', display: 'swap', fallback: ['Fraunces Fallback Android'] });
+const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
+const fraunces = Fraunces({ subsets: ['latin'], variable: '--font-fraunces', display: 'swap' });
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://societymahjong.app'),

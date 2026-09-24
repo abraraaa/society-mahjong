@@ -2,7 +2,9 @@
 
 /* Android ships neither Arial nor Times New Roman, so next/font's size-matched
    fallbacks never load there and text jumps when the web fonts arrive. These
-   match Roboto and Noto Serif to Inter and Fraunces instead. */
+   match Roboto and Noto Serif to Inter and Fraunces instead. They sit after the
+   next/font variable in --font-sans and --font-display, so next/font keeps its
+   own Arial and Times faces (passing `fallback` to next/font would drop them). */
 @font-face {
   font-family: 'Inter Fallback Android';
   src: local('Roboto'), local('Roboto-Regular');
@@ -49,8 +51,8 @@
   --color-danger: #c9553f;
 
   /* --font-inter / --font-fraunces come from next/font (see app/layout.tsx) */
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-display: var(--font-fraunces), ui-serif, Georgia, serif;
+  --font-sans: var(--font-inter), 'Inter Fallback Android', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: var(--font-fraunces), 'Fraunces Fallback Android', ui-serif, Georgia, serif;
   --ease-tile: cubic-bezier(0.2, 0.8, 0.2, 1);
 
   --radius-tile-sm: 3px;

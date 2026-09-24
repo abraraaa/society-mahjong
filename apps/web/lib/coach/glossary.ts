@@ -140,19 +140,19 @@ export const GLOSSARY: Readonly<Record<Term, TermEntry>> = {
   mahjong: {
     label: 'Mahjong',
     short: 'a complete winning hand',
-    long: 'The call when your hand is complete. In these rules a hand is complete only when it matches one of the round’s named patterns, which is what the coach is steering you toward.',
+    long: 'The call when your hand is complete. In these rules a hand is complete only when it matches one of the round’s named patterns, which is what the tutor is steering you towards.',
     aliases: ['mahjong'],
   },
   selfDrawn: {
     label: 'Off the wall',
     short: 'winning on your own draw',
-    long: 'Completing your hand with the tile you drew, rather than with someone’s discard. Also called self-drawn; some tables pay it more.',
+    long: 'Completing your hand with the tile you drew, rather than with someone’s discard. Also called self-drawn. In a goulash hand it doubles the score.',
     aliases: ['off the wall', 'self-drawn', 'self drawn'],
   },
   dealer: {
     label: 'Dealer',
     short: 'East, who starts the hand',
-    long: 'The player in the East seat. The dealer draws first and, at many tables, pays and receives double.',
+    long: 'The player in the East seat. The dealer draws first, and pays and receives double.',
     aliases: ['dealer'],
   },
   roundWind: {
@@ -170,14 +170,14 @@ export const GLOSSARY: Readonly<Record<Term, TermEntry>> = {
   bonus: {
     label: 'Flowers',
     short: 'bonus tiles, set aside on sight',
-    long: 'Flower and season tiles are not part of any hand. When you draw one it is set aside face up and you draw a replacement. Some tables score them.',
+    long: 'Flower and season tiles are not part of any hand. When you draw one it is set aside face up and you draw a replacement. They add points to a goulash hand, and the winner’s own flower or season raises a flat stake.',
     example: ['F1', 'S1'],
     aliases: ['flowers', 'flower', 'seasons', 'season', 'bonus tiles', 'bonus tile'],
   },
   exchange: {
     label: 'Exchange',
     short: 'passing three tiles before play',
-    long: 'Before a goulash hand in the West round, everyone passes three tiles to the right, then across, then to the left. The coach picks tiles no hand of yours is using.',
+    long: 'Before a goulash hand in the West round, everyone passes three tiles to the right, then across, then to the left. The tutor picks tiles no hand of yours is using.',
     aliases: ['exchange'],
   },
   terminals: {

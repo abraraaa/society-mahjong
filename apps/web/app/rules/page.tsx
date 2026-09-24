@@ -45,7 +45,7 @@ export default function RulesPage() {
       <header>
         <p className="eyebrow">The rules</p>
         <h1 className="font-display">How to play Karachi mahjong</h1>
-        <p className="lede">Karachi mahjong is the game played at home and at the club in Karachi: a blend of Mumbai and Western play in which each wind round asks for a different hand. Four seats, thirteen tiles each, one goal: complete a hand before anyone else. Here is everything a first-timer needs. The tutor covers the rest at the table.</p>
+        <p className="lede">Karachi mahjong blends Mumbai and Western play, and has been passed on by word of mouth in Karachi since at least the 1970s. Each wind round asks for a different hand. Four seats, thirteen tiles each, one goal: complete a hand before anyone else. Here is everything a first-timer needs. The tutor covers the rest at the table.</p>
       </header>
 
       <section>
@@ -98,7 +98,7 @@ export default function RulesPage() {
       <section>
         <h2 className="font-display">Karachi rules: four rounds, four asks</h2>
         <p>
-          A game is four rounds of four hands, and each round asks for a different kind of hand. The deal passes one seat to the right after every hand, so each of you deals once a round. The tutor names the
+          A game is four rounds of four hands, and each round asks for a different kind of hand. Here the deal passes one seat to the right after every hand, so each of you deals once a round. The tutor names the
           round&apos;s hand at the top of the table and points you towards it.
         </p>
         <dl className="rounds">
@@ -119,17 +119,17 @@ export default function RulesPage() {
         </dl>
         <p>
           The first hand of the game and every hand of the West round are <b>goulash</b> hands. Each West hand starts with an <b>exchange</b>: everyone passes three tiles to the right, then
-          across, then to the left, before a tile is drawn. British tables use the word for the hand after a washed-out deal; in Karachi rules the goulash opens the game and fills the whole West
-          round.
+          across, then to the left, before a tile is drawn. Elsewhere a goulash is the hand played after a washed-out hand; here it opens the game.
         </p>
       </section>
 
       <section>
         <h2 className="font-display">Scoring</h2>
         <p>
-          Most hands pay a flat stake: each of the other three pays the winner, and East pays and receives double. Holding your own flower or season doubles the stake, and holding both
-          quadruples it. The two kinds of goulash hand are added up tile by tile instead, and winning on a tile you drew yourself (<b>self-drawn</b>) scores more there. It is points only, never
-          money. The table keeps a running tally; you will see it next to each name.
+          Most hands pay a flat stake: each of the other three pays the winner, and the dealer (East) pays and receives double. Here, if the winner holds their own flower or season (the one
+          numbered for their seat: 1 for East, 2 for South, and so on), the stake doubles; if they hold both, it quadruples. The goulash hands are scored differently: points for each set, pair
+          and flower, then doubled for each special feature, and winning <b>off the wall</b> is one of those features. It is points only, never money. The table keeps a running tally; you will
+          see it next to each name.
         </p>
       </section>
 
