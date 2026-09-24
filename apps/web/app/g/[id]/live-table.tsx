@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getRuleset, tileName, type Action, type Seat } from '@society/engine';
+import { getRuleset, tileName, type Action, type PrivatePlayerView, type Seat, type TileKind } from '@society/engine';
 import { Table } from '@/components/table';
 import { NameGate } from '@/components/name-gate';
 import { ConfirmSheet } from '@/components/confirm-sheet';
@@ -14,6 +14,7 @@ import { isPrivate, type GameSnapshot } from '@/lib/live/snapshot';
 import type { ClientAction } from '@/lib/live/types';
 import { NeedsCaptcha, ensureSession, rememberName, storedName } from '@/lib/supabase/session';
 import { scoresFrom } from '@/lib/ledger';
+import { canDiscard } from '@/lib/table-flow';
 
 interface Progress {
   readonly handsFinished: number;
@@ -171,6 +172,12 @@ export function LiveTable({ gameId }: { gameId: string }) {
   // than one that fails.
   const send = async (action: ClientAction, retried = false): Promise<void> => {
     if (!snap) return;
+    // Never send a discard of a tile this seat doesn't hold, or out of turn:
+    // the server would only refuse it, in its own words.
+    if (action.type === 'discard' && (!view || !canDiscard(view, action.tile))) {
+      setNotice(discardRefusal(view, action.tile));
+      return;
+    }
     if (action.type === 'discard' && !retried) setProgress((p) => ({ ...p, discardsMade: p.discardsMade + 1 }));
     try {
       take(await api.act(gameId, action, snap.version));
@@ -258,6 +265,8 @@ export function LiveTable({ gameId }: { gameId: string }) {
         />
       )}
       <Table
+        // Each game starts the table afresh, so nothing picked in one game can carry into the next.
+        key={gameId}
         view={view}
         label={ruleset.handSpec(view.progress).label}
         subtitle={`Room ${snap.roomCode}`}
@@ -304,6 +313,12 @@ function standInText(a: Action): string {
     default:
       return 'You ran out of time, so a stand-in moved for you.';
   }
+}
+
+/** Why a discard wasn't sent, in the player's words, with what to do instead. */
+function discardRefusal(view: PrivatePlayerView | null, tile: TileKind): string {
+  if (view && view.phase === 'turn' && view.turn === view.me) return `You're not holding ${tileName(tile)} any more. Pick another tile to discard.`;
+  return "It's not your turn to discard yet. Hang on until it comes round to you.";
 }
 
 /** The engine's reasons, in the player's words. */

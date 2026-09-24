@@ -2,10 +2,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ConfirmSheet } from '@/components/confirm-sheet';
-import { SEATS, analysisBot, initialProgress, karachi, nextHand, reduce, startHand, viewFor, type Action, type BotOptions, type HandState, type Seat } from '@society/engine';
+import { SEATS, analysisBot, initialProgress, karachi, nextHand, startHand, viewFor, type Action, type BotOptions, type HandState, type Seat } from '@society/engine';
 import { NO_SCORES, applyResult, type Scores } from '@/lib/ledger';
 import { Table } from '@/components/table';
-import { tableFlow } from '@/lib/table-flow';
+import { tableFlow, tryReduce } from '@/lib/table-flow';
 import { analyseFor, coachFor, stageFor, type CoachState } from '@/lib/coach';
 
 const ME: Seat = 0;
@@ -26,7 +26,7 @@ function botStep(state: HandState, bots: BotOptions): HandState {
   for (const seat of SEATS) {
     if (seat === ME || s.phase === 'finished') continue;
     const a = analysisBot(viewFor(s, ruleset, seat), ruleset, bots);
-    if (a) s = reduce(s, a, ruleset);
+    if (a) s = tryReduce(s, a, ruleset) ?? s;
   }
   return s;
 }
@@ -60,14 +60,19 @@ export function SoloTable({ seed }: { seed: string }) {
     if (flow === 'over' || flow === 'mine') return;
     // Nothing claimable for us, but the engine still wants our response before
     // the window can close; it is given without the bots' pause.
-    const autoPass = (s: HandState) => (s.phase === 'claim' && s.claims[ME] === undefined ? reduce(s, { type: 'pass', seat: ME }, ruleset) : s);
+    const autoPass = (s: HandState) => (s.phase === 'claim' && s.claims[ME] === undefined ? (tryReduce(s, { type: 'pass', seat: ME }, ruleset) ?? s) : s);
     const t = flow === 'auto-pass' ? setTimeout(() => setState(autoPass), 0) : setTimeout(() => setState((s) => botStep(s, bots)), 450);
     return () => clearTimeout(t);
   }, [state, flow, bots]);
 
+  // The engine throws on a move it won't take, and a throw inside a state
+  // update takes the page down. A tap the table can't take (a tile no longer
+  // in the hand, a turn that has already moved on) is ignored instead, and the
+  // hand stays exactly as it was.
   const act = (a: Action) => {
+    if (tryReduce(state, a, ruleset) === null) return;
     if (a.type === 'discard') setProgress((p) => ({ ...p, discardsMade: p.discardsMade + 1 }));
-    setState((s) => reduce(s, a, ruleset));
+    setState((s) => tryReduce(s, a, ruleset) ?? s);
   };
 
   // The ledger moves when a hand ends, once, before the next one is dealt.
@@ -75,6 +80,8 @@ export function SoloTable({ seed }: { seed: string }) {
   const over = state.phase === 'finished' && nextHand(state, ruleset) === null;
 
   const onNextHand = () => {
+    // Only a finished hand has a next one; nextHand() throws on any other.
+    if (state.phase !== 'finished') return;
     setProgress((p) => ({ ...p, handsFinished: p.handsFinished + 1, wins: p.wins + (state.result?.type === 'win' && state.result.winner === ME ? 1 : 0) }));
     if (over || gameOver) {
       // A new game: scores back to nought, a fresh seed so the deals differ.
@@ -101,6 +108,8 @@ export function SoloTable({ seed }: { seed: string }) {
         />
       )}
       <Table
+        // A new game starts the table afresh, so nothing picked in the last game can carry over.
+        key={round}
         view={view}
         label={ruleset.handSpec(state.progress).label}
         names={NAMES}

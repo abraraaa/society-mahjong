@@ -8,6 +8,7 @@ import { Coach, CoachLine, TermProvider, useOpenTerm } from '@/components/coach'
 import { River } from '@/components/river';
 import { riverOrder } from '@/lib/river';
 import { NO_SCORES, handDeltas, signed, standings, type Scores } from '@/lib/ledger';
+import { discardOffer, heldSelection, selectTile, type Selection } from '@/lib/table-flow';
 import type { CoachState } from '@/lib/coach';
 
 /** What a seat can send: every engine action except the server's own `resolveClaims`. */
@@ -93,17 +94,24 @@ function TableInner({
   const sub = subtitle ? `${subtitle} · ${counter}` : counter;
   const me = view.players[ME];
   const legal = view.legal;
-  const [selected, setSelected] = useState<TileKind | null>(null);
+  const [pick, setPick] = useState<Selection | null>(null);
+  // The pick is only ever read through heldSelection, which drops it once the
+  // hand changes, the player's discard turn has come and gone, or the tile has
+  // left the hand. A tile lifted during the bots' moves can't linger into the
+  // next hand and put a tile the player doesn't hold on the Discard button.
+  const selected = heldSelection(pick, view);
 
   const act = (a: SeatAction) => {
-    setSelected(null);
+    setPick(null);
     onAct(a);
   };
 
   const myTurn = view.phase === 'turn' && view.turn === ME && !!legal.discard;
   const advice = tutorOn ? coach : null;
   const suggested = advice && advice.action.kind === 'discard' ? advice.action.tile : null;
-  const hasActions = !!legal.win || !!legal.kong?.length || (myTurn && (selected !== null || suggested !== null));
+  // The player's own pick wins over the tutor's, but only a tile they hold is ever offered.
+  const offer = discardOffer(view, selected, suggested);
+  const hasActions = !!legal.win || !!legal.kong?.length || offer !== null;
   // stable sort means duplicates of a newly-drawn kind land last, so this always resolves the tile just drawn
   const drawnIndex = view.drawn ? view.concealed.lastIndexOf(view.drawn) : -1;
 
@@ -159,16 +167,11 @@ function TableInner({
           Kong {tileName(k)}
         </button>
       ))}
-      {myTurn &&
-        (selected ? (
-          <button className="btn btn-primary" onClick={() => act({ type: 'discard', seat: ME, tile: selected })}>
-            Discard {tileName(selected)}
-          </button>
-        ) : suggested ? (
-          <button className="btn btn-primary" onClick={() => act({ type: 'discard', seat: ME, tile: suggested })}>
-            Discard {tileName(suggested)}
-          </button>
-        ) : null)}
+      {offer && (
+        <button className="btn btn-primary" onClick={() => act({ type: 'discard', seat: ME, tile: offer })}>
+          Discard {tileName(offer)}
+        </button>
+      )}
     </>
   );
 
@@ -187,7 +190,7 @@ function TableInner({
           fresh={isDrawn}
           coached={!!advice && advice.highlight.includes(k) && selected !== k}
           className={isDrawn ? 'drawn' : undefined}
-          onClick={() => setSelected(selected === k ? null : k)}
+          onClick={() => setPick(selected === k ? null : selectTile(k, view))}
         />
       );
     });
