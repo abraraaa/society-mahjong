@@ -1,5 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { errorResponse, json } from '@/lib/live/http';
+import { logError } from '@/lib/live/log';
 import { actOnGame } from '@/lib/live/service';
 import { secretMatches } from '@/lib/live/secret';
 import { expiredGames } from '@/lib/live/store';
@@ -25,12 +26,12 @@ export async function GET(req: NextRequest) {
         results[id] = 'ok';
       } catch (err) {
         // One stuck table must not stop the rest; the log keeps the detail for whoever reads it.
-        console.error('sweep: could not settle game', id, err);
+        logError('sweep_game_failed', err, { route: '/api/cron/sweep', gameId: id });
         results[id] = (err as Error).message;
       }
     }
     return json({ swept: ids.length, results });
   } catch (err) {
-    return errorResponse(err);
+    return errorResponse(err, '/api/cron/sweep');
   }
 }

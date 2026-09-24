@@ -19,6 +19,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ code: stri
     if (seated) await broadcast([roomPoke(room.id, 'seats', { seats: snap.seats })]);
     return json(snap);
   } catch (err) {
-    return errorResponse(err);
+    return errorResponse(err, '/api/rooms/[code]/join');
   }
 }

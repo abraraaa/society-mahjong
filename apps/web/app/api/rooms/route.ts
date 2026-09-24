@@ -19,6 +19,6 @@ export async function POST(req: NextRequest) {
     const room = await createRoom({ code, hostId: user.id, hostName: user.name, rulesetId: request.rulesetId, options: request.options });
     return json({ id: room.id, code: room.code }, 201);
   } catch (err) {
-    return errorResponse(err);
+    return errorResponse(err, '/api/rooms');
   }
 }

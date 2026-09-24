@@ -16,6 +16,6 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
     const { id } = await ctx.params;
     return json(await actOnGame(id, user.id, null, null));
   } catch (err) {
-    return errorResponse(err);
+    return errorResponse(err, '/api/games/[id]/tick');
   }
 }

@@ -15,6 +15,6 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ code: stri
     if (seatOf(room.seats, user.id) === null && room.host_id !== user.id) throw new HttpError(403, 'not at this table');
     return json(roomSnapshot(room, user.id));
   } catch (err) {
-    return errorResponse(err);
+    return errorResponse(err, '/api/rooms/[code]');
   }
 }

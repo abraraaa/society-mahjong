@@ -114,3 +114,17 @@ Every statement is a read. Nothing is changed.
 - Start with query 8 and read left to right to see where tables drop off. Query 4's **stalled** column counts games nobody finished and nobody left: a room like that stays "playing" for good. In query 6, if **names_given** keeps outrunning **returning**, phones may be forgetting people. Check that against the iPhone test above.
 
 Once a week, on a Monday, is enough to start with.
+
+## Reading the server's error lines
+
+Not a launch check: a key for when something looks wrong. The server writes each error as one line of JSON in Vercel's function logs (the project's **Logs** tab). Type an `event` name below into the search box to find every line of that kind. No line carries a request body, a header, a cookie, a token or a query string.
+
+- **`route_error`**: an API route answered 500 and the player saw "something went wrong". `route` names the route. A database failure reads `could not <what>: <why>`, and `code` holds Postgres's error code.
+- **`after_commit_failed`**: a move was saved and the game went on, but a write after it failed. `step` says which one:
+  - `log the move`: that hand's log is missing the move.
+  - `open the hand` or `close the hand`: the hand's row, result, scores or count may be missing. The message says which write failed.
+  - `finish the game`: the game stays active and the room stays "playing", so the host can't deal again yet. Anyone at the table pressing **Next hand** once more finishes it properly.
+- **`request_error`**: an error nothing else caught, such as a page that failed to render. `digest` matches the code on an error page, and `routePath` and `routeType` say where it happened.
+- **`sweep_game_failed`**: the daily sweep couldn't settle one game (`gameId`). The others were still swept.
+- **`leave_settle_failed`**: someone stood up and the bot in their seat couldn't move straight away. The next clock or the sweep plays its move.
+- **`poke_failed`**: the others weren't told the table moved. It's rare, because a failed Realtime call is caught first and logged as `broadcast failed`. Their next refresh or clock catches them up.

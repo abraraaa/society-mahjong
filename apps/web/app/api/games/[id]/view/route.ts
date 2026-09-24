@@ -10,6 +10,6 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     const { id } = await ctx.params;
     return json(await viewGame(id, user.id));
   } catch (err) {
-    return errorResponse(err);
+    return errorResponse(err, '/api/games/[id]/view');
   }
 }

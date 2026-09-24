@@ -29,6 +29,6 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ code: str
     await broadcast([roomPoke(room.id, 'started', { gameId: game.id })]);
     return json({ gameId: game.id }, 201);
   } catch (err) {
-    return errorResponse(err);
+    return errorResponse(err, '/api/rooms/[code]/start');
   }
 }

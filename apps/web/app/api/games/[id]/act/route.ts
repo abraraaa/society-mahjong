@@ -17,6 +17,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const expected = Number.isInteger(body?.expectedVersion) ? (body?.expectedVersion as number) : null;
     return json(await actOnGame(id, user.id, action, expected));
   } catch (err) {
-    return errorResponse(err);
+    return errorResponse(err, '/api/games/[id]/act');
   }
 }
