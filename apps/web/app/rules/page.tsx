@@ -5,7 +5,7 @@ import { Tile } from '@/components/tile';
 import { GLOSSARY, TERMS } from '@/lib/coach/glossary';
 
 export const metadata: Metadata = {
-  title: 'How it plays',
+  title: 'How to play',
   description: 'How a table of mahjong plays, what Karachi rules ask for in each round, and the words you will hear.',
   alternates: { canonical: '/rules' },
   // Next replaces a nested object whole, so the site fields from the root layout are repeated here.
@@ -43,9 +43,9 @@ export default function RulesPage() {
   return (
     <main className="rules">
       <header>
-        <p className="eyebrow">How it plays</p>
+        <p className="eyebrow">How to play</p>
         <h1 className="font-display">Mahjong, the way this table plays it</h1>
-        <p className="lede">Four seats, thirteen tiles each, one goal: complete a hand before anyone else. Here is everything a first-timer needs, and the tutor sits with you for the rest.</p>
+        <p className="lede">Four seats, thirteen tiles each, one goal: complete a hand before anyone else. Here is everything a first-timer needs. The tutor covers the rest at the table.</p>
       </header>
 
       <section>

@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 export async function generateMetadata({ params }: { params: Promise<{ code: string }> }): Promise<Metadata> {
   const { code } = await params;
   const upper = code.toUpperCase();
-  const description = 'Tap the link, give a name, sit down. Karachi rules, and a tutor who sits with first-timers.';
+  const description = 'Give a name and take your seat. No sign-up. Karachi rules, and a tutor for new players.';
   return {
     title: `Join table ${upper}`,
     description,

@@ -20,8 +20,9 @@ export function JoinForm() {
       }}
     >
       <input
-        className="min-w-0 flex-1 rounded-2xl bg-felt-800/60 px-4 py-3 text-base tracking-[0.12em] text-ivory-50 uppercase outline-none ring-ivory-50/30 focus:ring-2"
-        placeholder="KHI-4287Q"
+        className="min-w-0 flex-1 rounded-2xl bg-felt-800/60 px-4 py-3 text-base tracking-[0.12em] text-ivory-50 uppercase outline-none placeholder:tracking-normal placeholder:normal-case placeholder:text-ivory-200/50 ring-ivory-50/30 focus:ring-2"
+        placeholder="Got a code?"
+        aria-label="Table code"
         autoCapitalize="characters"
         autoCorrect="off"
         maxLength={10}

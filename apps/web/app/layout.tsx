@@ -9,7 +9,7 @@ const fraunces = Fraunces({ subsets: ['latin'], variable: '--font-fraunces', dis
 export const metadata: Metadata = {
   metadataBase: new URL('https://societymahjong.app'),
   title: { default: 'Society Mahjong', template: '%s · Society Mahjong' },
-  description: 'Karachi mahjong on your phone. A private table for you and your friends, wherever they are, and a tutor who sits with you for your first hands.',
+  description: 'Host a private mahjong table, send friends the link and play on your phones. Karachi rules, no sign-up, bots for empty seats and a tutor for new players.',
   openGraph: { siteName: 'Society Mahjong', type: 'website', locale: 'en_GB' },
   twitter: { card: 'summary_large_image' },
   appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'Society' },

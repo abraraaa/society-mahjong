@@ -12,7 +12,7 @@ export default function manifest(): MetadataRoute.Manifest {
     id: 'https://societymahjong.app/',
     name: 'Society Mahjong',
     short_name: 'Society',
-    description: 'Karachi mahjong with friends, on your phone.',
+    description: 'Private mahjong tables for friends, with a tutor for new players.',
     start_url: '/',
     scope: '/',
     display: 'standalone',

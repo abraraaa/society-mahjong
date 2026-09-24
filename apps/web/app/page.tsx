@@ -5,7 +5,8 @@ import { JoinForm } from '@/components/join-form';
 
 export const metadata: Metadata = {
   // Absolute, so the front door is not titled "Society Mahjong … · Society Mahjong".
-  title: { absolute: 'Society Mahjong — Karachi rules, on your phone' },
+  title: { absolute: 'Society Mahjong · A private table for four' },
+  description: 'Host a private mahjong table, send friends the link and play on your phones. Karachi rules, no sign-up, bots for empty seats and a tutor for new players.',
   alternates: { canonical: '/' },
   // Next replaces a nested object whole, so the site fields from the root layout are repeated here.
   openGraph: { siteName: 'Society Mahjong', type: 'website', locale: 'en_GB', url: '/' },
@@ -29,7 +30,7 @@ export default function Home() {
       <header className="hero">
         <p className="eyebrow eyebrow-quiet">Society</p>
         <h1 className="font-display">Mahjong</h1>
-        <p className="lede">A table for you and your friends, wherever they are. Karachi rules first, and a tutor who sits with you for your first hands.</p>
+        <p className="lede">A private table for your friends. The tutor suggests each discard and says why.</p>
       </header>
 
       <HeroTiles />
@@ -38,13 +39,13 @@ export default function Home() {
         <Link href="/room" className="btn btn-primary btn-block min-h-[52px] text-[18px]">
           Host a table
         </Link>
-        <p className="hint">You get a code. Friends open the link, give a name, and sit down. Bots take any empty seats.</p>
+        <p className="hint">Karachi rules, no sign-up. Need a fourth? A bot sits in.</p>
         <JoinForm />
         <Link href="/rules" className="link-quiet">
-          How it plays
+          How to play
         </Link>
         <Link href="/play/solo" className="link-quiet">
-          Or play a hand alone first
+          Practise on the bots
         </Link>
       </nav>
     </main>
