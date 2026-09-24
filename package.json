@@ -9,6 +9,7 @@
     "dev": "pnpm --filter @society/web dev",
     "build": "pnpm -r build",
     "test": "pnpm -r test",
+    "test:e2e": "pnpm --filter @society/web test:e2e",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint"
   },
