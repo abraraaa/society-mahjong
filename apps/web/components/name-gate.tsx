@@ -1,6 +1,7 @@
 'use client';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { solveCaptcha } from '@/lib/captcha';
+import { NAME_MAX, seatName } from '@/lib/name-gate';
 
 /**
  * The one question a guest is asked. Submitting also runs an invisible
@@ -11,10 +12,19 @@ export function NameGate({ title, initialName = '', onDone }: { title: string; i
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const captchaRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // The box is on screen before the page can listen to it, so a name typed in
+  // that moment is in the box but was never heard. Pick it up once we're live.
+  // The input is uncontrolled so React never writes over what's been typed.
+  useEffect(() => {
+    const typed = inputRef.current?.value;
+    if (typed !== undefined) setName(typed);
+  }, []);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const n = name.trim().slice(0, 24);
+    const n = seatName(name);
     if (!n || busy || !captchaRef.current) return;
     setBusy(true);
     setError(null);
@@ -36,15 +46,16 @@ export function NameGate({ title, initialName = '', onDone }: { title: string; i
       </div>
       <form className="flex flex-col gap-3" onSubmit={submit}>
         <input
+          ref={inputRef}
           autoFocus
           className="rounded-2xl bg-felt-800/60 px-4 py-3 text-lg text-ivory-50 outline-none ring-ivory-50/30 focus:ring-2"
           placeholder="Your name"
-          maxLength={24}
-          value={name}
+          maxLength={NAME_MAX}
+          defaultValue={initialName}
           onChange={(e) => setName(e.target.value)}
           disabled={busy}
         />
-        <button className="btn btn-primary btn-block min-h-[52px] text-[18px]" disabled={!name.trim() || busy} type="submit">
+        <button className="btn btn-primary btn-block min-h-[52px] text-[18px]" disabled={!seatName(name) || busy} type="submit">
           {busy ? 'One moment…' : 'Sit down'}
         </button>
         {error && <p className="text-center text-sm text-red-300">{error}</p>}

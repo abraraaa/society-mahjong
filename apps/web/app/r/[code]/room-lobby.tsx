@@ -6,7 +6,8 @@ import { NameGate } from '@/components/name-gate';
 import { RoomWaiting } from '@/components/room-waiting';
 import { Trouble, Waiting } from '@/components/trouble';
 import { ApiError, api, listen, type RoomSnapshot } from '@/lib/live/client';
-import { NeedsCaptcha, ensureSession, rememberName, storedName } from '@/lib/supabase/session';
+import { NeedsCaptcha, ensureSession } from '@/lib/supabase/session';
+import { useGuestName } from '@/lib/supabase/use-guest-name';
 
 const RULESET_NAMES: Record<string, string> = { karachi: 'Karachi rules', taiwanese: 'Taiwanese rules' };
 
@@ -17,7 +18,7 @@ const RULESET_NAMES: Record<string, string> = { karachi: 'Karachi rules', taiwan
  */
 export function RoomLobby({ code }: { code: string }) {
   const router = useRouter();
-  const [name, setName] = useState<string | null>(() => (typeof window === 'undefined' ? null : storedName()));
+  const { name, initialName, choose, askAgain } = useGuestName();
   const [captcha, setCaptcha] = useState<string | null>(null);
   const [room, setRoom] = useState<RoomSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,14 +42,14 @@ export function RoomLobby({ code }: { code: string }) {
         if (snap.status === 'playing' && snap.gameId) goToGame(snap.gameId);
       } catch (err) {
         if (cancelled) return;
-        if (err instanceof NeedsCaptcha) setName(null);
+        if (err instanceof NeedsCaptcha) askAgain();
         else setError(err instanceof Error && err.message ? `Could not join this room: ${err.message}` : 'Could not join this room.');
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [code, name, captcha, goToGame, attempt]);
+  }, [code, name, captcha, goToGame, attempt, askAgain]);
 
   // Live seat changes and the start signal, with a poll as the fallback.
   useEffect(() => {
@@ -79,11 +80,10 @@ export function RoomLobby({ code }: { code: string }) {
     return (
       <NameGate
         title={`Room ${code}`}
-        initialName={storedName() ?? ''}
+        initialName={initialName}
         onDone={(n, token) => {
-          rememberName(n);
           setCaptcha(token);
-          setName(n);
+          choose(n);
         }}
       />
     );

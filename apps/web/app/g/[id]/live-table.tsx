@@ -12,7 +12,8 @@ import { analyseFor, coachFor, stageFor, type CoachState } from '@/lib/coach';
 import { ApiError, api, listen } from '@/lib/live/client';
 import { isPrivate, type GameSnapshot } from '@/lib/live/snapshot';
 import type { ClientAction } from '@/lib/live/types';
-import { NeedsCaptcha, ensureSession, rememberName, storedName } from '@/lib/supabase/session';
+import { NeedsCaptcha, ensureSession } from '@/lib/supabase/session';
+import { useGuestName } from '@/lib/supabase/use-guest-name';
 import { scoresFrom } from '@/lib/ledger';
 import { canDiscard } from '@/lib/table-flow';
 
@@ -29,7 +30,7 @@ interface Progress {
  */
 export function LiveTable({ gameId }: { gameId: string }) {
   const router = useRouter();
-  const [name, setName] = useState<string | null>(() => (typeof window === 'undefined' ? null : storedName()));
+  const { name, initialName, choose, askAgain } = useGuestName();
   const [captcha, setCaptcha] = useState<string | null>(null);
   const [snap, setSnap] = useState<GameSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -98,7 +99,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
         });
       } catch (err) {
         if (cancelled) return;
-        if (err instanceof NeedsCaptcha) setName(null);
+        if (err instanceof NeedsCaptcha) askAgain();
         else setError(err instanceof Error && err.message ? `Could not sit down: ${err.message}` : 'Could not sit down.');
       }
     })();
@@ -109,7 +110,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
       stop?.();
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [name, captcha, gameId, refetch, attempt]);
+  }, [name, captcha, gameId, refetch, attempt, askAgain]);
 
   // The room's own channel: when the host deals again after this game, everyone
   // still on the old table follows to the new one.
@@ -200,11 +201,10 @@ export function LiveTable({ gameId }: { gameId: string }) {
     return (
       <NameGate
         title="Take your seat"
-        initialName={storedName() ?? ''}
+        initialName={initialName}
         onDone={(n, token) => {
-          rememberName(n);
           setCaptcha(token);
-          setName(n);
+          choose(n);
         }}
       />
     );
