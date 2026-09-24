@@ -1,4 +1,4 @@
-import { reduce, type Action, type HandState, type LegalActions, type PrivatePlayerView, type Ruleset, type Seat, type TileKind } from '@society/engine';
+import { reduce, viewFor, type Action, type HandState, type LegalActions, type PrivatePlayerView, type Ruleset, type Seat, type TileKind } from '@society/engine';
 
 /**
  * Whose move the solo table is waiting on, from the local seat's legal actions.
@@ -95,4 +95,95 @@ export function discardOffer(view: SelectionView, selected: TileKind | null, sug
   if (selected !== null && canDiscard(view, selected)) return selected;
   if (suggested !== null && canDiscard(view, suggested)) return suggested;
   return null;
+}
+
+/**
+ * How long the table ignores taps after a hand starts or ends. A double tap on
+ * Next hand closes the result sheet with its first tap, and the second then
+ * lands on whatever the new hand has put in the same spot: a tile, or the
+ * Discard button with the tutor's pick on it. The second tap of a double tap
+ * comes well inside this; nobody reads a new hand and taps it faster.
+ */
+export const SETTLE_MS = 400;
+
+/** What changes at a hand boundary: a new hand dealt, or this one finishing. The table's grace period starts again whenever it does. */
+export function handBoundary(view: Pick<PrivatePlayerView, 'progress' | 'phase'>): string {
+  return `${view.progress.handIndex}:${view.phase === 'finished' ? 'over' : 'on'}`;
+}
+
+/** Whether a tap at `now` comes too soon after the hand boundary at `since` to be meant for what's on the table now. */
+export function settling(since: number, now: number, grace = SETTLE_MS): boolean {
+  return now - since < grace;
+}
+
+/**
+ * A move that's always open to the seat whose view this is, whatever its
+ * tiles: the first tiles in hand for an exchange, a pass in a claim window,
+ * the first tile it may discard on its turn. Null when the table isn't waiting
+ * on this seat.
+ */
+export function alwaysLegalMove(view: Pick<PrivatePlayerView, 'me' | 'legal' | 'concealed'>): Action | null {
+  const { legal, me: seat } = view;
+  if (legal.exchange) return { type: 'exchange', seat, tiles: view.concealed.slice(0, legal.exchange.count) };
+  if (legal.pass) return { type: 'pass', seat };
+  const tile = legal.discard?.[0];
+  return tile === undefined ? null : { type: 'discard', seat, tile };
+}
+
+/** A move the engine turned down at the solo table, and what was played instead. */
+export interface Refusal {
+  readonly seat: Seat;
+  /** what was chosen for the seat, or null when nothing was, though the table was waiting on it */
+  readonly tried: Action | null;
+  readonly instead: Action;
+  /** the engine's reason */
+  readonly why: string;
+}
+
+/**
+ * One move for each of `seats` that the table is waiting on, at the solo
+ * table: the move `choose` picks from that seat's view, or, when the engine
+ * turns it down (a bot bug, say), the always-legal move instead, with the
+ * refusal handed to `refused` so someone hears about it. A bug in a bot slows
+ * the table down but never freezes it. Throws if a seat was due to move and
+ * even so nothing moved, since the table would otherwise sit there for good
+ * without a word; the error page says so and sends word.
+ */
+export function playFor(
+  state: HandState,
+  seats: readonly Seat[],
+  ruleset: Ruleset,
+  choose: (view: PrivatePlayerView) => Action | null,
+  refused: (refusal: Refusal) => void,
+): HandState {
+  let s = state;
+  let due = false;
+  for (const seat of seats) {
+    if (s.phase === 'finished') break;
+    const view = viewFor(s, ruleset, seat);
+    const instead = alwaysLegalMove(view);
+    if (!instead) continue; // nothing for this seat to do
+    due = true;
+    const tried = choose(view);
+    let why = 'nothing was chosen';
+    if (tried) {
+      try {
+        s = reduce(s, tried, ruleset);
+        continue;
+      } catch (err) {
+        why = err instanceof Error ? err.message : String(err);
+      }
+    }
+    refused({ seat, tried, instead, why });
+    s = tryReduce(s, instead, ruleset) ?? s;
+  }
+  if (due && s === state) throw new Error(`the solo table stalled: no move for seats ${seats.join(', ')} was taken`);
+  return s;
+}
+
+/** A refusal as one line for the crash log. Tiles and seats only: a solo table has nothing private in it. */
+export function refusalMessage(r: Refusal): string {
+  const move = (a: Action) => (a.type === 'discard' ? `discard ${a.tile}` : a.type);
+  const what = r.tried === null ? `seat ${r.seat} chose no move though one was due` : `seat ${r.seat}'s ${move(r.tried)} was refused (${r.why})`;
+  return `solo table: ${what}, so it played ${move(r.instead)} instead`;
 }

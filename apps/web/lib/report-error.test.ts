@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { REPORT_URL } from './client-errors';
-import { ERROR_COPY, firstSighting, sendReport } from './report-error';
+import { ERROR_COPY, firstSighting, onceOnly, sendReport } from './report-error';
 
 const BODY = '{"message":"boom","digest":null,"path":"/g/1"}';
 
@@ -63,6 +63,24 @@ describe('firstSighting', () => {
     expect(firstSighting('boom', seen)).toBe(true);
     expect(firstSighting('boom', seen)).toBe(true);
     expect(firstSighting(undefined, seen)).toBe(true);
+  });
+});
+
+describe('onceOnly', () => {
+  it('passes on the first report and drops the rest', () => {
+    const send = vi.fn(() => true);
+    const report = onceOnly(send);
+    report('first');
+    report('second');
+    report('first');
+    expect(send).toHaveBeenCalledExactlyOnceWith('first');
+  });
+
+  it('keeps its own count: two senders report once each', () => {
+    const send = vi.fn(() => true);
+    onceOnly(send)('a');
+    onceOnly(send)('b');
+    expect(send.mock.calls).toEqual([['a'], ['b']]);
   });
 });
 

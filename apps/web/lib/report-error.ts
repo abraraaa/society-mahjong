@@ -35,6 +35,20 @@ export function sendReport(body: string, nav: Partial<Beacon> | null = globalThi
   }
 }
 
+/**
+ * A sender that passes on its first report and drops every one after it, for
+ * something that could otherwise report itself every few hundred milliseconds
+ * for as long as the page is open.
+ */
+export function onceOnly(send: (body: string) => boolean = sendReport): (body: string) => void {
+  let sent = false;
+  return (body) => {
+    if (sent) return;
+    sent = true;
+    send(body);
+  };
+}
+
 const reported = new WeakSet<object>();
 
 /**

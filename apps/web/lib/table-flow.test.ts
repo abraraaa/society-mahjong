@@ -1,6 +1,35 @@
 import { describe, expect, it } from 'vitest';
-import { SEATS, karachi, legalActions, nextHand, reduce, simpleBot, startHand, viewFor, type HandState, type PrivatePlayerView, type Seat, type TileKind } from '@society/engine';
-import { discardOffer, heldSelection, selectTile, selectionEpoch, tableFlow, tryReduce, type Selection } from './table-flow';
+import {
+  SEATS,
+  karachi,
+  legalActions,
+  nextHand,
+  reduce,
+  simpleBot,
+  startHand,
+  viewFor,
+  type Action,
+  type HandState,
+  type PrivatePlayerView,
+  type Seat,
+  type TileKind,
+} from '@society/engine';
+import {
+  SETTLE_MS,
+  alwaysLegalMove,
+  discardOffer,
+  handBoundary,
+  heldSelection,
+  playFor,
+  refusalMessage,
+  selectTile,
+  selectionEpoch,
+  settling,
+  tableFlow,
+  tryReduce,
+  type Refusal,
+  type Selection,
+} from './table-flow';
 
 const ME: Seat = 0;
 const progress = { roundWind: 'E' as const, roundIndex: 0, handInRound: 1, handIndex: 1 };
@@ -211,5 +240,141 @@ describe('a pick carried over a hand boundary', () => {
       }
     }
     expect(carriedAndMissing, 'no seed carried a pick into a hand without that tile').toBeGreaterThan(0);
+  });
+});
+
+describe('the grace period after a hand boundary', () => {
+  const s0 = startHand(karachi, { seed: 'grace-0', progress, dealer: 1 });
+
+  it('starts again when a hand is dealt and when it finishes, and at no other time', () => {
+    const playing = drive(s0, botsMoving);
+    // Discards, claims and turns within the hand are not a boundary.
+    expect(handBoundary(view(playing))).toBe(handBoundary(view(s0)));
+    const finished = drive(s0, (s) => s.phase === 'finished', 2000);
+    expect(handBoundary(view(finished))).not.toBe(handBoundary(view(playing)));
+    const next = startHand(karachi, { seed: 'grace-0', ...nextHand(finished, karachi)! });
+    expect(handBoundary(view(next))).not.toBe(handBoundary(view(finished)));
+    expect(handBoundary(view(next))).not.toBe(handBoundary(view(s0)));
+  });
+
+  it('swallows the second tap of a double tap on Next hand, and nothing a person means', () => {
+    const dealtAt = 10_000; // the first tap dealt the new hand
+    expect(settling(dealtAt, dealtAt + 120)).toBe(true);
+    expect(settling(dealtAt, dealtAt + SETTLE_MS - 1)).toBe(true);
+    expect(settling(dealtAt, dealtAt + SETTLE_MS)).toBe(false);
+    expect(settling(dealtAt, dealtAt + 2000)).toBe(false);
+    expect(SETTLE_MS).toBeLessThanOrEqual(500);
+  });
+});
+
+describe('alwaysLegalMove', () => {
+  const west = startHand(karachi, { seed: 'legal-west', progress: { roundWind: 'W', roundIndex: 2, handInRound: 0, handIndex: 8 }, dealer: 1 });
+  const claimWindow = drive(startHand(karachi, { seed: 'legal-claim', progress, dealer: 1 }), (s) => s.phase === 'claim' && s.lastDiscard?.from !== 2 && s.claims[2] === undefined);
+
+  it('passes the first tiles in hand for an exchange', () => {
+    expect(west.phase).toBe('preplay');
+    const move = alwaysLegalMove(viewFor(west, karachi, 2));
+    expect(move).toEqual({ type: 'exchange', seat: 2, tiles: west.players[2].concealed.slice(0, 3) });
+    expect(tryReduce(west, move!, karachi)).not.toBeNull();
+  });
+
+  it('passes in a claim window', () => {
+    expect(claimWindow.phase).toBe('claim');
+    const move = alwaysLegalMove(viewFor(claimWindow, karachi, 2));
+    expect(move).toEqual({ type: 'pass', seat: 2 });
+    expect(tryReduce(claimWindow, move!, karachi)).not.toBeNull();
+  });
+
+  it('discards the first tile it may on its turn', () => {
+    const turn = drive(startHand(karachi, { seed: 'legal-turn', progress, dealer: 1 }), (s) => s.phase === 'turn' && s.turn === 2);
+    const v = viewFor(turn, karachi, 2);
+    const move = alwaysLegalMove(v);
+    expect(move).toEqual({ type: 'discard', seat: 2, tile: v.legal.discard![0] });
+    expect(tryReduce(turn, move!, karachi)).not.toBeNull();
+  });
+
+  it('has nothing when the table is not waiting on the seat', () => {
+    const turn = drive(startHand(karachi, { seed: 'legal-turn', progress, dealer: 1 }), (s) => s.phase === 'turn' && s.turn === 2);
+    expect(alwaysLegalMove(viewFor(turn, karachi, 3))).toBeNull();
+    expect(alwaysLegalMove(viewFor({ ...turn, phase: 'finished' }, karachi, 2))).toBeNull();
+  });
+});
+
+describe('playFor: the solo table never freezes on a refused bot move', () => {
+  const BOTS: Seat[] = [1, 2, 3];
+  const collect = () => {
+    const refusals: Refusal[] = [];
+    return { refusals, refused: (r: Refusal) => refusals.push(r) };
+  };
+  const turn = drive(startHand(karachi, { seed: 'play-turn', progress, dealer: 1 }), (s) => s.phase === 'turn' && s.turn === 2);
+  const notHeld = (s: HandState, seat: Seat) =>
+    (['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9', 'm1', 'm2'] as TileKind[]).find((k) => !s.players[seat].concealed.includes(k))!;
+
+  it('plays the bot’s own move when the engine takes it, and says nothing', () => {
+    const { refusals, refused } = collect();
+    const tile = turn.players[2].concealed.at(-1)!;
+    const after = playFor(turn, [2], karachi, () => ({ type: 'discard', seat: 2, tile }), refused);
+    expect(after.players[2].discards.at(-1) ?? after.lastDiscard?.kind).toBe(tile);
+    expect(refusals).toEqual([]);
+  });
+
+  it('replaces a refused move with the first legal discard, and reports it', () => {
+    const { refusals, refused } = collect();
+    const bad: Action = { type: 'discard', seat: 2, tile: notHeld(turn, 2) };
+    // The old step kept the state whenever the engine refused: the table sat there for good.
+    expect(tryReduce(turn, bad, karachi)).toBeNull();
+    const after = playFor(turn, [2], karachi, () => bad, refused);
+    expect(after).not.toBe(turn);
+    expect(after.events.some((e) => e.seq > turn.seq && e.type === 'discarded' && e.seat === 2 && e.tile === viewFor(turn, karachi, 2).legal.discard![0])).toBe(true);
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]).toMatchObject({ seat: 2, tried: bad, instead: { type: 'discard', seat: 2 }, why: expect.stringMatching(/not in hand/) });
+  });
+
+  it('stands in when a bot chooses nothing though the table is waiting on it', () => {
+    const { refusals, refused } = collect();
+    const after = playFor(turn, [2], karachi, () => null, refused);
+    expect(after).not.toBe(turn);
+    expect(refusals).toMatchObject([{ seat: 2, tried: null, why: 'nothing was chosen' }]);
+  });
+
+  it('plays a whole hand through with bots that only ever choose nonsense', () => {
+    const { refusals, refused } = collect();
+    let s = startHand(karachi, { seed: 'play-nonsense', progress, dealer: 1 });
+    const nonsense = (v: PrivatePlayerView): Action => ({ type: 'discard', seat: v.me, tile: notHeld(s, v.me) });
+    for (let i = 0; i < 2000 && s.phase !== 'finished'; i++) {
+      const legal = legalActions(s, karachi, ME);
+      if (tableFlow(s, legal, ME) === 'bots') s = playFor(s, BOTS, karachi, nonsense, refused);
+      else if (legal.exchange) s = reduce(s, { type: 'exchange', seat: ME, tiles: s.players[ME].concealed.slice(0, legal.exchange.count) }, karachi);
+      else if (legal.pass) s = reduce(s, { type: 'pass', seat: ME }, karachi);
+      else if (legal.discard) s = reduce(s, { type: 'discard', seat: ME, tile: s.players[ME].concealed[0]! }, karachi);
+    }
+    expect(s.phase).toBe('finished');
+    expect(refusals.length).toBeGreaterThan(0);
+  });
+
+  it('leaves the table alone when no seat is due to move', () => {
+    const { refusals, refused } = collect();
+    const mine = drive(startHand(karachi, { seed: 'play-mine', progress, dealer: 1 }), (s) => s.phase === 'turn' && s.turn === ME);
+    expect(playFor(mine, BOTS, karachi, () => null, refused)).toBe(mine);
+    expect(refusals).toEqual([]);
+  });
+
+  it('throws rather than sit there when even the stand-in move is refused', () => {
+    const { refusals, refused } = collect();
+    const west = startHand(karachi, { seed: 'play-west', progress: { roundWind: 'W', roundIndex: 2, handInRound: 0, handIndex: 8 }, dealer: 1 });
+    // A seat with no tiles to pass: nothing it could send would be taken.
+    const broken: HandState = { ...west, players: west.players.map((p, i) => (i === 2 ? { ...p, concealed: [] } : p)) as unknown as HandState['players'] };
+    expect(() => playFor(broken, [2], karachi, () => null, refused)).toThrow(/stalled/);
+    expect(refusals).toHaveLength(1);
+  });
+});
+
+describe('refusalMessage', () => {
+  it('says which seat, what it tried, why it was refused and what it played', () => {
+    const r: Refusal = { seat: 2, tried: { type: 'discard', seat: 2, tile: 's9' }, instead: { type: 'discard', seat: 2, tile: 'm1' }, why: 'tile not in hand' };
+    expect(refusalMessage(r)).toBe("solo table: seat 2's discard s9 was refused (tile not in hand), so it played discard m1 instead");
+    expect(refusalMessage({ seat: 3, tried: null, instead: { type: 'pass', seat: 3 }, why: 'nothing was chosen' })).toBe(
+      'solo table: seat 3 chose no move though one was due, so it played pass instead',
+    );
   });
 });

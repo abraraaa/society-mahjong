@@ -4,7 +4,7 @@ import { ApiError } from './live/client';
 import type { GameSnapshot } from './live/snapshot';
 import { settle, step } from './live/table';
 import type { ClientAction, Seats, TimerPolicy } from './live/types';
-import { POLL_MS, afterConflict, sendMove, shouldPoll, stillLegal } from './table-sync';
+import { POLL_MS, afterConflict, afterFailedLook, sendMove, shouldPoll, singleFlight, stillLegal } from './table-sync';
 
 const ME: Seat = 0;
 const OTHER: Seat = 1;
@@ -229,6 +229,31 @@ describe('sendMove', () => {
     expect(h.versions).toEqual([7]);
   });
 
+  it('lets a next-hand tap go quietly when the game has ended under it, and asks for a look', async () => {
+    // Someone else's Next hand on the last hand ended the game first: the refusal carries no table.
+    const finished: HandState = { ...startHand(karachi, { seed: 'sync-next', progress: east, dealer: 0 }), phase: 'finished', result: { type: 'draw' } };
+    const over = new ApiError(409, 'game is over');
+    const h = harness([over], snapOf(finished, 9));
+    expect(await sendMove({ type: 'nextHand' }, snapOf(finished, 9), h.act, h.take, h.latest)).toEqual({ kind: 'quiet', look: true });
+    expect(h.versions).toEqual([9]);
+  });
+
+  it('goes quietly too when the game ends between a next-hand tap and its retry', async () => {
+    const finished: HandState = { ...startHand(karachi, { seed: 'sync-next', progress: east, dealer: 0 }), phase: 'finished', result: { type: 'draw' } };
+    // The game row still read active the first time, so the 409 carried the same finished hand; by the retry it had ended.
+    const h = harness([stale(snapOf(finished, 10)), new ApiError(409, 'game is over')], snapOf(finished, 9));
+    expect(await sendMove({ type: 'nextHand' }, snapOf(finished, 9), h.act, h.take, h.latest)).toEqual({ kind: 'quiet', look: true });
+    expect(h.versions).toEqual([9, 10]);
+  });
+
+  it('still reports a game that ended under any other move', async () => {
+    const s = untilMyTurn(settle(startHand(karachi, { seed: 'sync-turn', progress: east, dealer: 0 }), karachi, seats));
+    const discard: ClientAction = { type: 'discard', seat: ME, tile: s.players[ME].concealed[0]! };
+    const over = new ApiError(409, 'game is over');
+    const h = harness([over], snapOf(s, 4));
+    expect(await sendMove(discard, snapOf(s, 4), h.act, h.take, h.latest)).toEqual({ kind: 'failed', err: over });
+  });
+
   it('hands back anything but a 409 with a table at once: a timeout, a network failure, a refusal', async () => {
     const s = untilMyTurn(settle(startHand(karachi, { seed: 'sync-turn', progress: east, dealer: 0 }), karachi, seats));
     const discard: ClientAction = { type: 'discard', seat: ME, tile: s.players[ME].concealed[0]! };
@@ -297,8 +322,10 @@ describe('shouldPoll', () => {
     expect(shouldPoll({ status: 'active', visible: true, sending: false })).toBe(true);
   });
 
-  it('holds off while a move is in flight, the page is hidden, or there is no game in play', () => {
+  it('holds off while a move or a look is on its way, the page is hidden, or there is no game in play', () => {
     expect(shouldPoll({ status: 'active', visible: true, sending: true })).toBe(false);
+    expect(shouldPoll({ status: 'active', visible: true, sending: false, looking: true })).toBe(false);
+    expect(shouldPoll({ status: 'active', visible: true, sending: false, looking: false })).toBe(true);
     expect(shouldPoll({ status: 'active', visible: false, sending: false })).toBe(false);
     expect(shouldPoll({ status: 'finished', visible: true, sending: false })).toBe(false);
     expect(shouldPoll({ status: 'abandoned', visible: true, sending: false })).toBe(false);
@@ -308,5 +335,123 @@ describe('shouldPoll', () => {
   it('is slow: longer than a request is allowed to take, so looks never pile up', async () => {
     const { REQUEST_TIMEOUT_MS } = await import('./live/client');
     expect(POLL_MS).toBeGreaterThan(REQUEST_TIMEOUT_MS);
+  });
+});
+
+describe('singleFlight', () => {
+  /** Looks that answer only when told to, recording how each was asked for and whether another was waiting behind it when it ended. */
+  function looker(fail = false) {
+    const calls: Array<{ quiet: boolean; another: boolean | null }> = [];
+    const pending: Array<() => void> = [];
+    const q = singleFlight(async (quiet, another) => {
+      const call = { quiet, another: null as boolean | null };
+      calls.push(call);
+      await new Promise<void>((resolve) => pending.push(resolve));
+      call.another = another();
+      if (fail) throw new Error('no answer');
+    });
+    /** Answer the look on its way, and let the queue move on. */
+    const answer = async () => {
+      pending.shift()?.();
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    };
+    return { q, calls, answer, open: () => pending.length };
+  }
+
+  it('makes one look at a time, however many asks come in while one is on its way', async () => {
+    const { q, calls, answer, open } = looker();
+    void q.ask();
+    for (let i = 0; i < 10; i++) void q.ask(); // ten pokes during a slow look
+    expect(calls).toHaveLength(1);
+    expect(open()).toBe(1);
+    await answer();
+    // Exactly one more, after the first has answered.
+    expect(calls).toHaveLength(2);
+    await answer();
+    expect(calls).toHaveLength(2);
+    expect(q.looking()).toBe(false);
+  });
+
+  it('never swallows an ask that comes in while a look is on its way (a rejoin after a dropped connection)', async () => {
+    const { q, calls, answer } = looker();
+    void q.ask(true); // the poll's look, already out
+    const rejoin = q.ask(); // SUBSCRIBED again, while it's on its way
+    let answered = false;
+    void rejoin.then(() => (answered = true));
+    await answer();
+    // The look that was already out can't answer the rejoin; a new one goes after it.
+    expect(answered).toBe(false);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.quiet).toBe(false);
+    await answer();
+    expect(answered).toBe(true);
+  });
+
+  it('starts at once when nothing is on its way', async () => {
+    const { q, calls, answer } = looker();
+    const first = q.ask();
+    expect(q.looking()).toBe(true);
+    await answer();
+    await first;
+    expect(q.looking()).toBe(false);
+    void q.ask();
+    expect(calls).toHaveLength(2);
+  });
+
+  it('keeps the look after quiet only if every ask it answers was quiet', async () => {
+    const { q, calls, answer } = looker();
+    void q.ask();
+    void q.ask(true);
+    void q.ask(true);
+    await answer();
+    expect(calls[1]!.quiet).toBe(true);
+    void q.ask(true);
+    void q.ask(false);
+    await answer();
+    expect(calls[2]!.quiet).toBe(false);
+  });
+
+  it('tells a look whether another is waiting behind it, so only the last failure is heard', async () => {
+    const { q, calls, answer } = looker(true);
+    void q.ask();
+    void q.ask();
+    await answer();
+    await answer();
+    expect(calls.map((c) => c.another)).toEqual([true, false]);
+  });
+
+  it('carries on after a look that throws', async () => {
+    const { q, calls, answer } = looker(true);
+    const first = q.ask();
+    await answer();
+    await expect(first).resolves.toBeUndefined();
+    void q.ask();
+    expect(calls).toHaveLength(2);
+  });
+});
+
+describe('afterFailedLook', () => {
+  const s = untilMyTurn(settle(startHand(karachi, { seed: 'sync-turn', progress: east, dealer: 0 }), karachi, seats));
+  const held = snapOf(s, 4);
+  const newer = snapOf(s, 5);
+
+  it('says nothing over a table that a newer answer has already brought up to date', () => {
+    // The first look hung; the one on SUBSCRIBED, a move's answer or a tick landed meanwhile.
+    expect(afterFailedLook({ before: null, latest: newer, another: false, quiet: false })).toBe('ignore');
+    expect(afterFailedLook({ before: held, latest: newer, another: false, quiet: false })).toBe('ignore');
+  });
+
+  it('says nothing when another look is about to go and will answer for it', () => {
+    expect(afterFailedLook({ before: held, latest: held, another: true, quiet: false })).toBe('ignore');
+    expect(afterFailedLook({ before: null, latest: null, another: true, quiet: false })).toBe('ignore');
+  });
+
+  it('leaves it to the Trouble screen before there is a table, and to silence for the poll', () => {
+    expect(afterFailedLook({ before: null, latest: null, another: false, quiet: false })).toBe('record');
+    expect(afterFailedLook({ before: held, latest: held, another: false, quiet: true })).toBe('record');
+  });
+
+  it('says so over the table when nothing newer has answered', () => {
+    expect(afterFailedLook({ before: held, latest: held, another: false, quiet: false })).toBe('tell');
   });
 });
