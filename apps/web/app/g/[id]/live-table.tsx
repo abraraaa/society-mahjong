@@ -18,6 +18,7 @@ import { NeedsCaptcha, ensureSession } from '@/lib/supabase/session';
 import { useGuestName } from '@/lib/supabase/use-guest-name';
 import { scoresFrom } from '@/lib/ledger';
 import { canDiscard } from '@/lib/table-flow';
+import { POLL_MS, sendMove, shouldPoll } from '@/lib/table-sync';
 
 interface Progress {
   readonly handsFinished: number;
@@ -28,7 +29,9 @@ interface Progress {
 /**
  * A seat at a live table. The server is the table; this component holds the
  * latest snapshot it was given, sends actions with the version it saw, and
- * refetches whenever the game channel says the version moved.
+ * refetches whenever the game channel says the version moved, whenever the
+ * channel (re)joins, when the phone comes back to the page, and on a slow poll
+ * in case Realtime has gone quiet without saying so.
  */
 export function LiveTable({ gameId }: { gameId: string }) {
   const router = useRouter();
@@ -46,7 +49,11 @@ export function LiveTable({ gameId }: { gameId: string }) {
   const [tutorOn, setTutorOn] = useState(true);
   const [progress, setProgress] = useState<Progress>({ handsFinished: 0, wins: 0, discardsMade: 0 });
   const supabaseRef = useRef<SupabaseClient | null>(null);
-  const versionRef = useRef(0);
+  // The newest snapshot taken, ahead of the render that shows it.
+  const latestRef = useRef<GameSnapshot | null>(null);
+  // A move on its way to the table. The ref turns a second tap away at once; the state disables the buttons.
+  const sendingRef = useRef(false);
+  const [sending, setSending] = useState(false);
 
   // How long the claim window had left when this snapshot was made, measured on
   // the server's clock so the phone's clock never enters into it.
@@ -58,8 +65,8 @@ export function LiveTable({ gameId }: { gameId: string }) {
   const [now, setNow] = useState<number | null>(null);
 
   const take = useCallback((s: GameSnapshot) => {
-    if (s.version < versionRef.current) return; // an older reply arriving late
-    versionRef.current = s.version;
+    if (latestRef.current && s.version < latestRef.current.version) return; // an older reply arriving late
+    latestRef.current = s;
     setClaimMs(s.deadlines.claim === null ? null : s.deadlines.claim - s.now);
     const at = Date.now();
     setSync({ serverNow: s.now, at });
@@ -75,47 +82,83 @@ export function LiveTable({ gameId }: { gameId: string }) {
     return () => clearInterval(id);
   }, [running]);
 
-  const refetch = useCallback(async () => {
-    try {
-      take(await api.view(gameId));
-    } catch (err) {
-      const msg = plainError(err);
-      setError(msg);
-      setDeadEnd(!retryCanHelp(err));
-      setNotice(msg);
-    }
-  }, [gameId, take]);
+  // `quiet` is for the poll: a look that fails every twelve seconds while the
+  // phone is offline would otherwise say so every twelve seconds.
+  const refetch = useCallback(
+    async (quiet = false) => {
+      try {
+        take(await api.view(gameId));
+      } catch (err) {
+        const msg = plainError(err);
+        setError(msg);
+        setDeadEnd(!retryCanHelp(err));
+        if (!quiet) setNotice(msg);
+      }
+    },
+    [gameId, take],
+  );
 
-  // Session, first view, subscription.
+  // Session, subscription, first view.
   useEffect(() => {
     if (!name) return;
     let stop: (() => void) | null = null;
     let cancelled = false;
+    // Looking again before there is a session would only be turned away.
+    let ready = false;
+    const lookAgain = () => {
+      if (ready && !cancelled) void refetch();
+    };
     (async () => {
       try {
         const { supabase } = await ensureSession(name, captcha);
         if (cancelled) return;
         supabaseRef.current = supabase;
-        await refetch();
-        stop = listen(supabase, `game:${gameId}`, {
-          state: (p) => {
-            if (typeof p['version'] !== 'number' || p['version'] > versionRef.current) void refetch();
+        // Subscribe first, then fetch, so no poke can fall in between. A poke
+        // sent while the channel was down is gone for good, so every SUBSCRIBED
+        // (the first join, and each rejoin after a dropped connection) looks again.
+        stop = listen(
+          supabase,
+          `game:${gameId}`,
+          {
+            state: (p) => {
+              if (typeof p['version'] !== 'number' || p['version'] > (latestRef.current?.version ?? 0)) void refetch();
+            },
           },
-        });
+          (status) => status === 'SUBSCRIBED' && lookAgain(),
+        );
+        ready = true;
+        await refetch();
       } catch (err) {
         if (cancelled) return;
         if (err instanceof NeedsCaptcha) askAgain();
         else setError(plainError(err));
       }
     })();
-    const onVisible = () => document.visibilityState === 'visible' && void refetch();
+    // Back on the page: a phone that slept, switched apps or changed networks may have missed pokes.
+    const onVisible = () => document.visibilityState === 'visible' && lookAgain();
+    const onShow = (e: PageTransitionEvent) => e.persisted && lookAgain();
     document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', lookAgain);
+    window.addEventListener('pageshow', onShow);
     return () => {
       cancelled = true;
       stop?.();
       document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', lookAgain);
+      window.removeEventListener('pageshow', onShow);
     };
   }, [name, captcha, gameId, refetch, attempt, askAgain]);
+
+  // The slow poll: every twelve seconds while the game is in play and on
+  // screen, and never over the top of a move of ours.
+  const inPlay = snap?.status === 'active';
+  useEffect(() => {
+    if (!inPlay) return;
+    const id = setInterval(() => {
+      if (shouldPoll({ status: latestRef.current?.status ?? null, visible: document.visibilityState === 'visible', sending: sendingRef.current })) void refetch(true);
+    }, POLL_MS);
+    return () => clearInterval(id);
+  }, [inPlay, refetch]);
 
   // The room's own channel: when the host deals again after this game, everyone
   // still on the old table follows to the new one.
@@ -170,32 +213,43 @@ export function LiveTable({ gameId }: { gameId: string }) {
     [view, ruleset, analysis, stage, names],
   );
 
-  // A 409 means the table changed under us. If nothing has actually happened
-  // at the table since (same event sequence: a timer sweep, say, that found
-  // nothing to do), the action is as good as it was and goes again against
-  // the new version. If the table has moved on, the tap is void and the
-  // player is told so, because a tap that silently does nothing is worse
-  // than one that fails.
-  const send = async (action: ClientAction, retried = false): Promise<void> => {
-    if (!snap) return;
+  // One move at a time: a second tap while one is on its way is ignored.
+  // A 409 means the table changed under us. The newer table it carries is
+  // taken at once, and if nothing has actually happened at the table since
+  // (another player's exchange or pass, say) and the move is still open, it
+  // goes once more against that table (sendMove and afterConflict). Otherwise
+  // the tap is void and the player is told so, because a tap that silently
+  // does nothing is worse than one that fails. A request that gets no answer
+  // in time is given up on, and the table looked at again.
+  const send = async (action: ClientAction): Promise<void> => {
+    if (!snap || sendingRef.current) return;
     // Never send a discard of a tile this seat doesn't hold, or out of turn:
     // the server would only refuse it, in its own words.
     if (action.type === 'discard' && (!view || !canDiscard(view, action.tile))) {
       setNotice(discardRefusal(view, action.tile));
       return;
     }
-    if (action.type === 'discard' && !retried) setProgress((p) => ({ ...p, discardsMade: p.discardsMade + 1 }));
+    sendingRef.current = true;
+    setSending(true);
+    if (action.type === 'discard') setProgress((p) => ({ ...p, discardsMade: p.discardsMade + 1 }));
     try {
-      take(await api.act(gameId, action, snap.version));
-    } catch (err) {
-      if (err instanceof ApiError && err.snapshot) {
-        const moved = err.snapshot.view.seq !== snap.view.seq;
-        take(err.snapshot);
-        if (!moved && !retried) return send(action, true);
-      } else if (err instanceof ApiError && (err.status === 400 || err.status === 403)) {
-        void refetch();
-      }
+      const out = await sendMove(
+        action,
+        snap,
+        (version) => api.act(gameId, action, version),
+        take,
+        () => latestRef.current,
+      );
+      if (out.kind !== 'failed') return;
+      const err = out.err;
       setNotice(plainError(err));
+      // No answer at all: the move may or may not have landed, so look (quietly: the notice has said enough).
+      if (!(err instanceof ApiError) || err.status === 0) void refetch(true);
+      // Refused without the table attached: look, so the next tap is made on the table as it is.
+      else if (!err.snapshot && (err.status === 400 || err.status === 403 || err.status === 409)) void refetch();
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
     }
   };
 
@@ -286,11 +340,13 @@ export function LiveTable({ gameId }: { gameId: string }) {
         tutorOn={tutorOn}
         onToggleTutor={() => setTutorOn((v) => !v)}
         onAct={(a) => void send(a)}
+        busy={sending}
         onNextHand={() => {
           if (gameOver) {
             router.replace(`/r/${snap.roomCode}`);
             return;
           }
+          if (sendingRef.current) return;
           setProgress((p) => ({ ...p, handsFinished: p.handsFinished + 1, wins: p.wins + (view.result?.type === 'win' && view.result.winner === view.me ? 1 : 0) }));
           void send({ type: 'nextHand' });
         }}

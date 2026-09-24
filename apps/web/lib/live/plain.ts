@@ -23,6 +23,7 @@ const LEAVE_FROM_TABLE = "The game's started, so leave from the table instead.";
 const SIGNED_OUT = "We've lost track of who you are. Reload the page to sit back down.";
 const CAPTCHA = "We couldn't run the quick security check. Try again, or switch between Wi-Fi and mobile data.";
 const OFFLINE = "We couldn't reach the table. Check your connection and try again.";
+const SLOW = "The table's taking too long to answer. Give it a moment, then try again if nothing's changed.";
 const FALLBACK = 'Something went wrong. Try again.';
 
 /**
@@ -80,6 +81,8 @@ const BY_MESSAGE = new Map<string, string>(
 
 /** The browsers' words for a request that never got an answer (Chrome, Safari, Firefox, Node). */
 const UNREACHABLE = /failed to fetch|load failed|networkerror|network request failed|fetch failed/i;
+/** A request the page stopped waiting for: lib/live/client.ts's own 'timed out', or a browser's timeout signal ('signal timed out', 'The operation timed out.'). */
+const TIMED_OUT = /timed out/i;
 
 /**
  * Player copy for anything a page caught: an API error (its HTTP status and
@@ -98,6 +101,7 @@ export function plainError(err: unknown): string {
   // The script didn't load, its call home failed, or the sign-in turned the token down.
   if (message.includes('captcha') || message === 'network-error') return CAPTCHA;
   if (status === 0 && UNREACHABLE.test(message)) return OFFLINE;
+  if (status === 0 && TIMED_OUT.test(message)) return SLOW;
   if (status === 410) return CLOSED;
   if (status === 401) return SIGNED_OUT;
   return FALLBACK;

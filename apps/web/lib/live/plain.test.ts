@@ -137,6 +137,17 @@ describe('plainError: the rest of what the server can say', () => {
     expect(plainError({ status: 0, message: 'Failed to fetch' })).toBe(line);
   });
 
+  it('a request the page stopped waiting for says the table is slow, and to try again if nothing changed', () => {
+    const line = "The table's taking too long to answer. Give it a moment, then try again if nothing's changed.";
+    // lib/live/client.ts's own timeout.
+    expect(plainError(new ApiError(0, 'timed out'))).toBe(line);
+    // A browser's timeout signal: Chrome's and Safari's words.
+    expect(plainError(new DOMException('signal timed out', 'TimeoutError'))).toBe(line);
+    expect(plainError(new DOMException('The operation timed out.', 'TimeoutError'))).toBe(line);
+    // A server that answered, whatever it said, is not a timeout here.
+    expect(api(504, 'timed out')).toBe(FALLBACK);
+  });
+
   it('reads the message loosely: case and stray space', () => {
     expect(api(409, '  Stale Version ')).toBe("That didn't go through. The table had moved on, so try again.");
   });
