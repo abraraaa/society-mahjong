@@ -15,6 +15,7 @@ import {
   type TileKind,
 } from '@society/engine';
 import {
+  LIFT_SETTLE_MS,
   SETTLE_MS,
   alwaysLegalMove,
   discardOffer,
@@ -266,6 +267,13 @@ describe('the grace period after a hand boundary', () => {
     expect(settling(dealtAt, dealtAt + SETTLE_MS)).toBe(false);
     expect(settling(dealtAt, dealtAt + 2000)).toBe(false);
     expect(SETTLE_MS).toBeLessThanOrEqual(500);
+  });
+
+  it('lets a tile be lifted sooner than a move is taken, but not on the second tap of a double tap', () => {
+    const dealtAt = 10_000;
+    expect(settling(dealtAt, dealtAt + 120, LIFT_SETTLE_MS)).toBe(true);
+    expect(settling(dealtAt, dealtAt + LIFT_SETTLE_MS, LIFT_SETTLE_MS)).toBe(false);
+    expect(LIFT_SETTLE_MS).toBeLessThan(SETTLE_MS);
   });
 });
 

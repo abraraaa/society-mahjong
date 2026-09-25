@@ -1,5 +1,5 @@
 'use client';
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { acrossFrom, leftOf, rightOf, tileName, type Action, type PrivatePlayerView, type Seat, type TileKind } from '@society/engine';
 import { Tile } from '@/components/tile';
 import { SeatPill } from '@/components/seat-pill';
@@ -8,7 +8,7 @@ import { Coach, CoachLine, TermProvider, useOpenTerm } from '@/components/coach'
 import { River } from '@/components/river';
 import { riverOrder } from '@/lib/river';
 import { NO_SCORES, handDeltas, signed, standings, type Scores } from '@/lib/ledger';
-import { discardOffer, handBoundary, heldSelection, selectTile, settling, type Selection } from '@/lib/table-flow';
+import { LIFT_SETTLE_MS, discardOffer, handBoundary, heldSelection, selectTile, settling, type Selection } from '@/lib/table-flow';
 import type { CoachState } from '@/lib/coach';
 
 /** A player's name inside a sentence, isolated so a right-to-left name can't reorder the words and clock around it. */
@@ -22,6 +22,16 @@ type HandStyle = React.CSSProperties & { '--hand-n'?: number };
 
 /** Every kind is in the wall four times, which is what makes "already dead" answerable. */
 const COPIES = 4;
+
+/** A tile picked up from the hand: its kind, and which copy of it was tapped, so a pair or a pung lifts one tile, not all of them. */
+type HandPick = Selection & { readonly copy: number };
+
+/** The tile a pick lifts in this view, or null once the pick has gone stale. A claim can take copies away; the pick then stays with the last one left. */
+function liftOf(pick: HandPick | null, view: PrivatePlayerView): { readonly kind: TileKind; readonly copy: number } | null {
+  const kind = heldSelection(pick, view);
+  if (!pick || kind === null) return null;
+  return { kind, copy: Math.min(pick.copy, view.concealed.filter((k) => k === kind).length - 1) };
+}
 
 export interface TableProps {
   /** this seat's view of the table, from the engine directly (solo) or the server (live) */
@@ -100,12 +110,13 @@ function TableInner({
   const sub = subtitle ? `${subtitle} · ${counter}` : counter;
   const me = view.players[ME];
   const legal = view.legal;
-  const [pick, setPick] = useState<Selection | null>(null);
+  const [pick, setPick] = useState<HandPick | null>(null);
   // The pick is only ever read through heldSelection, which drops it once the
   // hand changes, the player's discard turn has come and gone, or the tile has
   // left the hand. A tile lifted during the bots' moves can't linger into the
   // next hand and put a tile the player doesn't hold on the Discard button.
-  const selected = heldSelection(pick, view);
+  const lift = liftOf(pick, view);
+  const selected = lift?.kind ?? null;
 
   // When the hand last started or finished. A tap that comes hard on its heels
   // (the second tap of a double tap on Next hand, landing on the new hand's
@@ -116,7 +127,9 @@ function TableInner({
   useLayoutEffect(() => {
     boundaryAt.current = performance.now();
   }, [boundary]);
-  const tooSoon = () => settling(boundaryAt.current, performance.now());
+  const tooSoon = useCallback(() => settling(boundaryAt.current, performance.now()), []);
+  // A tap that only lifts a tile is let go sooner: it can be put straight back.
+  const tooSoonToLift = useCallback(() => settling(boundaryAt.current, performance.now(), LIFT_SETTLE_MS), []);
 
   const act = (a: SeatAction) => {
     if (busy || tooSoon()) return;
@@ -129,7 +142,7 @@ function TableInner({
   const suggested = advice && advice.action.kind === 'discard' ? advice.action.tile : null;
   // The player's own pick wins over the tutor's, but only a tile they hold is ever offered.
   const offer = discardOffer(view, selected, suggested);
-  const hasActions = !!legal.win || !!legal.kong?.length || offer !== null;
+  const hasActions = !!legal.win || !!legal.kong?.length || offer !== null || myTurn;
   // stable sort means duplicates of a newly-drawn kind land last, so this always resolves the tile just drawn
   const drawnIndex = view.drawn ? view.concealed.lastIndexOf(view.drawn) : -1;
 
@@ -166,7 +179,8 @@ function TableInner({
   const riverHeader = (
     <div className="mb-2 flex items-baseline justify-between gap-2">
       <p className="label">River</p>
-      <p className="label whitespace-nowrap">{selected ? `${selectedOut} of ${COPIES} out` : `${riverTiles.length} discarded`}</p>
+      {/* One width for both wordings, so a pick changes the words and not the box. */}
+      <p className="label min-w-28 text-right whitespace-nowrap tabular-nums">{selected ? `${selectedOut} of ${COPIES} out` : `${riverTiles.length} discarded`}</p>
     </div>
   );
   const river = <River tiles={riverTiles} claimable={view.phase === 'claim'} highlight={selected} />;
@@ -185,33 +199,65 @@ function TableInner({
           Kong {tileName(k)}
         </button>
       ))}
-      {offer && (
+      {offer ? (
         <button className="btn btn-primary" disabled={busy} onClick={() => act({ type: 'discard', seat: ME, tile: offer })}>
           Discard {tileName(offer)}
         </button>
+      ) : (
+        // Nothing to offer yet (the tutor is off, or its tip isn't a discard):
+        // the button waits, disabled, where it will be, so a pick doesn't
+        // squeeze the felt and move the river.
+        myTurn && (
+          <button className="btn btn-primary" disabled>
+            Discard
+          </button>
+        )
       )}
     </>
   );
 
-  const handTiles = (size: 'md' | 'lg') =>
-    view.concealed.map((k, i) => {
+  // One handler per place in the hand, remade only when the hand changes, so
+  // a pick re-renders just the tiles it lifts and drops.
+  const liftAt = useCallback(
+    (i: number) => {
+      const kind = view.concealed[i];
+      if (kind === undefined || tooSoonToLift()) return;
+      const copy = view.concealed.slice(0, i).filter((k) => k === kind).length;
+      setPick((p) => {
+        const now = liftOf(p, view);
+        return now?.kind === kind && now.copy === copy ? null : { ...selectTile(kind, view), copy };
+      });
+    },
+    [view, tooSoonToLift],
+  );
+  const tileTaps = useMemo(() => view.concealed.map((_, i) => () => liftAt(i)), [view.concealed, liftAt]);
+
+  const handTiles = (size: 'md' | 'lg') => {
+    const copies = new Map<TileKind, number>();
+    return view.concealed.map((k, i) => {
+      const copy = copies.get(k) ?? 0;
+      copies.set(k, copy + 1);
       const isDrawn = i === drawnIndex && myTurn;
       return (
         <Tile
-          key={`${k}-${i}`}
+          // By kind and copy, not place: a draw sorted into the middle of the
+          // hand mounts one tile instead of replacing every tile after it.
+          key={`${k}#${copy}`}
           kind={k}
           size={size}
           // Always selectable: a tap while the bots are still moving lifts the
           // tile and reads the river for it; the discard button waits for the turn.
           selectable
-          selected={selected === k}
+          selected={lift?.kind === k && lift.copy === copy}
           fresh={isDrawn}
-          coached={!!advice && advice.highlight.includes(k) && selected !== k}
+          // Kept on while the tile is lifted: the stylesheet fades it under the ring.
+          coached={!!advice && advice.highlight.includes(k)}
           className={isDrawn ? 'drawn' : undefined}
-          onClick={() => !tooSoon() && setPick(selected === k ? null : selectTile(k, view))}
+          onClick={tileTaps[i]}
         />
       );
     });
+  };
 
   const myMelds = (
     <div className="meld-row">
@@ -357,7 +403,7 @@ function TableInner({
           count={legal.exchange.count}
           coach={coach}
           busy={busy}
-          tooSoon={tooSoon}
+          tooSoon={tooSoonToLift}
           onDone={(tiles) => act({ type: 'exchange', seat: ME, tiles })}
         />
       )}
@@ -399,6 +445,15 @@ function ExchangeSheet({
   // The coach has already worked out which tiles no candidate hand is using; the
   // player can overrule it, but the sheet opens on its answer rather than empty.
   const suggested = coach.action.kind === 'exchange' ? coach.action.tiles : [];
+  // A pick past the count lets go of the oldest rather than doing nothing.
+  const taps = useMemo(
+    () =>
+      hand.map((_, i) => () => {
+        if (tooSoon()) return;
+        setPicked((p) => (p.includes(i) ? p.filter((x) => x !== i) : [...p, i].slice(-count)));
+      }),
+    [hand, count, tooSoon],
+  );
   return (
     <>
       <div className="scrim" />
@@ -408,7 +463,8 @@ function ExchangeSheet({
         <p className="text-ivory-200/70 mb-3 text-sm">
           Choose {count} tiles to pass. <CoachLine say={coach.say} />
         </p>
-        <div className="flex flex-wrap justify-center gap-1">
+        {/* Room above each row for a lifted tile and its ring (10px + 3px): the caption's margin and a pixel, and the row gap. */}
+        <div className="flex flex-wrap justify-center gap-x-1 gap-y-[13px] pt-px">
           {hand.map((k, i) => (
             <Tile
               key={i}
@@ -416,8 +472,9 @@ function ExchangeSheet({
               size="md"
               selectable
               selected={picked.includes(i)}
-              coached={picked.length === 0 && suggested.includes(k)}
-              onClick={() => !tooSoon() && setPicked((p) => (p.includes(i) ? p.filter((x) => x !== i) : p.length < count ? [...p, i] : p))}
+              // The tips stay lit after the first pick; a picked tile's fades under its ring.
+              coached={suggested.includes(k)}
+              onClick={taps[i]}
             />
           ))}
         </div>

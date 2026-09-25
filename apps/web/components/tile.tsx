@@ -1,4 +1,5 @@
 'use client';
+import { memo } from 'react';
 import { tileName, type TileKind } from '@society/engine';
 
 export type TileSize = '2xs' | 'xs' | 'sm' | 'md' | 'lg' | 'xl';
@@ -11,8 +12,11 @@ type TileStyle = React.CSSProperties & { '--tile-face'?: string };
  * a background layer (see `.tile` in globals.css); a tile with no `kind` (or
  * `back`) renders the felt-and-back-pattern face used for opponents'
  * concealed tiles and the wall.
+ *
+ * Memoised: a river holds up to 60 of these, and a pick in the hand changes
+ * the props of only the few it lifts, drops or fades.
  */
-export function Tile({
+export const Tile = memo(function Tile({
   kind,
   size = 'md',
   selectable,
@@ -63,4 +67,4 @@ export function Tile({
       disabled={!selectable}
     />
   );
-}
+});
