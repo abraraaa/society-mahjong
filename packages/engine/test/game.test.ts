@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SEATS, createTaiwanese, initialProgress, karachi, legalActions, nextHand, publicView, reduce, simpleBot, startHand, viewFor, type HandState, type Ruleset } from '../src/index';
+import { ALL_TILE_KINDS, IllegalAction, SEATS, createTaiwanese, initialProgress, karachi, legalActions, nextHand, publicView, reduce, simpleBot, startHand, viewFor, type HandState, type Ruleset } from '../src/index';
 
 function totalTiles(s: HandState): number {
   let n = s.wall.live.length + s.wall.dead.length;
@@ -48,6 +48,26 @@ describe('startHand', () => {
     const s = startHand(karachi, { seed: 'west', progress: { roundWind: 'W', roundIndex: 2, handInRound: 1, handIndex: 9 }, dealer: 1 });
     expect(s.phase).toBe('preplay');
     expect(legalActions(s, karachi, 0)).toEqual({ exchange: { count: 3 } });
+  });
+});
+
+describe('a tile the player does not hold', () => {
+  // A crafted request, or a page still showing the last hand, must meet a rule the table can
+  // explain (IllegalAction, a 400), not a crash inside the reducer (a 500).
+  it('refuses a discard of a tile not in hand as an illegal move', () => {
+    const s = startHand(karachi, { seed: 'deal', progress: initialProgress, dealer: 0 });
+    const missing = ALL_TILE_KINDS.find((k) => !s.players[0].concealed.includes(k))!;
+    expect(() => reduce(s, { type: 'discard', seat: 0, tile: missing }, karachi)).toThrow(IllegalAction);
+    expect(() => reduce(s, { type: 'discard', seat: 0, tile: missing }, karachi)).toThrow('tile not in hand');
+  });
+  it('refuses an exchange of tiles not in hand, counting repeats', () => {
+    const s = startHand(karachi, { seed: 'west', progress: { roundWind: 'W', roundIndex: 2, handInRound: 1, handIndex: 9 }, dealer: 1 });
+    const hand = s.players[0].concealed;
+    const missing = ALL_TILE_KINDS.find((k) => !hand.includes(k))!;
+    expect(() => reduce(s, { type: 'exchange', seat: 0, tiles: [hand[0]!, hand[1]!, missing] }, karachi)).toThrow(IllegalAction);
+    const single = hand.find((k) => hand.filter((x) => x === k).length === 1)!;
+    expect(() => reduce(s, { type: 'exchange', seat: 0, tiles: [single, single, single] }, karachi)).toThrow('tile not in hand');
+    expect(() => reduce(s, { type: 'exchange', seat: 0, tiles: [hand[0]!, hand[1]!, hand[2]!] }, karachi)).not.toThrow();
   });
 });
 

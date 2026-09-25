@@ -31,5 +31,6 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/r/:path*', '/g/:path*', '/room', '/api/:path*'],
+  // Crash reports and the health check carry no session worth refreshing; skip the auth round trip.
+  matcher: ['/r/:path*', '/g/:path*', '/room', '/api/((?!client-errors|health).*)'],
 };

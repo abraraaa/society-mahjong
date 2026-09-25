@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { IllegalAction, analysisBot, karachi, legalActions, viewFor, type Seat } from '@society/engine';
-import type { LiveGame } from './types';
-import { NotYourMove, dealFirstHand, resolveExpired, settle, step } from './table';
+import type { ClientAction, LiveGame } from './types';
+import { NotYourMove, actionIsForSeat, dealFirstHand, resolveExpired, settle, step } from './table';
 import { isHuman, seatOf, type Seats } from './types';
 import { policyFor } from './policy';
 
@@ -62,6 +62,16 @@ describe('a table with one human and three bots', () => {
     expect(() => step({ game, ruleset: karachi, seats, policy, now: T0, action: { type: 'declareWin', seat: ME }, actor: ME })).toThrow(IllegalAction);
   });
 
+  it('treats resolveClaims as nobody’s move, whatever seat it names', () => {
+    const forged = { type: 'resolveClaims', seat: ME } as unknown as ClientAction;
+    expect(actionIsForSeat(forged, ME)).toBe(false);
+    expect(actionIsForSeat({ type: 'pass', seat: ME }, ME)).toBe(true);
+    expect(actionIsForSeat({ type: 'nextHand' }, ME)).toBe(true);
+    const game = dealFirstHand(karachi, seats, 'live-3', policy, T0);
+    expect(() => step({ game, ruleset: karachi, seats, policy, now: T0, action: forged, actor: ME })).toThrow(NotYourMove);
+    expect(() => step({ game, ruleset: karachi, seats, policy, now: T0, action: { type: 'dealMeIn', seat: ME } as unknown as ClientAction, actor: ME })).toThrow(NotYourMove);
+  });
+
   it('a sweep with nothing expired changes nothing', () => {
     const game = dealFirstHand(karachi, seats, 'live-4', policy, T0);
     const r = step({ game, ruleset: karachi, seats, policy, now: T0 + 1000 });
@@ -111,6 +121,25 @@ describe('a table with one human and three bots', () => {
     expect(r.gameOver).toBe(false);
     expect(r.state.progress.handIndex).toBe(1);
     expect(r.state.phase).not.toBe('finished');
+  });
+
+  it('refuses "next hand" on a hand that was still live, even when its clock ending would finish it', () => {
+    // Play the hand out, keeping the table as it stood before the human's last decision.
+    let game = dealFirstHand(karachi, seats, 'live-7', policy, T0);
+    let last = game;
+    let now = T0;
+    for (let i = 0; i < 400 && game.state.phase !== 'finished'; i++) {
+      now += 1000;
+      last = game;
+      const a = analysisBot(viewFor(game.state, karachi, ME), karachi)!;
+      game = step({ game, ruleset: karachi, seats, policy, now, action: a as never, actor: ME });
+    }
+    expect(game.state.phase).toBe('finished');
+    const late = (last.deadlines.turn ?? last.deadlines.claim)! + 1;
+    // Left to the clock, the stand-in makes that last decision and the hand ends.
+    expect(step({ game: last, ruleset: karachi, seats, policy, now: late }).state.phase).toBe('finished');
+    // A "next hand" sent then is judged against the table the sender saw, which was not finished.
+    expect(() => step({ game: last, ruleset: karachi, seats, policy, now: late, action: { type: 'nextHand' }, actor: ME, seed: 'live-7' })).toThrow(IllegalAction);
   });
 });
 

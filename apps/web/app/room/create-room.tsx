@@ -3,13 +3,15 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { NameGate } from '@/components/name-gate';
 import { Trouble, Waiting } from '@/components/trouble';
-import { ApiError, api } from '@/lib/live/client';
-import { NeedsCaptcha, ensureSession, rememberName, storedName } from '@/lib/supabase/session';
+import { api } from '@/lib/live/client';
+import { plainError } from '@/lib/live/plain';
+import { NeedsCaptcha, ensureSession } from '@/lib/supabase/session';
+import { useGuestName } from '@/lib/supabase/use-guest-name';
 
 /** Host a table: a name, a room, and straight to the lobby with a code to share. */
 export function CreateRoom() {
   const router = useRouter();
-  const [name, setName] = useState<string | null>(() => (typeof window === 'undefined' ? null : storedName()));
+  const { name, initialName, choose, askAgain } = useGuestName();
   const [captcha, setCaptcha] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -24,24 +26,23 @@ export function CreateRoom() {
         if (!cancelled) router.replace(`/r/${code}`);
       } catch (err) {
         if (cancelled) return;
-        if (err instanceof NeedsCaptcha) setName(null);
-        else setError(err instanceof Error && err.message ? `Could not open a room: ${err.message}` : 'Could not open a room.');
+        if (err instanceof NeedsCaptcha) askAgain();
+        else setError(plainError(err));
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [name, captcha, router, attempt]);
+  }, [name, captcha, router, attempt, askAgain]);
 
   if (!name) {
     return (
       <NameGate
         title="Host a table"
-        initialName={storedName() ?? ''}
+        initialName={initialName}
         onDone={(n, token) => {
-          rememberName(n);
           setCaptcha(token);
-          setName(n);
+          choose(n);
         }}
       />
     );
@@ -52,6 +53,8 @@ export function CreateRoom() {
         message={error}
         onRetry={() => {
           setError(null);
+          // A captcha token is spent once it's been tried; with no session yet, a retry goes back to the gate for a fresh one.
+          setCaptcha(null);
           setAttempt((n) => n + 1);
         }}
       />

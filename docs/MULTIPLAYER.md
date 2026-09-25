@@ -69,8 +69,10 @@ Default avatar is a monogram rendered as a tile in the player's chosen
 colour, so a table of four fresh accounts still looks designed. Uploads go
 through a route handler to Blob with size and type checks; we store the URL.
 
-RLS: a profile is readable by any authenticated user (this is a private app
-among friends), writable only by its owner.
+RLS (migration 0004): each person can read only their own profile and update
+only `display_name`, `avatar_url`, `preferences` and `handle` on it. Nobody can
+insert or delete a profile from the client: the `handle_new_user` trigger
+creates it, and the server does everything else with the service role.
 
 ## 3. Rooms and games
 
@@ -155,8 +157,10 @@ Deadlines live on `live_state`: `claim_deadline` and `turn_deadline`.
   that went to sleep shows the right remaining time on wake, and when its
   countdown reaches zero it POSTs `/api/games/:id/tick`, which resolves the
   deadline without applying any action. Any seated player's tick will do, so
-  a window closes as soon as one phone at the table notices.
-- A Vercel Cron sweep (`/api/cron/sweep`, `CRON_SECRET`) is the backstop for
+  a window closes as soon as one phone at the table notices. The host may tick
+  too; anyone else gets a 403.
+- A Vercel Cron sweep (`/api/cron/sweep`, `CRON_SECRET`; see
+  `docs/ops/README.md` for how to check it runs) is the backstop for
   tables everyone has left. On the Hobby plan crons run at most daily, which
   is why the tick above does the real work; Pro makes the sweep per-minute.
 

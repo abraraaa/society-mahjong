@@ -34,6 +34,7 @@ export function ClaimSheet({
   onPass,
   claimMs = CLAIM_MS,
   clock = 'solo',
+  busy = false,
 }: {
   discardKind: TileKind;
   discarderName: string;
@@ -44,6 +45,8 @@ export function ClaimSheet({
   claimMs?: number;
   /** whose clock: the sheet's own eight seconds, or a server deadline that applies to a win too */
   clock?: 'solo' | 'server';
+  /** an answer is already on its way to the table: every button waits for it */
+  busy?: boolean;
 }) {
   const onPassRef = useRef(onPass);
   useEffect(() => {
@@ -79,7 +82,7 @@ export function ClaimSheet({
           <Tile kind={discardKind} size="lg" />
           <div className="flex flex-col gap-1">
             <h2 className="font-display text-xl">
-              {discarderName} discards {tileName(discardKind)}
+              <bdi>{discarderName}</bdi> discards {tileName(discardKind)}
             </h2>
             <p className="text-ivory-200/70 text-sm">
               <CoachLine say={coach.say} />
@@ -92,7 +95,7 @@ export function ClaimSheet({
           </p>
         )}
         {win && (
-          <button className="btn btn-gold btn-block mb-3" onClick={() => onClaim(win)}>
+          <button className="btn btn-gold btn-block mb-3" disabled={busy} onClick={() => onClaim(win)}>
             Mahjong!
           </button>
         )}
@@ -100,12 +103,12 @@ export function ClaimSheet({
           {grid.map((type) => {
             const opt = byType(type);
             return (
-              <button key={type} className={`btn ${opt && opt === advised ? 'btn-primary' : 'btn-ghost'}`} disabled={!opt} onClick={() => opt && onClaim(opt)}>
+              <button key={type} className={`btn ${opt && opt === advised ? 'btn-primary' : 'btn-ghost'}`} disabled={busy || !opt} onClick={() => opt && onClaim(opt)}>
                 {LABEL[type]}
               </button>
             );
           })}
-          <button className={`btn col-span-2 ${coach.action.kind === 'pass' ? 'btn-ghost' : 'btn-quiet'}`} onClick={onPass}>
+          <button className={`btn col-span-2 ${coach.action.kind === 'pass' ? 'btn-ghost' : 'btn-quiet'}`} disabled={busy} onClick={onPass}>
             Pass
           </button>
         </div>

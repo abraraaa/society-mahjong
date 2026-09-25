@@ -25,10 +25,22 @@ export interface LiveGame {
 }
 
 /**
- * What a client may send: an engine action for its own seat, or a request to
- * deal the next hand. `resolveClaims` is the server's own move and never a client's.
+ * The engine actions a player may send for their own seat. This is an
+ * allowlist on purpose: `resolveClaims` is the server's own move and never a
+ * client's, and any action the engine grows later stays server-only until
+ * it is added here.
  */
-export type ClientAction = Exclude<Action, { type: 'resolveClaims' }> | { readonly type: 'nextHand' };
+export const PLAYER_ACTION_TYPES = ['exchange', 'discard', 'declareKong', 'declareWin', 'claim', 'pass'] as const satisfies readonly Action['type'][];
+
+/** What a client may send: an engine action for its own seat, or a request to deal the next hand. */
+export type ClientAction = Extract<Action, { type: (typeof PLAYER_ACTION_TYPES)[number] }> | { readonly type: 'nextHand' };
+
+export const CLIENT_ACTION_TYPES: readonly ClientAction['type'][] = [...PLAYER_ACTION_TYPES, 'nextHand'];
+
+/** Whether `type` names a move a client may make at all (the shape is checked in validate.ts, legality by the engine). */
+export function isClientActionType(type: unknown): type is ClientAction['type'] {
+  return (CLIENT_ACTION_TYPES as readonly unknown[]).includes(type);
+}
 
 /** Seat index of a user, or null when they are not seated. */
 export function seatOf(seats: Seats, userId: string): Seat | null {

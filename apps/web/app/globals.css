@@ -1023,9 +1023,12 @@ b .term {
   top: calc(var(--safe-top, 0px) + 12px);
   left: 50%;
   z-index: 60;
+  /* Fixed at left: 50%, the box would shrink to half the screen; as wide as the words, up to the cap, keeps a notice to a line or two. */
+  width: max-content;
   max-width: min(92vw, 28rem);
   padding: 10px 16px;
-  border-radius: var(--radius-pill);
+  /* A pill turns a two-line notice into a lozenge. */
+  border-radius: 20px;
   background: var(--color-ivory-50);
   color: var(--color-ink-900);
   font-size: 14px;

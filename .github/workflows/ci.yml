@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
   pull_request:
+# Both jobs only read the repository; the report upload uses the Actions runtime token, not GITHUB_TOKEN.
+permissions:
+  contents: read
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -15,8 +18,38 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
+      - run: pnpm lint
       - run: pnpm test
       - run: pnpm --filter @society/web build
         env:
           NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: example
+
+  # Browser tests against a production build of its own: the fake Supabase's address is baked into the
+  # client bundle, so this job never shares a build with the check job above.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @society/web exec playwright install --with-deps chromium
+      - name: Build against the fake Supabase
+        run: pnpm --filter @society/web build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:3499
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: e2e-anon-key
+      - run: pnpm --filter @society/web test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            apps/web/e2e/playwright-report
+            apps/web/e2e/test-results
+          retention-days: 14

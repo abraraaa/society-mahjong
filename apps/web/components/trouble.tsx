@@ -3,10 +3,22 @@ import Link from 'next/link';
 
 /**
  * The screen for when a table could not be reached: what went wrong, a way to
- * try again, and a way home. Used by the host, lobby and live-table pages while
- * they are still finding their feet; a message alone leaves someone stuck.
+ * try again when another go could help, and always a way home. Used by the
+ * host, lobby and live-table pages while they are still finding their feet; a
+ * message alone leaves someone stuck.
  */
-export function Trouble({ title = 'Hmm.', message, onRetry, retryLabel = 'Try again' }: { title?: string; message: string; onRetry?: () => void; retryLabel?: string }) {
+export function Trouble({
+  title = "That didn't work.",
+  message,
+  onRetry,
+  retryLabel = 'Try again',
+}: {
+  title?: string;
+  message: string;
+  /** Left out when another go can't help, and the way home is the only way on. */
+  onRetry?: (() => void) | undefined;
+  retryLabel?: string;
+}) {
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col items-center justify-center gap-3 px-6">
       <p className="font-display text-2xl">{title}</p>
@@ -18,7 +30,7 @@ export function Trouble({ title = 'Hmm.', message, onRetry, retryLabel = 'Try ag
           </button>
         )}
         <Link href="/" className="link-quiet">
-          Back to the front
+          Back to the start
         </Link>
       </div>
     </main>

@@ -5,11 +5,32 @@ import { withBots } from './rooms';
 import { getRuleset, publicView, viewFor, type Seat } from '@society/engine';
 import type { GameSnapshot } from './snapshot';
 import { broadcast, gamePoke, roomPoke } from './broadcast';
+import { afterCommit, type CommitStep } from './commit';
+import { logError } from './log';
 import { policyFor } from './policy';
 import { SEAT_ATTEMPTS, vacate } from './seating';
-import { abandonGame, appendAction, closeHand, finishGame, gameById, loadLive, openHand, roomById, saveLive, saveSeats, stagesFor, type GameRow, type RoomRow } from './store';
+import {
+  abandonGame,
+  appendAction,
+  countHand,
+  endHand,
+  finishGame,
+  gameById,
+  loadLive,
+  openHand,
+  recordHand,
+  recordResult,
+  roomById,
+  saveLive,
+  saveSeats,
+  settleScores,
+  stagesFor,
+  type GameRow,
+  type RoomRow,
+} from './store';
 import { rejectionStatus, step } from './table';
 import { seatOf, type ClientAction, type Deadlines, type Seats } from './types';
+import { isUuid, parseClientAction } from './validate';
 
 export type { GameSnapshot };
 
@@ -18,6 +39,8 @@ function publicSeats(seats: Seats): GameSnapshot['seats'] {
 }
 
 async function loadGame(gameId: string): Promise<{ game: GameRow; room: RoomRow }> {
+  // A truncated or hand-edited link is a game that isn't there, not a database failure: answer it before any query.
+  if (!isUuid(gameId)) throw new HttpError(404, 'no such game');
   const game = await gameById(gameId);
   if (!game) throw new HttpError(404, 'no such game');
   const room = await roomById(game.room_id);
@@ -67,12 +90,27 @@ export async function viewGame(gameId: string, userId: string, now = Date.now())
  * Apply one request to the table: the caller's action, or none for a sweep.
  * Optimistic versioning: the client says which version it acted on; a
  * mismatch is a 409 carrying the current snapshot so the client can catch up.
+ *
+ * `userId` null is the server itself (the cron sweep, a bot taking a seat).
+ * A person needs a seat to act; to tick (resolve expired clocks and read the
+ * table back) they need a seat or the host's chair, as viewing does, so a
+ * stranger holding a game id can neither move the table nor watch it.
+ *
+ * Saving the live state is the commit point. Before it, a failure goes back
+ * to the caller and nothing has changed. After it, the move counts: the
+ * bookkeeping (hand log, result, scores, the game's end) is attempted and
+ * any failure logged, the others are always poked, and the caller always
+ * gets the new table, never a 500 for a move that landed.
  */
-export async function actOnGame(gameId: string, userId: string | null, action: ClientAction | null, expectedVersion: number | null, now = Date.now()): Promise<GameSnapshot> {
+export async function actOnGame(gameId: string, userId: string | null, clientAction: ClientAction | null, expectedVersion: number | null, now = Date.now()): Promise<GameSnapshot> {
+  // Rebuilt from its checked fields whoever the caller is, so the table and the hand log only ever see a validated move.
+  const action = clientAction === null ? null : parseClientAction(clientAction);
+  if (clientAction !== null && action === null) throw new HttpError(400, 'that is not a move a player can make');
   const { game, room } = await loadGame(gameId);
   const ruleset = getRuleset(room.ruleset_id);
   const me = userId === null ? null : seatOf(room.seats, userId);
   if (action && me === null) throw new HttpError(403, 'not seated at this table');
+  if (userId !== null && me === null && room.host_id !== userId) throw new HttpError(403, 'not at this table');
   if (game.status !== 'active') throw new HttpError(409, 'game is over');
 
   const live = await loadLive(gameId);
@@ -101,15 +139,46 @@ export async function actOnGame(gameId: string, userId: string | null, action: C
   }
   const version = live.version + 1;
 
+  // Committed: from here the move counts. The snapshot carries the scores and status as the database now holds them, as the others will see them.
+  const next = result.state;
+  const handIndex = live.state.progress.handIndex;
+  let ledger = room.ledger;
+  let finished = false;
   // The durable log: player actions per hand, results when a hand ends.
-  if (action && action.type !== 'nextHand') await appendAction(gameId, live.state.progress.handIndex, action);
-  if (action?.type === 'nextHand' && !result.gameOver) await openHand(gameId, result.state);
-  let settledRoom = room;
-  if (!wasFinished && result.state.phase === 'finished') settledRoom = { ...room, ledger: await closeHand(gameId, room, result.state) };
-  if (result.gameOver) await finishGame(gameId, room.id);
+  const steps: CommitStep[] = [];
+  if (action && action.type !== 'nextHand') steps.push({ what: 'log the move', run: () => appendAction(gameId, handIndex, action) });
+  if (action?.type === 'nextHand' && !result.gameOver) steps.push({ what: 'open the hand', run: () => openHand(gameId, next) });
+  if (!wasFinished && next.phase === 'finished') {
+    // Closing the hand is five writes, each its own step, so one that fails costs only itself. The scores go first and the
+    // snapshot takes them the moment they land, so the caller's totals are the room's, whichever later write fails.
+    steps.push(
+      {
+        what: 'settle the scores',
+        run: async () => {
+          ledger = (await settleScores(gameId, room, next)) ?? ledger;
+        },
+      },
+      { what: 'close the hand', run: () => endHand(gameId, next) },
+      { what: 'record the result', run: () => recordResult(gameId, next) },
+      { what: 'count the hand', run: () => countHand(gameId) },
+      { what: 'tally the players', run: () => recordHand(room.seats, next) },
+    );
+  }
+  if (result.gameOver) {
+    // The game's own status is finishGame's last write, so a finish that fails part way leaves the game active, and the next
+    // "next hand" finishes it again.
+    steps.push({
+      what: 'finish the game',
+      run: async () => {
+        await finishGame(gameId, room.id);
+        finished = true;
+      },
+    });
+  }
+  const poke = gamePoke(gameId, version, { phase: next.phase, turn: next.turn, seq: next.seq, gameOver: result.gameOver });
+  await afterCommit(steps, () => broadcast([poke]), { gameId, version });
 
-  await broadcast([gamePoke(gameId, version, { phase: result.state.phase, turn: result.state.turn, seq: result.state.seq, gameOver: result.gameOver })]);
-  const snap = snapshot({ ...game, status: result.gameOver ? 'finished' : game.status }, settledRoom, version, result.deadlines, result.state, me, now, userId);
+  const snap = snapshot({ ...game, status: finished ? 'finished' : game.status }, { ...room, ledger }, version, result.deadlines, next, me, now, userId);
   // Only the caller's own stand-in moves: another seat's exchange carries the tiles it passed, which stay private.
   const mine = me === null ? [] : result.standIns.filter((x) => x.seat === me);
   return mine.length > 0 ? { ...snap, standIns: mine } : snap;
@@ -126,6 +195,9 @@ export async function leaveGame(gameId: string, userId: string, now = Date.now()
     const me = seatOf(room.seats, userId);
     if (me === null) return { abandoned: game.status === 'abandoned' };
     if (game.status !== 'active') return { abandoned: game.status === 'abandoned' };
+    // The host has dealt a newer game since this one, whose end did not fully record. The seats are that game's now, and
+    // not this one's to give up.
+    if (room.current_game_id !== gameId) return { abandoned: false };
     const vacated = vacate(room.seats, me);
     if (!vacated.some((s) => s?.kind === 'human')) {
       const live = await loadLive(gameId);
@@ -137,10 +209,43 @@ export async function leaveGame(gameId: string, userId: string, now = Date.now()
     // Optimistic on the room's updated_at: two people standing up at once means the second reads again and empties only their own seat.
     if (await saveSeats(room.id, seats, room.updated_at)) {
       await broadcast([roomPoke(room.id, 'seats', { seats: publicSeats(seats) })]);
-      // The bot now in the seat may owe the table a move: settle it straight away.
-      await actOnGame(gameId, null, null, null, now);
+      // The bot now in the seat may owe the table a move: settle it straight away. The seat is already given up, so a failure
+      // here is logged, not handed to the leaver; the next tick or the sweep plays the bot's move instead.
+      try {
+        await actOnGame(gameId, null, null, null, now);
+      } catch (err) {
+        // A 409 means someone else moved the table first, and settled the bot as they did.
+        if (!(err instanceof HttpError && err.status < 500)) logError('leave_settle_failed', err, { gameId });
+      }
       return { abandoned: false };
     }
     if (attempt >= SEAT_ATTEMPTS) throw new HttpError(409, 'the table changed under you; try again');
   }
+}
+
+/**
+ * The daily sweep: settle each table whose clock has run out, one at a time,
+ * so one stuck table never stops the rest. Returns what happened to each.
+ *
+ * A refusal (a 4xx) means the table moved on its own between the query and
+ * the settle: a player or a tick saved first, or the game ended. That is
+ * the sweep having nothing left to do, so it is recorded as 'already moved'
+ * and not logged. Anything else is logged as sweep_game_failed.
+ */
+export async function sweepGames(gameIds: readonly string[], now = Date.now()): Promise<Record<string, string>> {
+  const results: Record<string, string> = {};
+  for (const id of gameIds) {
+    try {
+      await actOnGame(id, null, null, null, now);
+      results[id] = 'ok';
+    } catch (err) {
+      if (err instanceof HttpError && err.status < 500) {
+        results[id] = 'already moved';
+      } else {
+        logError('sweep_game_failed', err, { route: '/api/cron/sweep', gameId: id });
+        results[id] = err instanceof Error ? err.message : String(err);
+      }
+    }
+  }
+  return results;
 }

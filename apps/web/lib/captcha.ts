@@ -26,13 +26,21 @@ declare global {
 
 let loading: Promise<HCaptchaApi> | null = null;
 
-/** Load the hCaptcha script once and resolve with its API. */
+/**
+ * Load the hCaptcha script once and resolve with its API. A load that fails
+ * is forgotten, so the next Sit down starts afresh instead of meeting the
+ * same failure until the page is reloaded.
+ */
 export function loadHcaptcha(): Promise<HCaptchaApi> {
   if (typeof window === 'undefined') return Promise.reject(new Error('no window'));
   if (window.hcaptcha) return Promise.resolve(window.hcaptcha);
   if (loading) return loading;
   loading = new Promise<HCaptchaApi>((resolve, reject) => {
-    window.__hcaptchaReady = () => (window.hcaptcha ? resolve(window.hcaptcha) : reject(new Error('hcaptcha did not initialise')));
+    window.__hcaptchaReady = () => {
+      if (window.hcaptcha) return resolve(window.hcaptcha);
+      loading = null;
+      reject(new Error('hcaptcha did not initialise'));
+    };
     const s = document.createElement('script');
     s.src = 'https://js.hcaptcha.com/1/api.js?render=explicit&onload=__hcaptchaReady';
     s.async = true;

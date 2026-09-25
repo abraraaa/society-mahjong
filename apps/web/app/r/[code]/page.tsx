@@ -1,6 +1,11 @@
 import type { Metadata } from 'next';
 import { RoomLobby } from './room-lobby';
+import { NoTable } from '@/components/no-table';
+import { frontDoor } from '@/lib/front-door';
+import { currentUser } from '@/lib/live/auth';
+import { roomByCode } from '@/lib/live/store';
 import { isRoomCode } from '@/lib/room-code';
+import { supabaseServiceKey, supabaseUrl } from '@/lib/supabase/env';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,7 +36,24 @@ export async function generateMetadata({ params }: { params: Promise<{ code: str
   };
 }
 
+/**
+ * The code is checked before the lobby asks for a name or runs the captcha, so
+ * a mistyped or dead link says so at once instead of after the name gate.
+ *
+ * This reveals whether a code exists without a captcha. The join endpoint
+ * already reveals it after one captcha, so little is given away; what stops
+ * someone guessing codes is rate limiting, and that belongs at the edge.
+ */
 export default async function RoomPage({ params }: { params: Promise<{ code: string }> }) {
   const { code } = await params;
-  return <RoomLobby code={code.toUpperCase()} />;
+  const upper = code.toUpperCase();
+  const door = await frontDoor(upper, {
+    configured: !!supabaseUrl() && !!supabaseServiceKey(),
+    // Read-only, with the service role: the visitor may have no session yet. A failed read
+    // throws; frontDoor then opens the lobby and the join has the final say.
+    room: roomByCode,
+    userId: async () => (await currentUser())?.id ?? null,
+  });
+  if (door !== 'lobby') return <NoTable code={upper} reason={door} />;
+  return <RoomLobby code={upper} />;
 }

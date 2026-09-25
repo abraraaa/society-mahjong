@@ -1,7 +1,8 @@
 import 'server-only';
+import { isClosedRoom } from '../front-door';
 import { SEAT_ATTEMPTS, seatJoiner, vacate } from './seating';
 import { HttpError } from './errors';
-import { roomByCode, saveSeats, type RoomRow } from './store';
+import { gameById, roomByCode, saveSeats, type RoomRow } from './store';
 import { seatOf, type Seats } from './types';
 
 /** What the lobby shows. Seat entries carry names only; user ids stay on the server. */
@@ -29,10 +30,24 @@ export function roomSnapshot(room: RoomRow, userId: string): RoomSnapshot {
   };
 }
 
+/** The room with this code, as it stands: see withGameOver. */
 export async function requireRoom(code: string): Promise<RoomRow> {
   const room = await roomByCode(code);
   if (!room) throw new HttpError(404, 'no room with that code');
-  return room;
+  return withGameOver(room);
+}
+
+/**
+ * A room whose row says "playing" but whose game is over, or gone, reads as
+ * finished. finishGame and abandonGame write the room before the game, so
+ * they no longer leave one behind; but a room they left before they did
+ * would otherwise send everyone from the lobby back to a final table, and
+ * its host could never deal again.
+ */
+async function withGameOver(room: RoomRow): Promise<RoomRow> {
+  if (room.status !== 'playing') return room;
+  const game = room.current_game_id === null ? null : await gameById(room.current_game_id);
+  return game?.status === 'active' ? room : { ...room, status: 'finished' };
 }
 
 /**
@@ -47,7 +62,7 @@ export async function joinRoom(room: RoomRow, userId: string, name: string): Pro
     if (seatOf(current.seats, userId) !== null) return { room: current, seated: false };
     if (current.status === 'playing') throw new HttpError(409, 'this table has already started');
     // A code is enough to sit down, so a room does not stay open to strangers forever: a week after its last game, only its own people get back in.
-    if (current.status === 'finished' && Date.now() - Date.parse(current.updated_at) > STALE_ROOM_MS) throw new HttpError(410, 'this table has closed');
+    if (isClosedRoom(current, Date.now())) throw new HttpError(410, 'this table has closed');
     const seats = seatJoiner(current.seats, current.status, { userId, name });
     if (!seats) throw new HttpError(409, 'this table is full');
     const updated_at = await saveSeats(current.id, seats, current.updated_at);
@@ -71,9 +86,6 @@ export async function leaveRoom(room: RoomRow, userId: string): Promise<RoomRow>
     current = await requireRoom(current.code);
   }
 }
-
-/** How long a finished room keeps taking newcomers. */
-const STALE_ROOM_MS = 7 * 24 * 60 * 60 * 1000;
 
 const BOT_NAMES = ['Bilal', 'Sana', 'Ayesha', 'Hamza', 'Zara', 'Omar'];
 

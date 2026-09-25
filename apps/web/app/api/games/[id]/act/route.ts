@@ -2,7 +2,7 @@ import type { NextRequest } from 'next/server';
 import { currentUser } from '@/lib/live/auth';
 import { errorResponse, json } from '@/lib/live/http';
 import { HttpError, actOnGame } from '@/lib/live/service';
-import type { ClientAction } from '@/lib/live/types';
+import { parseClientAction } from '@/lib/live/validate';
 
 /** One action against the table, judged against the version the client saw. */
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -10,11 +10,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const user = await currentUser();
     if (!user) throw new HttpError(401, 'sign in first');
     const { id } = await ctx.params;
-    const body = (await req.json().catch(() => null)) as { action?: ClientAction; expectedVersion?: number } | null;
-    if (!body || !body.action || typeof body.action !== 'object' || typeof body.action.type !== 'string') throw new HttpError(400, 'an action is required');
-    const expected = typeof body.expectedVersion === 'number' ? body.expectedVersion : null;
-    return json(await actOnGame(id, user.id, body.action, expected));
+    const body = (await req.json().catch(() => null)) as { action?: unknown; expectedVersion?: unknown } | null;
+    // Only a player's own kind of move, rebuilt from checked fields: never the server's resolveClaims, never extra keys.
+    const action = parseClientAction(body?.action);
+    if (!action) throw new HttpError(400, 'that is not a move a player can make');
+    const expected = Number.isInteger(body?.expectedVersion) ? (body?.expectedVersion as number) : null;
+    return json(await actOnGame(id, user.id, action, expected));
   } catch (err) {
-    return errorResponse(err);
+    return errorResponse(err, '/api/games/[id]/act');
   }
 }
