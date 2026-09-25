@@ -189,14 +189,29 @@ h3 {
     transform: translateY(-4px);
   }
 }
+/* A lifted tile moves and nothing else about it changes: transform and
+   opacity are the only properties a phone animates off the main thread, and
+   a transitioned box-shadow or outline repaints the tile, face and all, on
+   every frame of the lift. The ring and the deeper shadow are drawn once on
+   ::before and faded in with the lift, so they arrive and leave with it. */
 .tile[data-selected='true'] {
   transform: translateY(-10px);
+}
+.tile[data-selectable='true']::before {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border: 2px solid var(--color-ivory-50);
+  border-radius: calc(var(--radius-tile) + 3px);
   box-shadow:
-    0 1px 0 rgb(255 255 255 / 0.6) inset,
-    0 6px 10px rgb(0 0 0 / 0.4),
-    0 14px 24px rgb(0 0 0 / 0.3);
-  outline: 2px solid var(--color-ivory-50);
-  outline-offset: 1px;
+    0 6px 10px rgb(0 0 0 / 0.3),
+    0 14px 24px rgb(0 0 0 / 0.25);
+  opacity: 0;
+  transition: opacity 0.15s var(--ease-tile);
+  pointer-events: none;
+}
+.tile[data-selected='true']::before {
+  opacity: 1;
 }
 .tile[data-dim='true'] {
   opacity: 0.38;
@@ -212,7 +227,11 @@ h3 {
   outline-offset: 1px;
   animation: tile-pulse 1.2s ease-in-out infinite;
 }
-.tile[data-coached='true']::after {
+/* The coach's glow. A tile you can pick up always carries it, faded out, so
+   it crossfades as the tip moves and gives way to the ring while its tile is
+   lifted instead of blinking off and on. */
+.tile[data-coached='true']::after,
+.tile[data-selectable='true']::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -220,6 +239,16 @@ h3 {
   box-shadow:
     0 0 0 2px var(--color-brass-400) inset,
     0 0 18px rgb(216 180 90 / 0.7);
+}
+.tile[data-selectable='true']::after {
+  opacity: 0;
+  transition: opacity 0.15s var(--ease-tile);
+}
+.tile[data-selectable='true'][data-coached='true']::after {
+  opacity: 1;
+}
+.tile[data-selected='true'][data-coached='true']::after {
+  opacity: 0;
 }
 .tile[data-fresh='true'] {
   box-shadow:
@@ -364,6 +393,12 @@ h3 {
   max-width: 100%;
   min-width: 0;
 }
+/* Discard names the tile, from "Discard 1 Dots" (149px) to "Discard Green
+   Dragon" (209px). Sized for the longest, so flipping through the hand
+   changes the words on the button and never moves its edges. */
+.action-row > .btn-primary {
+  min-width: 13.25rem;
+}
 
 /*
   Phone hand: seven tiles to a row, so a 13-tile hand is always two even rows
@@ -382,6 +417,7 @@ h3 {
   justify-content: center;
   align-items: flex-end;
   gap: var(--hand-gap);
+  row-gap: 13px; /* a lifted second-row tile and its ring clear the row above */
   width: min(100%, calc(7 * (var(--tile-md-w) + var(--hand-gap)) - var(--hand-gap)));
   margin-inline: auto;
   padding-top: 18px; /* headroom for the selected lift and the coach's glow */
@@ -506,6 +542,12 @@ h3 {
 .river[data-dense='true'] {
   --river-tile-w: var(--tile-xs-w);
   --river-gap: 3px;
+}
+/* Picking a tile up fades every other kind in the river. It happens in one
+   step: a fade is one transition per discard, and a phone gives each its own
+   layer, 60 of them late in a hand, all painted as the lift starts. */
+.river .tile {
+  transition: none;
 }
 .river-scroll[data-empty] {
   display: grid;
@@ -637,7 +679,8 @@ h3 {
   cursor: pointer;
   transition:
     transform 0.1s,
-    background 0.15s;
+    background 0.15s,
+    opacity 0.15s;
 }
 .btn:active {
   transform: scale(0.97);

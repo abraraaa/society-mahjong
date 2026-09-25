@@ -1,5 +1,5 @@
 'use client';
-import { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, memo, useContext, useEffect, useRef, useState } from 'react';
 import type { CoachSegment, CoachStage } from '@/lib/coach';
 import { GLOSSARY, TERMS, annotate, termsIn, type Term } from '@/lib/coach/glossary';
 import { Tile } from './tile';
@@ -53,7 +53,7 @@ function Words({ text }: { text: string }) {
  * For a new player, the first time a word like "pung" appears it gets a
  * footnote; after that it is only underlined, and a tap explains it.
  */
-export function Coach({ plan, say, stage = 'solid' }: { plan?: string | null; say: readonly CoachSegment[]; stage?: CoachStage }) {
+export const Coach = memo(function Coach({ plan, say, stage = 'solid' }: { plan?: string | null; say: readonly CoachSegment[]; stage?: CoachStage }) {
   const text = say.map((s) => s.text).join('');
   const [expanded, setExpanded] = useState(false);
   const [clipped, setClipped] = useState(false);
@@ -114,7 +114,7 @@ export function Coach({ plan, say, stage = 'solid' }: { plan?: string | null; sa
       </div>
     </div>
   );
-}
+});
 
 /** The same words, unbubbled, for captions inside a sheet. */
 export function CoachLine({ say }: { say: readonly CoachSegment[] }) {
