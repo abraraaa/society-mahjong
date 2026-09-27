@@ -16,15 +16,20 @@ vi.mock('../../../../../lib/live/broadcast', () => ({
   gamePoke: vi.fn(() => ({})),
   roomPoke: vi.fn(() => ({})),
 }));
+vi.mock('../../../../../lib/live/table', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../../lib/live/table')>();
+  return { ...actual, dealFirstHand: vi.fn(actual.dealFirstHand) };
+});
 vi.mock('../../../../../lib/live/store', () => ({
   roomByCode: vi.fn(async () => db.room),
   gameById: vi.fn(async () => db.game),
-  stagesFor: vi.fn(async () => ['new']),
+  stagesBySeat: vi.fn(async (seats: readonly ({ kind: string } | null)[]) => seats.map((s) => (s?.kind === 'human' ? 'new' : null))),
   startGame: vi.fn(async () => ({ id: NEXT, room_id: 'r-1', seed: 'seed', status: 'active', hands_played: 0 })),
 }));
 
 import { POST } from './route';
 import * as store from '../../../../../lib/live/store';
+import * as table from '../../../../../lib/live/table';
 
 const GAME = '6f1c2a9e-4b7d-4e3a-9c5f-2d8b0a7e1f34';
 const NEXT = '0d3e5f7a-9b1c-4d2e-8f6a-1b3c5d7e9f02';
@@ -76,5 +81,12 @@ describe('POST /api/rooms/[code]/start', () => {
     const res = await start();
     expect(res.status).toBe(201);
     expect(store.startGame).toHaveBeenCalledTimes(1);
+  });
+
+  it('deals with gentle bots in the empty seats while the host is new', async () => {
+    db.room = { ...room, status: 'finished' };
+    db.game = game('finished');
+    await start();
+    expect(vi.mocked(table.dealFirstHand).mock.calls.at(-1)![5]).toEqual({ bots: 'gentle' });
   });
 });

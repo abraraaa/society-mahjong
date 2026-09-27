@@ -28,3 +28,21 @@ export function policyFor(stages: readonly CoachStage[], strict = false): TimerP
   }
   return out;
 }
+
+/** The levels of the humans at a table, from a per-seat list: bots and empty seats (null) drop out. */
+export function humanLevels(levels: readonly (CoachStage | null)[]): CoachStage[] {
+  return levels.filter((l): l is CoachStage => l !== null);
+}
+
+/**
+ * How the bots in empty seats play. While anyone seated is still finding
+ * their feet (below `solid`), they play gently, as the solo table's do: they
+ * sometimes let a useful tile go or miss a claim, so a first-timer has room
+ * to win. A table of regulars, a table with no humans, and a strict room get
+ * the sharp ones. This is only the filler bots: a bot standing in for a
+ * person whose clock ran out plays their hand as well as it can.
+ */
+export function emptySeatBots(levels: readonly (CoachStage | null)[], strict = false): 'sharp' | 'gentle' {
+  if (strict) return 'sharp';
+  return humanLevels(levels).some((l) => l !== 'solid') ? 'gentle' : 'sharp';
+}

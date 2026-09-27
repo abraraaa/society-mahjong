@@ -304,23 +304,32 @@ export async function expiredGames(now: number, limit = 50): Promise<string[]> {
 }
 
 /**
- * Player levels for the humans at the table, to size the timers: from what
- * their profiles have recorded. The levels only size the clocks, so a failed
- * read is logged rather than failing the move, tick or deal it was for, and
- * everyone counts as new: the table gets the most patient clocks, never ones
- * too quick for a first-timer. (No levels at all would mean the quickest.)
+ * Each seat's player level, from what their profile has recorded: in seat
+ * order, null for a bot or an empty seat, and `new` for a human with no
+ * profile row yet. The levels size the clocks, pick how the filler bots play
+ * and set each player's own tutor, so a failed read is logged rather than
+ * failing the move, tick or deal it was for, and every human counts as new:
+ * the table gets the most patient clocks and the gentlest bots, never ones
+ * too quick for a first-timer. Rows come back in no particular order, so they
+ * are matched to seats by id.
  */
-export async function stagesFor(seats: Seats): Promise<CoachStage[]> {
+export async function stagesBySeat(seats: Seats): Promise<(CoachStage | null)[]> {
   const ids = seats.flatMap((s) => (s?.kind === 'human' ? [s.userId] : []));
-  if (ids.length === 0) return [];
-  let data;
+  if (ids.length === 0) return seats.map(() => null);
+  let byId: Map<string, CoachStage>;
   try {
-    data = must(await db().from('profiles').select('stats').in('id', ids), 'read the player levels');
+    const data = must(await db().from('profiles').select('id, stats').in('id', ids), 'read the player levels');
+    byId = new Map(
+      (data ?? []).map((r) => {
+        const row = r as { id: string; stats: ProfileStats | null };
+        return [row.id, stageFromStats(row.stats ?? {})] as const;
+      }),
+    );
   } catch (err) {
     logError('stages_read_failed', err);
-    return ids.map(() => 'new');
+    byId = new Map();
   }
-  return (data ?? []).map((r) => stageFromStats((r as { stats: ProfileStats | null }).stats ?? {}));
+  return seats.map((s) => (s?.kind === 'human' ? (byId.get(s.userId) ?? 'new') : null));
 }
 
 export type { Seat };
