@@ -127,13 +127,15 @@ export function buildTileSet(cfg: TileSetConfig): TileInstance[] {
 }
 
 const SUIT_NAMES: Record<Suit, string> = { m: 'Characters', p: 'Dots', s: 'Bamboo' };
+const SUIT_ONE: Record<Suit, string> = { m: 'Character', p: 'Dot', s: 'Bamboo' };
 const WIND_NAMES: Record<Wind, string> = { E: 'East', S: 'South', W: 'West', N: 'North' };
 const DRAGON_NAMES: Record<DragonTile, string> = { DR: 'Red Dragon', DG: 'Green Dragon', DW: 'White Dragon' };
 const FLOWER_NAMES: Record<FlowerTile, string> = { F1: 'Plum', F2: 'Orchid', F3: 'Chrysanthemum', F4: 'Bamboo Flower' };
 const SEASON_NAMES: Record<SeasonTile, string> = { S1: 'Spring', S2: 'Summer', S3: 'Autumn', S4: 'Winter' };
 
 export function tileName(k: TileKind): string {
-  if (isSuitTile(k)) return `${numOf(k)} ${SUIT_NAMES[suitOf(k)]}`;
+  // One of them is '1 Character' and '1 Dot'; bamboo is the same either way.
+  if (isSuitTile(k)) return `${numOf(k)} ${numOf(k) === 1 ? SUIT_ONE[suitOf(k)] : SUIT_NAMES[suitOf(k)]}`;
   if (isWindTile(k)) return `${WIND_NAMES[windOf(k)]} Wind`;
   if (isDragonTile(k)) return DRAGON_NAMES[k];
   if (k[0] === 'F') return FLOWER_NAMES[k as FlowerTile];

@@ -3,6 +3,7 @@ import {
   handAfterClaim,
   isHonourTile,
   isSuitTile,
+  matchPatterns,
   numOf,
   sortTiles,
   suitOf,
@@ -21,6 +22,7 @@ import {
 } from '@society/engine';
 import { goalFor } from './goal';
 import { shapeOf, titleOf } from './shape';
+import { SAY_BUDGET, capitalise, countWord, isLoner, isolate, liveCopies, myDiscardCount, planCount, textOf, tilesWord, waitList } from './words';
 import type { CoachAction, CoachGoal, CoachOutcome, CoachSegment, CoachStage, CoachState, CoachTarget } from './types';
 
 /**
@@ -38,9 +40,6 @@ import type { CoachAction, CoachGoal, CoachOutcome, CoachSegment, CoachStage, Co
 /** Beyond this many tiles away, the coach stops claiming the player is "building" anything. */
 const SHAPING_AT = 5;
 const CLOSE_AT = 2;
-/** Naming more waits than this is a list, not advice. */
-const MAX_NAMED_NEEDS = 3;
-
 export interface CoachInput {
   readonly view: PrivatePlayerView;
   readonly ruleset: Ruleset;
@@ -80,16 +79,6 @@ function targetOf(candidate: PatternCandidate | undefined, patterns: readonly Pa
   };
 }
 
-function andList(items: readonly string[]): string {
-  if (items.length <= 1) return items[0] ?? '';
-  return `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}`;
-}
-
-function nameList(kinds: readonly TileKind[]): string | null {
-  if (kinds.length === 0 || kinds.length > MAX_NAMED_NEEDS) return null;
-  return andList(sortTiles(kinds).map(tileName));
-}
-
 /** True when `kind` would finish a run with two tiles already in hand. */
 function completesRun(concealed: readonly TileKind[], kind: TileKind): boolean {
   if (!isSuitTile(kind)) return false;
@@ -99,18 +88,25 @@ function completesRun(concealed: readonly TileKind[], kind: TileKind): boolean {
   return (has(num - 2) && has(num - 1)) || (has(num - 1) && has(num + 1)) || (has(num + 1) && has(num + 2));
 }
 
+/** Whether a pattern is built from same-suit runs: the only hands a run note can be about. */
+function hasRunGroup(pattern: Pattern | undefined): boolean {
+  return !!pattern?.components.some((c) => (c.c === 'set' && c.of === 'chow') || c.c === 'seq' || c.c === 'run');
+}
+
 /**
- * True when the discard is a tile the target hand wants, would complete a run
- * with tiles in hand, and this ruleset never lets a run be claimed. Both checks
- * matter: in a goulash round a run is not wanted at all, and a wall-only tile
- * that would complete a pung is not a chow rule problem.
+ * True when the discard is a tile the plan wants for a same-suit run, one it
+ * would finish with two tiles already held, and this ruleset never lets a run
+ * be claimed. All of that matters: a goulash has no runs at all, Khalida's and
+ * Crazy Chows take their "runs" across the suits, and a single tile a pung is
+ * two short of is wall-only for a different reason.
  */
-function wantedButUnclaimable(target: CoachTarget | null, goal: CoachGoal, concealed: readonly TileKind[], kind: TileKind): boolean {
-  if (goal.chowsClaimable || !target) return false;
+export function runNoteApplies(target: CoachTarget | null, goal: CoachGoal, patterns: readonly Pattern[], concealed: readonly TileKind[], kind: TileKind): boolean {
+  if (goal.chowsClaimable || !target || target.away < 2) return false;
+  if (!hasRunGroup(patterns.find((p) => p.id === target.patternId))) return false;
   return target.wantsFromWall.includes(kind) && completesRun(concealed, kind);
 }
 
-const CLAIM_VERB: Readonly<Record<ClaimOption['type'], string>> = { pung: 'Pung it', kong: 'Kong it', chow: 'Chow it', win: 'Take it' };
+const CLAIM_VERB: Readonly<Record<ClaimOption['type'], string>> = { pung: 'Pung', kong: 'Kong', chow: 'Chow', win: 'Mahjong!' };
 
 function seg(text: string): CoachSegment {
   return { text };
@@ -119,34 +115,74 @@ function act(text: string): CoachSegment {
   return { text, action: true };
 }
 
-/** Why this tile is the one to let go — the clause after the bold action. */
-function discardReason(analysis: HandAnalysis, goal: CoachGoal, tile: TileKind): string {
-  if (goal.honours === 'forbidden' && isHonourTile(tile)) return 'no honour fits a hand this round';
-  const rating = analysis.ratings.find((r) => r.kind === tile);
-  if (rating && rating.serves.length === 0) return 'no hand of yours wants it';
-  if (rating && rating.held > 1) return 'you have a spare';
-  return 'it is your loosest tile';
+interface Reason {
+  readonly full: string;
+  readonly short: string;
+}
+
+/**
+ * Why this tile is the one to let go: the clause after the bold action, in a
+ * full and a short form so a long hand name can't push the action out of the
+ * bubble. The commonest reason rotates with the player's own discards, since
+ * the same words every turn stop being read.
+ */
+function discardReason(analysis: HandAnalysis, goal: CoachGoal, target: CoachTarget | null, concealed: readonly TileKind[], tile: TileKind, r: number): Reason {
+  const same = (full: string): Reason => ({ full, short: full });
+  if (goal.honours === 'forbidden' && isHonourTile(tile)) return { full: 'no wind or dragon fits a hand this round', short: 'this round has no use for it' };
+  const rating = analysis.ratings.find((x) => x.kind === tile);
+  const serves = rating?.serves ?? [];
+  if (goal.honours === 'gated' && isHonourTile(tile) && serves.length === 0) return same('winds and dragons are fussy here');
+  const title = target?.title;
+  if (serves.length === 0 && isLoner(concealed, tile))
+    return isHonourTile(tile) ? same("it's on its own") : { full: "it's on its own, with no neighbours", short: "it's on its own" };
+  if (serves.length === 0) {
+    if (!title) return same('your hand has no use for it');
+    const full = [`${title} has no use for it`, `nothing in ${title} needs it`, `it does nothing for ${title}`][r % 3]!;
+    return { full, short: 'your hand has no use for it' };
+  }
+  const use = target ? target.holding.filter((k) => k === tile).length : 0;
+  const held = rating?.held ?? 1;
+  if (use >= 1) return held >= 3 && use === 2 && title ? { full: `${title} only needs two of them`, short: "you've got a spare" } : same("you've got a spare");
+  if (title && r % 2 === 0 && !serves.includes(target!.patternId)) return { full: `${title} can do without it`, short: 'it does the least for your hand' };
+  return same('it does the least for your hand');
 }
 
 function planLine(target: CoachTarget | null): string | null {
   if (!target) return null;
-  const away = target.away === 0 ? 'complete' : `${target.approximate ? 'about ' : ''}${target.away} away`;
-  return `${target.title} · ${away}`;
+  return `${target.title} · ${planCount(target.away, target.approximate)}`;
 }
 
 /**
- * Where the hand stands, said after the action rather than before it: the bubble
- * is clamped to three lines, so the sentence that can afford to be cut goes last.
+ * At one tile to go, what would finish the hand, judged on the hand as it will
+ * stand after this discard (the hand before it is a tile too long, and named
+ * waits from it were wrong one time in eight). Only the plan's own hand counts,
+ * and only tiles that might still turn up.
  */
-function progressClause(target: CoachTarget, verbose: boolean): string {
-  const off = target.away === 1 ? `One tile from ${target.title}` : `${target.away} away from ${target.title}`;
-  if (target.confidence === 'searching') return `Nothing has shape yet; ${target.title} is nearest, ${target.away} away.`;
-  if (target.confidence === 'close') {
-    // A named wait beats a description of the hand: it is the thing to watch for.
-    const needs = nameList([...target.wantsFromDiscard, ...target.wantsFromWall]);
-    if (needs) return `${off}, waiting on ${needs}.`;
-  }
-  return `${off}${verbose ? ` — ${target.shape}` : ''}.`;
+function progressAfter(input: CoachInput, spec: ReturnType<Ruleset['handSpec']>, target: CoachTarget, tile: TileKind): string {
+  if (target.away !== 1) return '';
+  if (target.approximate) return ' One tile to go.';
+  const { view, ruleset } = input;
+  const rest = [...view.concealed];
+  rest.splice(rest.indexOf(tile), 1);
+  const after = analyseHand({ concealed: rest, melds: view.players[view.me].melds }, spec.patterns, ctxOf(view), ruleset.guards, {
+    claims: ruleset.claims,
+    limit: Number.POSITIVE_INFINITY,
+  });
+  const found = new Set<TileKind>();
+  for (const c of after.candidates) if (c.away === 1 && !c.approximate && titleOf(c) === target.title) for (const k of c.needs) found.add(k);
+  if (found.size === 0) return ' One tile to go.';
+  const live = [...found].filter((k) => liveCopies(view, k) > 0);
+  if (live.length === 0) return ' One tile to go, but every tile that finishes it is already out.';
+  if (live.length > 3) return ' One tile to go, and plenty of tiles would finish it.';
+  return ` One tile to go: you need ${waitList(live)}.`;
+}
+
+/** The name a complete hand will be announced under: the ruleset's own first match. */
+function winningTitle(input: CoachInput, concealed: readonly TileKind[]): string | null {
+  const { view, ruleset } = input;
+  const spec = ruleset.handSpec(view.progress);
+  const m = matchPatterns(spec.patterns, { concealed, melds: view.players[view.me].melds }, ctxOf(view), ruleset.guards)[0];
+  return m ? titleOf(m.pattern) : null;
 }
 
 function outcomeOf(input: CoachInput, target: CoachTarget | null, patterns: readonly Pattern[]): CoachOutcome | null {
@@ -169,14 +205,18 @@ function outcomeOf(input: CoachInput, target: CoachTarget | null, patterns: read
   };
 }
 
+/** The first of `attempts` that fits the bubble, or the last one: the action is never cut, only the words after it. */
+function fitting(attempts: readonly CoachSegment[][]): CoachSegment[] {
+  return attempts.find((say) => textOf(say).length <= SAY_BUDGET) ?? attempts[attempts.length - 1]!;
+}
+
 export function coachFor(input: CoachInput): CoachState {
-  const { view, ruleset, analysis, stage } = input;
+  const { view, ruleset, analysis, stage, names } = input;
   const spec = ruleset.handSpec(view.progress);
   const goal = goalFor(spec, view.progress.roundWind, ruleset);
   const target = targetOf(analysis.candidates[0], spec.patterns);
   const runnerUp = targetOf(analysis.candidates[1], spec.patterns);
   const plan = planLine(target);
-  const verbose = stage === 'new' || stage === 'first_hand';
   const quiet = stage === 'solid';
 
   const base = {
@@ -191,19 +231,27 @@ export function coachFor(input: CoachInput): CoachState {
   // --- hand end: the debrief, where a beginner learns most -------------------
   if (view.phase === 'finished') {
     const outcome = outcomeOf(input, target, spec.patterns);
+    const short = target && target.away > 0 ? seg(` You were ${tilesWord(target.away)} short of ${target.title}.`) : null;
     const say: CoachSegment[] = [];
     let reason: string | null = null;
     if (outcome?.type === 'win' && outcome.winnerIsMe) {
-      say.push(seg(`Mahjong. That is ${outcome.hand?.title ?? 'a hand'}${outcome.hand ? ` — ${outcome.hand.shape}` : ''}.`));
+      say.push(seg(outcome.hand ? `Mahjong! That's ${outcome.hand.title}: ${outcome.hand.shape}.` : "Mahjong! That's a complete hand."));
       reason = 'you completed the hand';
     } else if (outcome?.type === 'win') {
-      const how = outcome.selfDrawn ? 'off the wall' : 'off a discard';
-      say.push(seg(`${outcome.winnerName} takes it ${how} with ${outcome.hand?.title ?? 'a legal hand'}${outcome.hand ? `: ${outcome.hand.shape}` : ''}.`));
-      if (target) say.push(seg(` You finished ${target.away} off ${target.title}.`));
+      const who = isolate(outcome.winnerName ?? 'Someone');
+      const hand = outcome.hand?.title ?? 'a complete hand';
+      const result = view.result?.type === 'win' ? view.result : null;
+      const discarder = result?.discarder;
+      const how =
+        outcome.selfDrawn || discarder === undefined || !result?.patternId
+          ? 'off the wall'
+          : `on ${discarder === view.me ? 'your' : `${isolate(names[discarder])}'s`} ${lastDiscardName(view) ?? 'discard'}`;
+      say.push(seg(`${who} wins with ${hand}, ${how}.`));
+      if (short) say.push(short);
       reason = 'the hand is over';
     } else {
-      say.push(seg('Wall out, nobody home.'));
-      if (target) say.push(seg(` You finished ${target.away} off ${target.title}.`));
+      say.push(seg("Washed out: the wall's run dry and nobody won. No points change hands."));
+      if (short) say.push(short);
       reason = 'the wall ran dry';
     }
     return { ...base, moment: 'handEnd', action: { kind: 'wait' }, say, reason, highlight: [], outcome };
@@ -212,10 +260,16 @@ export function coachFor(input: CoachInput): CoachState {
   // --- the West exchange -----------------------------------------------------
   if (view.legal.exchange) {
     const count = view.legal.exchange.count;
-    const loose = analysis.spare.length >= count ? analysis.spare.slice(0, count) : analysis.ratings.slice(0, count).map((r) => r.kind);
+    const spare = analysis.spare.length >= count;
+    const loose = spare ? analysis.spare.slice(0, count) : analysis.ratings.slice(0, count).map((r) => r.kind);
     const action: CoachAction = { kind: 'exchange', tiles: loose };
-    const say: CoachSegment[] = [act('Pass the glowing ones'), seg(` — no pung of yours is using them. ${goal.aim}`)];
-    return { ...base, moment: 'exchange', action, say, reason: 'the exchange is a chance to shed dead tiles', highlight: loose };
+    const n = countWord(count);
+    const text = !target
+      ? `I've lit up ${n} you can spare.`
+      : spare
+        ? `I've lit up ${n} you can spare: none of them helps ${target.title}.`
+        : `I've lit up the ${n} doing the least for ${target.title}.`;
+    return { ...base, moment: 'exchange', action, say: [seg(text)], reason: 'the exchange is a chance to shed dead tiles', highlight: loose };
   }
 
   // --- a claim window --------------------------------------------------------
@@ -224,18 +278,19 @@ export function coachFor(input: CoachInput): CoachState {
     const options = view.legal.claims;
     const win = options.find((o) => o.type === 'win');
     if (win) {
+      const title = winningTitle(input, [...view.concealed, discard.kind]);
       return {
         ...base,
         moment: 'claim',
         action: { kind: 'claim', option: win, tile: discard.kind },
-        say: [seg('That completes your hand. '), act('Take it'), seg('.')],
+        say: title ? [seg(`That ${tileName(discard.kind)} finishes ${title}. Call `), act('Mahjong!')] : [seg('That tile completes your hand. Call '), act('Mahjong!')],
         reason: 'the discard is your winning tile',
         highlight: [],
       };
     }
     // The only honest answer to "does this help" is to re-analyse the hand as it
     // would stand after the claim: an exposed pung can shut this hand out of every
-    // chow pattern the round allows, and only the analysis knows that.
+    // run pattern the round allows, and only the analysis knows that.
     const baseAway = target?.away ?? Number.POSITIVE_INFINITY;
     let best: { option: ClaimOption; away: number; leader: CoachTarget | null } | null = null;
     for (const option of options) {
@@ -246,37 +301,39 @@ export function coachFor(input: CoachInput): CoachState {
       if (!best || away < best.away) best = { option, away, leader: targetOf(after.candidates[0], spec.patterns) };
     }
     if (best && best.away < baseAway) {
-      const towards = best.leader ? ` from ${best.leader.title}` : '';
+      const from = best.leader ? ` from ${best.leader.title}` : '';
+      const tail = best.option.type === 'kong' ? ', with a replacement tile to come.' : '.';
       return {
         ...base,
         moment: 'claim',
         action: { kind: 'claim', option: best.option, tile: discard.kind },
-        say: [act(CLAIM_VERB[best.option.type]), seg(` — that leaves you ${best.away} away${towards}.`)],
+        say: [act(CLAIM_VERB[best.option.type]), seg(` it: you'll be ${tilesWord(Math.max(1, best.away))}${from}${tail}`)],
         reason: 'the claim moves the hand closer than leaving it',
         highlight: [],
       };
     }
-    const runNote = wantedButUnclaimable(target, goal, view.concealed, discard.kind) ? ' A run never comes off the table here, so that one has to be drawn.' : '';
-    return {
-      ...base,
-      moment: 'claim',
-      action: { kind: 'pass', tile: discard.kind },
-      say: [seg(target ? `Claiming that does nothing for ${target.title}.${runNote} ` : `Nothing here is worth breaking your hand for.${runNote} `), act('Pass'), seg('.')],
-      reason: 'no claim on this tile shortens the hand',
-      highlight: [],
-    };
+    const say: CoachSegment[] = !target
+      ? [seg("Nothing here's worth breaking your hand for. "), act('Pass'), seg('.')]
+      : runNoteApplies(target, goal, spec.patterns, view.concealed, discard.kind)
+        ? [seg(`${target.title} wants that tile in a run, and you can't claim for a run here. `), act('Pass'), seg('.')]
+        : [seg(`That does nothing for ${target.title}. `), act('Pass'), seg('.')];
+    return { ...base, moment: 'claim', action: { kind: 'pass', tile: discard.kind }, say, reason: 'no claim on this tile shortens the hand', highlight: [] };
   }
 
   // --- your turn -------------------------------------------------------------
   const myTurn = view.phase === 'turn' && view.turn === view.me;
-  const handStart = view.discardCount === 0 && view.players[view.me].melds.length === 0;
+  // The round's aim is for a hand nobody has played yet: until the player has
+  // discarded once, not until anyone has, or three hands in four it flashed up
+  // for as long as the dealer took to throw.
+  const beforeMyFirst = myDiscardCount(view) === 0 && view.players[view.me].melds.length === 0;
 
   if (myTurn && view.legal.win) {
+    const title = winningTitle(input, view.concealed);
     return {
       ...base,
       moment: 'turn',
       action: { kind: 'win' },
-      say: [act('Declare mahjong'), seg(target ? ` — that is ${target.title}.` : '.')],
+      say: title ? [seg(`That's ${title}, complete. Call `), act('Mahjong!')] : [seg("That's a complete hand. Call "), act('Mahjong!')],
       reason: 'the hand is complete',
       highlight: [],
     };
@@ -286,38 +343,36 @@ export function coachFor(input: CoachInput): CoachState {
   const action: CoachAction = myTurn && discardTile ? { kind: 'discard', tile: discardTile } : { kind: 'wait' };
   const highlight = action.kind === 'discard' ? [action.tile] : [];
 
-  if (handStart) {
-    const say: CoachSegment[] = quiet ? [] : [seg(goal.aim)];
-    if (verbose && goal.watchOut) say.push(seg(` ${goal.watchOut}`));
-    // No plan line here: a hand nobody has played yet has no plan worth reporting,
-    // and dropping it hands the goal all three lines of the bubble.
-    return { ...base, moment: 'handStart', plan: quiet ? plan : null, action, say, reason: goal.watchOut, highlight };
-  }
-
   if (!myTurn) {
-    // Waiting is where the chow rule bites: the tile you wanted goes past and no
-    // window opens, because in this ruleset it never can.
-    if (verbose && view.phase === 'claim' && discard && wantedButUnclaimable(target, goal, view.concealed, discard.kind)) {
-      return {
-        ...base,
-        moment: 'waiting',
-        action: { kind: 'wait' },
-        say: [seg(`That ${tileName(discard.kind)} would have finished a run — but runs are never claimed here, so you can only draw it.`)],
-        reason: 'chows cannot be claimed in this ruleset',
-        highlight: [],
-      };
+    if (beforeMyFirst && !quiet) {
+      // Someone else is dealing: the goal gets the bubble, and a plan for a hand not yet played would say nothing.
+      const withWatch = goal.watchOut ? [seg(goal.aim), seg(` ${goal.watchOut}`)] : [seg(goal.aim)];
+      return { ...base, moment: 'handStart', plan: null, action, say: fitting([withWatch, [seg(goal.aim)]]), reason: goal.watchOut, highlight };
     }
     return { ...base, moment: 'waiting', action, say: [], reason: null, highlight: [] };
   }
 
+  const moment = beforeMyFirst ? 'handStart' : 'turn';
   if (quiet || !target) {
-    return { ...base, moment: 'turn', action, say: [], reason: null, highlight };
+    return { ...base, moment, action, say: [], reason: null, highlight };
   }
 
   if (action.kind !== 'discard') {
-    return { ...base, moment: 'turn', action, say: [seg('Every tile here is doing a job — take your pick.')], reason: null, highlight };
+    return { ...base, moment, action, say: [seg("Every tile's pulling its weight. Pick the one you'd miss least.")], reason: null, highlight };
   }
-  const reason = discardReason(analysis, goal, action.tile);
-  const say: CoachSegment[] = [act(`Discard ${tileName(action.tile)}`), seg(` — ${reason}. ${progressClause(target, verbose)}`)];
-  return { ...base, moment: 'turn', action, say, reason, highlight };
+  const reason = discardReason(analysis, goal, target, view.concealed, action.tile, myDiscardCount(view));
+  const lead = act(`Discard ${tileName(action.tile)}`);
+  const progress = progressAfter(input, spec, target, action.tile);
+  const say = fitting([
+    [lead, seg(`: ${reason.full}.${progress}`)],
+    [lead, seg(`: ${reason.short}.${progress}`)],
+    [lead, seg(`: ${reason.short}.`)],
+  ]);
+  return { ...base, moment, action, say, reason: reason.full, highlight };
+}
+
+/** The tile that was just thrown, from the river, for the debrief. */
+function lastDiscardName(view: PrivatePlayerView): string | null {
+  const won = [...view.events].reverse().find((e) => e.type === 'discarded');
+  return won?.tile ? tileName(won.tile) : null;
 }

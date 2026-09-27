@@ -12,7 +12,8 @@ import {
   type TileKind,
   type Wind,
 } from '@society/engine';
-import { analyseFor, coachFor } from './coach';
+import { analyseFor, coachFor, runNoteApplies } from './coach';
+import { goalFor } from './goal';
 import { hasWrittenShape } from './shape';
 
 const progressFor = (roundWind: Wind, handInRound: number): GameProgress => ({
@@ -36,7 +37,7 @@ function turnView(round: Wind, handInRound: number, tiles: readonly TileKind[]):
     progress: progressFor(round, handInRound),
     me: 0,
     concealed: tiles,
-    players: [{ seat: 0, seatWind: 'E', melds: [], concealed: tiles }],
+    players: [{ seat: 0, seatWind: 'E', melds: [], concealed: tiles, discards: [] }],
     phase: 'turn',
     turn: 0,
     discardCount: 4,
@@ -44,6 +45,7 @@ function turnView(round: Wind, handInRound: number, tiles: readonly TileKind[]):
     lastDiscard: null,
     result: null,
     revealed: {},
+    events: [{ seq: 1, type: 'discarded', seat: 0, tile: 'p9' }],
   } as unknown as PrivatePlayerView;
 }
 
@@ -86,7 +88,7 @@ describe('rounds that want honours', () => {
       tiles: ['p1', 'p1', 'p1', 's9', 's9', 'DR', 'DG', 'DW', 'WE', 'WS', 'WW', 'WN', 'WN', 'm4'],
     },
     {
-      name: 'North, 1-9 plus 5 Honors in the making',
+      name: 'North, 1-9 plus 5 Honours in the making',
       round: 'N',
       handInRound: 0,
       tiles: ['s1', 's2', 's3', 's4', 's5', 's6', 'WE', 'WS', 'WW', 'WN', 'DR', 'm2', 'p8', 'm5'],
@@ -129,25 +131,43 @@ function waitingView(round: Wind, handInRound: number, tiles: readonly TileKind[
 
 const NAMES = { 0: 'You', 1: 'Bilal', 2: 'Sana', 3: 'Ayesha' } as const;
 
-describe('the chow rule, explained only when it bites', () => {
-  it('names the run that just went past when the hand wanted it', () => {
-    // Windy Chows two away, wanting s6 (or s3) and m8 (or m5): run tiles, and runs
-    // never come off the table. (One away, the same tile would win the hand, and
-    // a winning tile can be claimed - so the note stays quiet there.)
+describe('the run rule, explained only when it bites', () => {
+  const noteFor = (round: Wind, handInRound: number, tiles: TileKind[], discard: TileKind) => {
+    const view = turnView(round, handInRound, tiles);
+    const coach = coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: 'new', names: NAMES });
+    const spec = karachi.handSpec(view.progress);
+    return runNoteApplies(coach.target, goalFor(spec, round, karachi), spec.patterns, tiles, discard);
+  };
+
+  it('applies to a run tile a same-suit run hand wants', () => {
+    // Chow + 5 Honours two away, wanting s6 (or s3) for s4-s5: runs never come off the table.
+    expect(noteFor('E', 1, ['s4', 's5', 'p2', 'p3', 'p4', 'm6', 'm7', 'WE', 'WS', 'WW', 'WN', 'WN', 'm1'], 's6')).toBe(true);
+  });
+
+  it('never applies in a goulash, where runs are no use', () => {
+    const tiles: TileKind[] = ['m1', 'm1', 'm1', 'p7', 'p7', 'p7', 'DR', 'DR', 'DR', 'WW', 'WW', 's4', 's5'];
+    expect(noteFor('W', 0, tiles, 's6')).toBe(false);
+    expect(noteFor('E', 0, tiles, 's6')).toBe(false);
+  });
+
+  it('keeps quiet while someone else is on the move', () => {
     const tiles: TileKind[] = ['s4', 's5', 'p2', 'p3', 'p4', 'm6', 'm7', 'WE', 'WS', 'WW', 'WN', 'WN', 'm1'];
     const view = waitingView('E', 1, tiles, 's6');
     const coach = coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: 'new', names: NAMES });
     expect(coach.moment).toBe('waiting');
-    expect(coach.say.map((s) => s.text).join('')).toContain('runs are never claimed');
-  });
-
-  it('stays quiet in a goulash round, where no run is wanted', () => {
-    // Four pungs and a pair is the hand; s6 would "complete" s4-s5-s6 but the hand has no use for it.
-    const tiles: TileKind[] = ['m1', 'm1', 'm1', 'p7', 'p7', 'p7', 'DR', 'DR', 'DR', 'WW', 'WW', 's4', 's5'];
-    const view = waitingView('W', 0, tiles, 's6');
-    const coach = coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: 'new', names: NAMES });
-    expect(coach.moment).toBe('waiting');
     expect(coach.say).toEqual([]);
+  });
+});
+
+describe('plain words', () => {
+  it('counts in tiles, never "away"', () => {
+    const tiles: TileKind[] = ['s4', 's5', 's6', 'p2', 'p3', 'p4', 'm6', 'm7', 'WE', 'WS', 'WW', 'WN', 'WN', 'p9'];
+    const view = turnView('E', 1, tiles);
+    const coach = coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: 'learning', names: NAMES });
+    expect(coach.plan).toMatch(/ · (complete|\d+ tiles? to go|about \d+ tiles to go)$/);
+    const text = coach.say.map((s) => s.text).join('');
+    expect(text).not.toMatch(/\baway\b| off /);
+    expect(text.length).toBeLessThanOrEqual(105);
   });
 });
 
@@ -163,6 +183,6 @@ describe('South, where honours are dead', () => {
       names: { 0: 'You', 1: 'Bilal', 2: 'Sana', 3: 'Ayesha' },
     });
     expect(coach.action).toEqual({ kind: 'discard', tile: 'WN' });
-    expect(coach.reason).toContain('no honour');
+    expect(coach.reason).toBe('no wind or dragon fits a hand this round');
   });
 });

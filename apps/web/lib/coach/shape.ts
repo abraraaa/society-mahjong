@@ -3,8 +3,8 @@ import type { Pattern } from '@society/engine';
 /**
  * What each hand actually looks like, in the words a player would use at the table.
  *
- * A name alone teaches nobody: "Windy Chows" means something only once you have
- * been told it is a run in each suit plus all four winds with one paired. Every
+ * A name alone teaches nobody: "Windy Chows" means something only once you've
+ * been told it's a run in each suit plus all four winds with one paired. Every
  * line here is written off the pattern's own components and the row for that hand
  * in docs/RULES-KARACHI.md, and `shapeOf` falls back to a bland summary rather
  * than say nothing when a pattern arrives without one.
@@ -34,7 +34,7 @@ const SHAPES: Readonly<Record<string, string>> = {
 
   'karachi.goulash': 'four pungs and a pair, with no runs anywhere',
 
-  'karachi.east.appleBlossom': 'a run in each suit, a white dragon pung and a green dragon pair',
+  'karachi.east.appleBlossom': 'three mixed-suit runs, a white dragon pung and a green dragon pair',
   'karachi.east.appleBlossom.chows': 'a run in each suit, a white dragon pung and a green dragon pair',
   'karachi.east.windyWonders': 'a run in each suit, a wind pung and a wind pair',
   'karachi.east.windyfly': 'a pung in each suit, plus all four winds with one paired',
@@ -43,37 +43,37 @@ const SHAPES: Readonly<Record<string, string>> = {
   'karachi.east.professors': 'a run in each suit, one of each dragon and a wind pair',
   'karachi.east.pinkys': 'the same four-tile run in all three suits, plus a wind pair',
   'karachi.east.monty': 'the same four-tile run in all three suits, plus a dragon pair',
-  'karachi.east.khalidas': '1 through 9 across the suits, plus all four winds with one paired',
-  'karachi.east.nailas': '1-2-3 and 3-4-5 in one suit, 1-2-3 in a second, 3-4-5 in the third, and a wind pair',
+  'karachi.east.khalidas': '1 to 9 across the suits, plus all four winds with one paired',
+  'karachi.east.nailas': '1-2-3 and 3-4-5 in one suit, one of each in the others, a wind pair',
   'karachi.east.dragonfly': 'one of each dragon, a pung in each suit and a pair from any suit',
 
-  'karachi.south.anyDamnHand': 'any four sets and a pair, with not one wind or dragon',
+  'karachi.south.anyDamnHand': 'any four sets (runs or pungs) and a pair, with no winds or dragons',
   'karachi.south.dirtyPairs': 'seven pairs of suit tiles, nothing exposed',
-  'karachi.south.dirtyGertiesGarter': '1 through 7 in two suits',
+  'karachi.south.dirtyGertiesGarter': '1 to 7 in two suits',
   'karachi.south.knitting': 'seven pairs, each the same number in the same two suits',
-  'karachi.south.crochet': 'four knitted sets — one number across all three suits — and a pair',
-  'karachi.south.crazyChows': 'four runs with each tile from a different suit, plus two loose suit tiles',
+  'karachi.south.crochet': 'four trios, each one number in all three suits, plus a pair',
+  'karachi.south.crazyChows': 'four runs, each tile from a different suit, and two loose tiles',
 
-  'karachi.north.lailas': 'a pung of 1s, a pung of 9s in another suit, all three dragons, all four winds with one paired',
-  'karachi.north.easyVirgin': '1-2-3 and a pung of 1s in one suit, all three dragons, all four winds with one paired',
-  'karachi.north.oneToNinePlusFiveHonours': '1 through 9 in one suit, all four winds and one more honour',
-  'karachi.north.oneToSevenPlusSevenHonours': '1 through 7 in one suit, plus all seven honours',
-  'karachi.north.numbersPungs': 'the same number pungged in all three suits, all four winds and one more honour',
-  'karachi.north.numbersPungs.pungPair': 'the same number pungged in all three suits, plus an honour pung and pair',
-  'karachi.north.sindClubHand': 'the fixed Sind Club tiles: all seven honours, 2 and 5 bamboo, 5 dots, 7 and 8 characters, and a pair of 1 characters',
-  'karachi.north.gatesOfHeaven': 'one suit only — a pung of 1s, a pung of 9s, 2 through 8, and one of those doubled',
-  'karachi.north.confusedGates': 'a pung of 1s, a pung of 9s in another suit, 2 through 8 in the third with one doubled',
+  'karachi.north.lailas': '1s and 9s pungs in two suits, each dragon, four winds with one paired',
+  'karachi.north.easyVirgin': '1-2-3 and 1-1-1 in one suit, each dragon, four winds with one paired',
+  'karachi.north.oneToNinePlusFiveHonours': '1 to 9 in one suit, all four winds and one more honour',
+  'karachi.north.oneToSevenPlusSevenHonours': '1 to 7 in one suit, plus all seven honours',
+  'karachi.north.numbersPungs': 'a pung of the same number in each suit, four winds and one more honour',
+  'karachi.north.numbersPungs.pungPair': 'a pung of the same number in each suit, plus an honour pung and pair',
+  'karachi.north.sindClubHand': 'a fixed hand of all seven honours and seven particular suit tiles',
+  'karachi.north.gatesOfHeaven': 'pungs of 1s and 9s, 2 to 8, one tile doubled, all one suit',
+  'karachi.north.confusedGates': '1s and 9s pungs in two suits, 2 to 8 in the third, one doubled',
   'karachi.north.fourBlessings': 'a pung of every wind, plus any pair',
   'karachi.north.allHonorHand': 'four pungs of terminals or honours, and a pair of the same',
-  'karachi.north.gertiesGarter': '1 through 7 in two suits',
+  'karachi.north.gertiesGarter': '1 to 7 in two suits',
   'karachi.north.greenJade': 'a green dragon pung, three bamboo pungs and a bamboo pair',
-  'karachi.north.imperialJade': 'green tiles only — a green dragon pung, three green bamboo pungs and a pair',
+  'karachi.north.imperialJade': 'only green tiles, with a green dragon pung, three pungs and a pair',
   'karachi.north.royalCoral': 'a red dragon pung, three character pungs and a character pair',
-  'karachi.north.royalRuby': 'a red dragon pung, then red bamboo — 1, 5, 7, 9 — pungged and paired',
+  'karachi.north.royalRuby': 'a red dragon pung, then pungs and a pair of 1, 5, 7, 9 bamboo',
   'karachi.north.rubyJade': 'red and green dragon pungs, two bamboo pungs and a bamboo pair',
-  'karachi.north.lillyOfTheValley': 'a white dragon pung, three dots pungs and a dots pair',
+  'karachi.north.lillyOfTheValley': 'a white dragon pung, three dots pungs, a dots pair',
   'karachi.north.lillypilly': 'a green dragon pung, a white dragon pair and three dots pungs',
-  'karachi.north.runPungPair': '1 through 9 in one suit, plus a pung and a pair from that same suit',
+  'karachi.north.runPungPair': '1 to 9 in one suit, plus a pung and a pair in that suit',
   'karachi.north.montyUniqueWonders': 'one of every terminal and honour, with one of them doubled',
 };
 
@@ -109,10 +109,10 @@ function genericShape(pattern: Pattern): string {
         parts.push(plural(n, `run of ${c.len}`));
         break;
       case 'run':
-        parts.push(`${c.from} through ${c.to} in one suit`);
+        parts.push(`${c.from} to ${c.to} in one suit`);
         break;
       case 'mixedRun':
-        parts.push(`${c.from} through ${c.to} across the suits`);
+        parts.push(`${c.from} to ${c.to} across the suits`);
         break;
       case 'each':
         parts.push(`one of each of ${c.kinds.length} named tiles`);
@@ -121,13 +121,13 @@ function genericShape(pattern: Pattern): string {
         parts.push(plural(n, 'loose tile'));
         break;
       case 'knit':
-        parts.push(plural(n, 'knitted set'));
+        parts.push(plural(n, 'trio of one number'));
         break;
       case 'mixedSeq':
         parts.push(plural(n, 'mixed run'));
         break;
       case 'mixedPair':
-        parts.push(plural(n, 'knitted pair'));
+        parts.push(plural(n, 'pair of one number in two suits'));
         break;
     }
   }

@@ -166,7 +166,7 @@ describe('what the round says about honours', () => {
   });
 
   it('ranks a part-built big hand above the rest in the North round', () => {
-    // 1-5 bamboo with all seven honours: two tiles short of 1-7 plus 7 Honors.
+    // 1-5 bamboo with all seven honours: two tiles short of 1-7 plus 7 Honours.
     const tiles: TileKind[] = ['s1', 's2', 's3', 's4', 's5', 'WE', 'WS', 'WW', 'WN', 'DR', 'DG', 'DW', 'm9', 'm9'];
     const analysis = analyse(tiles, 'N');
     const leader = analysis.candidates[0]!;
