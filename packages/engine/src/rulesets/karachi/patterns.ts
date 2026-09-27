@@ -257,8 +257,8 @@ export const SOUTH: readonly Pattern[] = [
     id: 'karachi.south.crazyChows',
     name: 'Crazy Chows',
     source: `${GUIDE}; T&M p16`,
-    notes: 'Four mixed chows plus two suit tiles. ⚠ The guide example ends 3b 7d, which is not a pair of any kind; the tail is left as any two suit tiles.',
-    components: [{ c: 'mixedSeq', n: 4 }, { c: 'tiles', n: 2, filter: { suitTile: true } }],
+    notes: 'Four mixed chows in one suit order across the hand (the guide example runs bamboo, dots, characters in every chow, as mixedSeq promises), plus two suit tiles. ⚠ The guide example ends 3b 7d, which is not a pair of any kind; the tail is left as any two suit tiles.',
+    components: [{ c: 'mixedSeq', n: 4, order: '$O' }, { c: 'tiles', n: 2, filter: { suitTile: true } }],
     tags: ['south', 'named'],
   },
 ];

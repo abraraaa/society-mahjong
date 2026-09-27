@@ -75,7 +75,7 @@ Every example below is a golden fixture in `packages/engine/test/karachi-catalog
 | Dirty Gertie's Garter | 1234567b 1234567d | 1–7 in two suits |
 | Knitting | 1b1d 2b2d 4b4d 5b5d 7b7d 8b8d 9b9d | Seven knitted pairs (same number, two suits), the same two suits throughout |
 | Crochet | 1b1d1c 4b4d4c 7b7d7c 7b7d7c 4b4b | Four knitted sets and a pair (T&M Triple Knitting) |
-| Crazy Chows | 2b3d4c 4b5d6c 5b6d7c 7b8d9c 3b 7d | Four mixed chows plus two suit tiles. ⚠ The example's tail 3b 7d is not a pair of any kind |
+| Crazy Chows | 2b3d4c 4b5d6c 5b6d7c 7b8d9c 3b 7d | Four mixed chows in one suit order across the hand (the example is bamboo, dots, characters every time), plus two suit tiles. The engine enforced no order until batch 2, which made this the easiest hand in South; if your table plays each chow in any order, it's one line in `patterns.ts`. ⚠ The example's tail 3b 7d is not a pair of any kind |
 
 ### North
 

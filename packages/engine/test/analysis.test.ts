@@ -382,3 +382,46 @@ describe('regressions', () => {
     }
   });
 });
+
+/*
+ * The tutor used to protect whichever lay-out of its plan the search found first
+ * (characters, then dots, then bamboo) and rate tiles per kind rather than per copy.
+ * Between them it threw away runs an equally good plan was using, and kept a spare
+ * duplicate over a tile the next hand along needed. Each hand below failed before.
+ */
+describe('which tile the analysis lets go', () => {
+  const T = (s: string) => s.split(' ') as TileKind[];
+  const spec = (roundWind: MatchCtx['roundWind'], handInRound: number) => karachi.handSpec({ roundWind, roundIndex: 0, handInRound, handIndex: 1 }).patterns;
+  const run = (tiles: TileKind[], roundWind: MatchCtx['roundWind'], handInRound: number) =>
+    analyseHand(hand(tiles), spec(roundWind, handInRound), ctxFor(roundWind), karachi.guards, { claims: karachi.claims, limit: 99 });
+  const awayAfter = (tiles: TileKind[], discard: TileKind, roundWind: MatchCtx['roundWind'], handInRound: number, id: string) => {
+    const rest = [...tiles];
+    rest.splice(rest.indexOf(discard), 1);
+    return run(rest, roundWind, handInRound).candidates.find((c) => c.patternId === id)?.away;
+  };
+
+  it('keeps the dots run that an equally close plan is using', () => {
+    const tiles = T('m1 m2 m4 m5 m7 p3 p4 p5 p6 p8 p9 WS WW WN');
+    const d = run(tiles, 'E', 1).bestDiscard!;
+    expect(['m4', 'm5']).toContain(d);
+    expect(awayAfter(tiles, d, 'E', 1, 'karachi.east.chows.clean.news')).toBe(5);
+  });
+
+  it('never breaks up a run already made', () => {
+    const tiles = T('m2 m4 m8 p1 p3 p5 s6 s7 s8 WS WW WW WW WN');
+    const d = run(tiles, 'E', 1).bestDiscard!;
+    expect(['s6', 's7', 's8']).not.toContain(d);
+    expect(awayAfter(tiles, d, 'E', 1, 'karachi.east.chows.each.news')).toBe(3);
+  });
+
+  it('throws the spare copy of a pair rather than a tile the next plan needs', () => {
+    expect(run(T('p2 p4 p6 p7 s1 s2 s2 s3 s5 WE WN DR DG DW'), 'N', 0).bestDiscard).toBe('s2');
+    expect(run(T('m2 m2 m6 m6 m7 s1 s2 s3 s5 s6 WS WW DR DW'), 'N', 0).bestDiscard).toBe('m2');
+  });
+
+  it('keeps the runner-up plans no further away after the advised discard', () => {
+    const tiles = T('m1 m2 m2 m3 m5 m6 m9 p4 p5 p8 s4 s5 WW WN');
+    const d = run(tiles, 'E', 1).bestDiscard!;
+    expect(awayAfter(tiles, d, 'E', 1, 'karachi.east.chows.each.news')).toBe(5);
+  });
+});

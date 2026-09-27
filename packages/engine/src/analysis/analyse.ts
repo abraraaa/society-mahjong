@@ -92,9 +92,40 @@ export function analyseHand(
       (a.pattern.id < b.pattern.id ? -1 : 1),
   );
 
-  // `using` follows one concrete lay-out - the first the search found, which is its
-  // greedy best - so it reads as a plan and its spare tiles really are spare. `needs`
-  // is the union over every lay-out at that coverage, so a many-sided wait is whole.
+  // A candidate usually has several lay-outs at its best coverage, and the search finds
+  // them characters first, then dots, then bamboo. Following whichever came first meant
+  // the tutor protected an arbitrary one and threw away tiles an equally good lay-out,
+  // or the next hand along, was using: most often a run in bamboo. So each leading
+  // candidate follows the lay-out that keeps the most tiles the other leaders can use,
+  // the closer ones counting more; a tie keeps the search's own order.
+  const lead = rated.slice(0, topN);
+  const reachable = lead.map(({ cover }) => {
+    const u: Counts = new Map();
+    for (const sol of cover.solutions) maxInto(u, countKinds(sol.used));
+    return u;
+  });
+  lead.forEach((r, i) => {
+    if (r.cover.solutions.length < 2) return;
+    let best = r.concealedUsed;
+    let bestScore = -1;
+    for (const sol of r.cover.solutions) {
+      const used = countKinds(sol.used);
+      let score = 0;
+      reachable.forEach((u, j) => {
+        if (j === i) return;
+        for (const [k, n] of used) score += Math.min(n, u.get(k) ?? 0) / (j + 1);
+      });
+      if (score > bestScore + 1e-9) {
+        bestScore = score;
+        best = used;
+      }
+    }
+    r.concealedUsed = best;
+  });
+
+  // `using` follows that one concrete lay-out, so it reads as a plan and its spare tiles
+  // really are spare. `needs` is the union over every lay-out at that coverage, so a
+  // many-sided wait is whole.
   const candidates: PatternCandidate[] = rated.slice(0, limit).map(({ pattern, cover, away, concealedUsed }) => ({
     patternId: pattern.id,
     name: pattern.name,
@@ -123,8 +154,13 @@ export function analyseHand(
   }
 
   const ratings: TileRating[] = [];
+  // What the copy you'd throw is worth: a leader counts only if it uses every copy held.
+  // Rated per kind, a spare third 2 Characters looked busier than the one tile the next
+  // hand along was counting on, and the tutor threw the wrong one.
+  const lastCopy = new Map<TileKind, number>();
   for (const [kind, n] of held) {
     let usefulness = 0;
+    let last = 0;
     const serves: string[] = [];
     leaders.forEach(({ pattern, concealedUsed }, i) => {
       const used = concealedUsed.get(kind) ?? 0;
@@ -132,11 +168,14 @@ export function analyseHand(
       serves.push(pattern.id);
       // The closest candidate is the one the player is most likely on, so it counts most.
       usefulness += used / (i + 1);
+      if (used >= n) last += 1 / (i + 1);
     });
+    lastCopy.set(kind, last);
     ratings.push({ kind, held: n, usefulness, serves });
   }
   ratings.sort(
     (a, b) =>
+      lastCopy.get(a.kind)! - lastCopy.get(b.kind)! ||
       a.usefulness - b.usefulness ||
       connection(a.kind, held) - connection(b.kind, held) ||
       tileOrder(b.kind) - tileOrder(a.kind),
