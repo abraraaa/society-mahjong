@@ -314,6 +314,15 @@ export interface CoverSolution {
   readonly bindings: Bindings;
   /** the lay-out as groups, melds first, each concealed group holding its missing tiles too */
   readonly groups: readonly Group[];
+  /** per group: its tiles are named by the pattern itself (a meld, a white dragon pung, one of each wind), not one choice of many */
+  readonly fixed: readonly boolean[];
+}
+
+/** Whether a component names its tiles outright, so an empty group of it still means exactly those tiles. */
+function namesItsTiles(c: Component): boolean {
+  if (c.c === 'each') return true;
+  const filter = 'filter' in c ? c.filter : undefined;
+  return !!filter?.kinds && filter.kinds.length === 1;
 }
 
 /** A tile that would bring the hand closer to a pattern, and how it can arrive. */
@@ -610,7 +619,7 @@ function search(
           used.push(...usedAt[i]!);
           missing.push(...missAt[i]!);
         }
-        solutions.push({ used, missing, bindings, groups: layOut(bindings).groups });
+        solutions.push({ used, missing, bindings, groups: layOut(bindings).groups, fixed: [...meldGroups.map(() => true), ...order.map(namesItsTiles)] });
       }
       // A lay-out that spends the whole hand and wants nothing is a win: there is no
       // better coverage to find and nothing left to wait for.
