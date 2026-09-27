@@ -29,6 +29,7 @@ export const Tile = memo(function Tile({
   latest,
   onClick,
   className,
+  picture,
 }: {
   kind?: TileKind | undefined;
   size?: TileSize | undefined;
@@ -47,8 +48,21 @@ export const Tile = memo(function Tile({
   latest?: boolean | undefined;
   onClick?: (() => void) | undefined;
   className?: string | undefined;
+  /** a tile drawn to be looked at, inside something else you tap: a plain element, since a button can't hold buttons */
+  picture?: boolean | undefined;
 }) {
   const face: TileStyle | undefined = !back && kind ? { '--tile-face': `url("/tiles/${kind}.svg")` } : undefined;
+  if (picture) {
+    return (
+      <span
+        className={`tile tile-${size}${className ? ` ${className}` : ''}`}
+        style={face}
+        data-back={back ? 'true' : undefined}
+        data-dim={dim ? 'true' : undefined}
+        aria-hidden="true"
+      />
+    );
+  }
   return (
     <button
       type="button"

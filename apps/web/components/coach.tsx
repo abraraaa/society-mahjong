@@ -53,7 +53,18 @@ function Words({ text }: { text: string }) {
  * For a new player, the first time a word like "pung" appears it gets a
  * footnote; after that it is only underlined, and a tap explains it.
  */
-export const Coach = memo(function Coach({ plan, say, stage = 'solid' }: { plan?: string | null; say: readonly CoachSegment[]; stage?: CoachStage }) {
+export const Coach = memo(function Coach({
+  plan,
+  say,
+  stage = 'solid',
+  planInStrip = false,
+}: {
+  plan?: string | null;
+  say: readonly CoachSegment[];
+  stage?: CoachStage;
+  /** the plan strip shows the plan line, so the bubble keeps it only where the strip isn't drawn */
+  planInStrip?: boolean;
+}) {
   const text = say.map((s) => s.text).join('');
   const [expanded, setExpanded] = useState(false);
   const [clipped, setClipped] = useState(false);
@@ -85,12 +96,16 @@ export const Coach = memo(function Coach({ plan, say, stage = 'solid' }: { plan?
     setClipped(!expanded && el.scrollHeight > el.clientHeight + 1);
   }, [text, expanded, notes]);
 
-  if (!plan && say.length === 0) return null;
+  if ((!plan || planInStrip) && say.length === 0) return null;
   return (
     <div className={`coach${expanded ? ' expanded' : ''}`} onClick={() => clipped && setExpanded(true)}>
       <span className="avatar">T</span>
       <div className="body">
-        {plan && <p className="plan">{plan}</p>}
+        {plan && (
+          <p className="plan" data-strip={planInStrip ? '' : undefined}>
+            {plan}
+          </p>
+        )}
         {say.length > 0 && (
           <p className="say" ref={bodyRef}>
             {say.map((s, i) => (s.action ? <b key={i}>{<Words text={s.text} />}</b> : <Words key={i} text={s.text} />))}

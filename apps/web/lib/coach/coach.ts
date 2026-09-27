@@ -76,6 +76,7 @@ function targetOf(candidate: PatternCandidate | undefined, patterns: readonly Pa
     holding: candidate.usingConcealed,
     wantsFromDiscard: candidate.needsClaimable,
     wantsFromWall: candidate.needsFromWall,
+    layout: candidate.layout,
   };
 }
 

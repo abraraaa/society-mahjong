@@ -1208,3 +1208,98 @@ button.link-quiet {
   gap: 1rem;
   margin-top: 0.5rem;
 }
+
+/*
+  The plan strip: the player's nearest winning hand, just above their tiles.
+  A fixed 49px from the deal (a 14px caption, 4px, 31px of tiles) so nothing
+  on the table moves when the plan changes. Tiles are 22px, narrowing with
+  the row so a hand of four kongs still fits a 320px phone in one line.
+*/
+.plan-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  height: 49px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.plan-strip .plan {
+  display: flex;
+  min-width: 0;
+  height: 14px;
+  font: 500 11px/14px var(--font-sans);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgb(243 236 219 / 0.7);
+  white-space: nowrap;
+}
+.plan-strip .plan-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-strip .plan-count {
+  flex: none;
+}
+.strip-row {
+  --strip-n: 14;
+  --strip-g: 4;
+  container-type: inline-size;
+  display: flex;
+  justify-content: flex-start;
+  align-items: flex-end;
+  gap: 8px;
+  height: 31px;
+  overflow: hidden;
+}
+.strip-group {
+  display: flex;
+  gap: 1px;
+  flex: none;
+}
+.strip-row .tile {
+  /* 22px, or narrower when the row holds more tiles than fit (four kongs, a small phone). */
+  width: min(22px, calc((100cqw - var(--strip-g) * 8px - (var(--strip-n) - var(--strip-g) - 1) * 1px) / var(--strip-n)));
+  height: auto;
+  aspect-ratio: 60 / 84;
+  border-radius: 3px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
+  pointer-events: none;
+}
+.strip-group.is-exposed {
+  padding-bottom: 2px;
+  box-shadow: inset 0 -2px 0 var(--color-brass-400);
+}
+.tile.is-needed {
+  outline: 1px dashed rgb(243 236 219 / 0.55);
+  outline-offset: -1px;
+}
+.card-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 8px;
+  margin: 14px 0;
+}
+.card-row .strip-group {
+  gap: 2px;
+}
+.card-row .tile {
+  pointer-events: none;
+}
+/* The plan line moves out of the bubble into the strip, except on a phone
+   lying down, which has no height for the strip: there it stays in the bubble. */
+.coach .plan[data-strip] {
+  display: none;
+}
+@media (orientation: landscape) and (height < 32rem) {
+  .table-stage .plan-strip {
+    display: none;
+  }
+  .coach .plan[data-strip] {
+    display: block;
+  }
+}

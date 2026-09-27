@@ -5,6 +5,7 @@ import { Tile } from '@/components/tile';
 import { SeatPill } from '@/components/seat-pill';
 import { ClaimSheet } from '@/components/claim-sheet';
 import { Coach, CoachLine, TermProvider, useOpenTerm } from '@/components/coach';
+import { PlanStrip } from '@/components/plan-strip';
 import { River } from '@/components/river';
 import { riverOrder } from '@/lib/river';
 import { NO_SCORES, handDeltas, signed, standings, type Scores } from '@/lib/ledger';
@@ -185,7 +186,10 @@ function TableInner({
   );
   const river = <River tiles={riverTiles} claimable={view.phase === 'claim'} highlight={selected} />;
 
-  const bubble = advice ? <Coach plan={advice.plan} say={advice.say} stage={coach.stage} /> : null;
+  // New and learning players see their plan laid out above their tiles; a regular gets the one line in the bubble.
+  const withStrip = !!advice && advice.stage !== 'solid';
+  const strip = withStrip ? <PlanStrip target={advice.target} /> : null;
+  const bubble = advice ? <Coach plan={advice.plan} say={advice.say} stage={coach.stage} planInStrip={withStrip} /> : null;
 
   const actions = (
     <>
@@ -343,6 +347,7 @@ function TableInner({
 
         <section className="hand-dock flex-none">
           {clockEl}
+          {strip}
           {me.melds.length > 0 && myMelds}
           <div className="hand-tray" style={handStyle}>
             {handTiles('md')}
@@ -371,6 +376,7 @@ function TableInner({
 
         <div className="hand-dock col-span-3">
           {clockEl}
+          {strip}
           {me.melds.length > 0 && myMelds}
           <div className="hand-rail" style={handStyle}>
             {handTiles('lg')}
