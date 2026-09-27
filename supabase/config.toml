@@ -1,0 +1,3 @@
+# The Supabase CLI's project file. Only migrations are managed from here: the
+# hosted project's settings (auth, storage, API) are set in its dashboard.
+project_id = "society-mahjong"

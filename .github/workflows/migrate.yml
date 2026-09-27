@@ -1,0 +1,53 @@
+name: Migrate and deploy
+# Production, in order: apply any new migration to the Supabase project, then deploy the app, so the
+# code never runs against a database that doesn't have its columns yet. Every push to main goes this
+# way; with no new migration, the first step does nothing.
+#
+# One-time setup (docs/DATA-MODEL.md, "Setting up the pipeline"): the repository variable
+# SUPABASE_PROJECT_REF, the secrets SUPABASE_ACCESS_TOKEN, SUPABASE_DB_PASSWORD and VERCEL_DEPLOY_HOOK,
+# then one manual run with "adopt" ticked. Until the variable exists this workflow skips itself.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      adopt:
+        description: 'First run only: record 0001-0004, which were run by hand, as already applied'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: production
+  cancel-in-progress: false
+jobs:
+  migrate:
+    if: vars.SUPABASE_PROJECT_REF != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.118.0
+      - run: supabase link --project-ref "${{ vars.SUPABASE_PROJECT_REF }}"
+      - name: Adopt the migrations run by hand
+        if: inputs.adopt
+        run: supabase migration repair --status applied 0001 0002 0003 0004
+      - name: Show what will run
+        run: supabase migration list
+      - run: supabase db push
+  deploy:
+    needs: migrate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Deploy to Vercel
+        env:
+          HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then echo "No VERCEL_DEPLOY_HOOK: Vercel's own git deploy is still on."; exit 0; fi
+          curl -fsS -X POST "$HOOK"

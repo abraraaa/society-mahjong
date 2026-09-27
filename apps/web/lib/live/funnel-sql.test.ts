@@ -1,10 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 /*
  * docs/ops/funnel.sql is pasted into the Supabase SQL editor by hand, where a
  * typo in a column name only shows up as an error on the night someone wants
- * the numbers. These tests read it next to supabase/schema.sql: it must only
+ * the numbers. These tests read it next to the migrations: it must only
  * ever read, and every column it names on rooms, games, hand_results and
  * profiles must exist there.
  */
@@ -61,8 +61,9 @@ describe('docs/ops/funnel.sql', () => {
     expect(FUNNEL.toLowerCase()).not.toMatch(/\b(insert|update|delete|merge|upsert|truncate|drop|alter|create|grant|revoke|lock|for update|call|do)\b/);
   });
 
-  it('names only columns that supabase/schema.sql gives those tables', () => {
-    const tables = schemaColumns(read('supabase/schema.sql'));
+  it('names only columns the migrations give those tables', () => {
+    const migrations = readdirSync(new URL('supabase/migrations/', ROOT)).filter((f) => f.endsWith('.sql')).sort();
+    const tables = schemaColumns(migrations.map((f) => read(`supabase/migrations/${f}`)).join('\n'));
     const used = [...FUNNEL.matchAll(/\b([rghp])\.(\w+)\b/g)].map(([, alias, col]) => [ALIASES[alias!]!, col!] as const);
     expect(used.length).toBeGreaterThan(20);
     const missing = used.filter(([table, col]) => !tables.get(table)?.has(col)).map(([table, col]) => `${table}.${col}`);

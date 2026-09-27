@@ -2,11 +2,11 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 /*
- * There's no database here, so these tests read the SQL itself: supabase/schema.sql,
- * the full picture for a fresh project, and the migrations an existing project runs.
- * They replay the statements that decide who may see and change a profile (its
- * policies and its grants) the way Postgres applies them, and check that nothing
- * else in the schema reads profiles.
+ * These tests read the SQL itself: the migrations, in order, which are the whole
+ * schema (supabase/tests/apply.sh runs them on a real Postgres in CI; this is the
+ * quick check that runs with every unit test). They replay the statements that
+ * decide who may see and change a profile (its policies and its grants) the way
+ * Postgres applies them, and check that nothing else in the schema reads profiles.
  */
 
 const SUPABASE = new URL('../../../../supabase/', import.meta.url);
@@ -141,22 +141,17 @@ function summary(access: ProfileAccess) {
   };
 }
 
-const SCHEMA = read('schema.sql');
+/** Every migration, in order: the schema a fresh project ends up with. */
+const SCHEMA = MIGRATIONS.map((f) => read(`migrations/${f}`)).join('\n');
 const OWN_ROW_POLICIES = {
   'users read their own profile': 'for select to authenticated using (auth.uid() = id)',
   'users update their own profile': 'for update to authenticated using (auth.uid() = id) with check (auth.uid() = id)',
 };
 
-describe('supabase/schema.sql', () => {
-  it('holds every migration, word for word and in order', () => {
-    expect(MIGRATIONS.slice(0, 4)).toEqual(['0001_init.sql', '0002_rooms_games_live.sql', '0003_profile_columns.sql', '0004_profiles_private.sql']);
-    let from = 0;
-    for (const file of MIGRATIONS) {
-      const text = read(`migrations/${file}`).trim();
-      const at = SCHEMA.indexOf(text, from);
-      expect(at, `${file} is missing from schema.sql, or out of order`).toBeGreaterThanOrEqual(from);
-      from = at + text.length;
-    }
+describe('the migrations', () => {
+  it('run in a fixed order, numbered without gaps', () => {
+    expect(MIGRATIONS.slice(0, 5)).toEqual(['0001_init.sql', '0002_rooms_games_live.sql', '0003_profile_columns.sql', '0004_profiles_private.sql', '0005_settled_model.sql']);
+    MIGRATIONS.forEach((f, i) => expect(f.slice(0, 4)).toBe(String(i + 1).padStart(4, '0')));
   });
 });
 
@@ -206,7 +201,7 @@ describe('who may see and change a profile', () => {
 });
 
 describe('what reads profiles', () => {
-  it('nothing in the schema but the two sign-up triggers and the host foreign key touches profiles: no view, function or other policy', () => {
+  it('nothing in the schema but the two sign-up triggers and foreign keys touches profiles: no view, function or other policy', () => {
     const allowed = [
       /^create table public\.profiles \(/,
       /^alter table public\.profiles /,
@@ -214,6 +209,9 @@ describe('what reads profiles', () => {
       /^(grant|revoke) .+ on public\.profiles (to|from) /,
       // A foreign-key check is made by Postgres itself and is not bound by RLS.
       /^create table public\.rooms \(.* host_id uuid not null references public\.profiles \(id\),/,
+      /^alter table public\.games add column if not exists ended_by uuid references public\.profiles \(id\) on delete set null$/,
+      /^create table if not exists public\.game_players \(.* user_id uuid references public\.profiles \(id\) on delete set null,/,
+      /^create table if not exists public\.room_members \(.* user_id uuid not null references public\.profiles \(id\) on delete cascade,/,
       // Security definer: each writes only the row of the auth user that fired it (new.id).
       /^create or replace function public\.handle_new_user\(\) returns trigger language plpgsql security definer /,
       /^create or replace function public\.handle_user_updated\(\) returns trigger language plpgsql security definer /,
