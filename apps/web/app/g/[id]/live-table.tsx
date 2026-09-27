@@ -8,7 +8,7 @@ import { NameGate } from '@/components/name-gate';
 import { ConfirmSheet } from '@/components/confirm-sheet';
 import { Notice } from '@/components/notice';
 import { Trouble, Waiting } from '@/components/trouble';
-import { analyseFor, coachFor, stageFor, type CoachState } from '@/lib/coach';
+import { analyseFor, coachFor, type CoachState } from '@/lib/coach';
 import { retryCanHelp } from '@/lib/front-door';
 import { ApiError, api, listen } from '@/lib/live/client';
 import { plainError } from '@/lib/live/plain';
@@ -16,15 +16,12 @@ import { isPrivate, type GameSnapshot } from '@/lib/live/snapshot';
 import type { ClientAction } from '@/lib/live/types';
 import { NeedsCaptcha, ensureSession } from '@/lib/supabase/session';
 import { useGuestName } from '@/lib/supabase/use-guest-name';
+import { liveStage } from '@/lib/live/level';
+import { claimMsLeft } from '@/lib/live/timing';
+import { useTutorOn } from '@/lib/live/tutor-toggle';
 import { scoresFrom } from '@/lib/ledger';
 import { canDiscard, discardRefusal, standInNotice } from '@/lib/table-flow';
 import { POLL_MS, afterFailedLook, sendMove, shouldPoll, singleFlight, type LookQueue } from '@/lib/table-sync';
-
-interface Progress {
-  readonly handsFinished: number;
-  readonly wins: number;
-  readonly discardsMade: number;
-}
 
 /**
  * A seat at a live table. The server is the table; this component holds the
@@ -46,8 +43,8 @@ export function LiveTable({ gameId }: { gameId: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const clearNotice = useCallback(() => setNotice(null), []);
   const [leaving, setLeaving] = useState<'asking' | 'going' | null>(null);
-  const [tutorOn, setTutorOn] = useState(true);
-  const [progress, setProgress] = useState<Progress>({ handsFinished: 0, wins: 0, discardsMade: 0 });
+  // Remembered on this phone, so turning the tutor off survives a refresh.
+  const [tutorOn, toggleTutor] = useTutorOn();
   const supabaseRef = useRef<SupabaseClient | null>(null);
   // The newest snapshot taken, ahead of the render that shows it.
   const latestRef = useRef<GameSnapshot | null>(null);
@@ -55,8 +52,9 @@ export function LiveTable({ gameId }: { gameId: string }) {
   const sendingRef = useRef(false);
   const [sending, setSending] = useState(false);
 
-  // How long the claim window had left when this snapshot was made, measured on
-  // the server's clock so the phone's clock never enters into it.
+  // How long the claim sheet waits before passing for the player: the window
+  // left when this snapshot was made, on the server's clock so the phone's
+  // clock never enters into it, less a margin so the pass lands in time.
   const [claimMs, setClaimMs] = useState<number | null>(null);
   // The server's clock at the moment the snapshot arrived, against the phone's,
   // so the countdown is drawn in server time and a wrong phone clock cannot
@@ -70,7 +68,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
     // A table in hand answers whatever went wrong before it.
     setError(null);
     setDeadEnd(false);
-    setClaimMs(s.deadlines.claim === null ? null : s.deadlines.claim - s.now);
+    setClaimMs(claimMsLeft(s));
     const at = Date.now();
     setSync({ serverNow: s.now, at });
     setNow(at);
@@ -226,7 +224,8 @@ export function LiveTable({ gameId }: { gameId: string }) {
     return out;
   }, [snap]);
   const analysis = useMemo(() => (view && ruleset ? analyseFor(view, ruleset) : null), [view, ruleset]);
-  const stage = stageFor(progress);
+  // The level the server has tallied for this player, so a refresh or a second phone never starts the tutor from scratch.
+  const stage = view ? liveStage(snap?.stage, view) : 'new';
   const coach: CoachState | null = useMemo(
     () => (view && ruleset && analysis ? coachFor({ view, ruleset, analysis, stage, names }) : null),
     [view, ruleset, analysis, stage, names],
@@ -250,7 +249,6 @@ export function LiveTable({ gameId }: { gameId: string }) {
     }
     sendingRef.current = true;
     setSending(true);
-    if (action.type === 'discard') setProgress((p) => ({ ...p, discardsMade: p.discardsMade + 1 }));
     try {
       const out = await sendMove(
         action,
@@ -361,7 +359,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
         names={names}
         coach={coach}
         tutorOn={tutorOn}
-        onToggleTutor={() => setTutorOn((v) => !v)}
+        onToggleTutor={toggleTutor}
         onAct={(a) => void send(a)}
         busy={sending}
         onNextHand={() => {
@@ -370,7 +368,6 @@ export function LiveTable({ gameId }: { gameId: string }) {
             return;
           }
           if (sendingRef.current) return;
-          setProgress((p) => ({ ...p, handsFinished: p.handsFinished + 1, wins: p.wins + (view.result?.type === 'win' && view.result.winner === view.me ? 1 : 0) }));
           void send({ type: 'nextHand' });
         }}
         claimMs={claimMs}
