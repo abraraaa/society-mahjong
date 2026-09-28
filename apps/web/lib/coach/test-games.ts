@@ -64,13 +64,20 @@ export interface PlayOptions {
   readonly dealer?: Seat;
   /** every view seat 0 sees, from the deal to the end, in order */
   readonly onView?: (view: PrivatePlayerView) => void;
+  /** stop at the first view seat 0 sees that this is true of, once `onView` has had it */
+  readonly until?: (view: PrivatePlayerView) => boolean;
 }
 
-/** Plays one hand to its end (or 800 moves), and returns how it finished. */
-export function playHand({ seed, progress, dealer = 0, onView }: PlayOptions): HandState {
+/** Plays one hand to its end (or 800 moves, or `until`), and returns where it stopped. */
+export function playHand({ seed, progress, dealer = 0, onView, until }: PlayOptions): HandState {
   const random = createRng(`${seed}-bots`).next;
   let s: HandState = startHand(karachi, { seed, progress, dealer });
-  onView?.(viewFor(s, karachi, 0));
+  const seen = (state: HandState) => {
+    const view = viewFor(state, karachi, 0);
+    onView?.(view);
+    return until?.(view) ?? false;
+  };
+  if (seen(s)) return s;
   for (let step = 0; step < 800 && s.phase !== 'finished'; step++) {
     const seat = SEATS.find((x) => {
       const l = viewFor(s, karachi, x).legal;
@@ -81,7 +88,7 @@ export function playHand({ seed, progress, dealer = 0, onView }: PlayOptions): H
     const action = seat === 0 ? tutorMove(view) : (analysisBot(view, karachi, { strength: 'gentle', random }) ?? (view.legal.claims ? { type: 'pass', seat } : null));
     if (!action || action.type === 'resolveClaims') break;
     s = reduce(s, action, karachi);
-    onView?.(viewFor(s, karachi, 0));
+    if (seen(s)) break;
   }
   return s;
 }

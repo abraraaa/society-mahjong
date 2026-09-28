@@ -4,7 +4,7 @@ import { SEATS, acrossFrom, leftOf, rightOf, tileName, type Action, type Private
 import { Tile } from '@/components/tile';
 import { SeatPill } from '@/components/seat-pill';
 import { ClaimSheet } from '@/components/claim-sheet';
-import { Coach, CoachLine, TermProvider, TutorSheet, useOpenTerm, useSheetActions } from '@/components/coach';
+import { Coach, CoachLine, CoachNotes, TermProvider, TutorSheet, useLesson, useOpenTerm, useSheetActions } from '@/components/coach';
 import { PlanStrip } from '@/components/plan-strip';
 import { River } from '@/components/river';
 import { riverOrder } from '@/lib/river';
@@ -13,6 +13,9 @@ import { LIFT_SETTLE_MS, discardOffer, handBoundary, heldSelection, selectTile, 
 import type { CoachState } from '@/lib/coach';
 import { finalStandings } from '@/lib/live/final';
 import { endLine as endLineFor } from '@/lib/live/lifecycle-copy';
+import { cardClockFor, claimSheetClock } from '@/lib/coach/clock';
+import { CLAIM_PASS_MARGIN_MS } from '@/lib/live/timing';
+import type { Lesson } from '@/lib/coach/teach';
 
 /** A player's name inside a sentence, isolated so a right-to-left name can't reorder the words and clock around it. */
 const isolate = (name: string | undefined): string => `\u2068${name ?? ''}\u2069`;
@@ -154,6 +157,8 @@ function TableInner({
 
   const myTurn = view.phase === 'turn' && view.turn === ME && !!legal.discard;
   const advice = tutorOn ? coach : null;
+  // This view's first-sight footnotes, for the bubble and the sheets alike.
+  const lesson = useLesson(coach, tutorOn);
   const suggested = advice && advice.action.kind === 'discard' ? advice.action.tile : null;
   // The player's own pick wins over the tutor's, but only a tile they hold is ever offered.
   const offer = discardOffer(view, selected, suggested);
@@ -203,7 +208,7 @@ function TableInner({
   // New and learning players see their plan laid out above their tiles; a regular gets the one line in the bubble.
   const withStrip = !!advice && advice.stage !== 'solid';
   const strip = withStrip ? <PlanStrip target={advice.target} /> : null;
-  const bubble = advice ? <Coach plan={advice.plan} target={advice.target} say={advice.say} stage={coach.stage} planInStrip={withStrip} /> : null;
+  const bubble = advice ? <Coach plan={advice.plan} target={advice.target} say={advice.say} coach={advice} lesson={lesson} planInStrip={withStrip} /> : null;
 
   const actions = (
     <>
@@ -317,6 +322,19 @@ function TableInner({
   );
 
   const claimOpen = view.phase === 'claim' && !!legal.claims && legal.claims.length > 0 && !!view.lastDiscard;
+  // In a claim window the live table always passes claimMs (0 in the window's
+  // last moments, so never test it for truth), and solo never does. What a card
+  // or a word opened now says about the clock under it: the bots' claim held,
+  // or a live clock still running.
+  const live = claimMs != null;
+  const cardClock = cardClockFor({
+    claimOpen,
+    soloClaimTimed: claimOpen && !live && !legal.claims?.some((c) => c.type === 'win'),
+    clock: clock ?? null,
+    myTurn,
+    exchange: !!legal.exchange,
+    passMarginMs: CLAIM_PASS_MARGIN_MS,
+  });
 
   // The line above the hand that says whose clock is running, when it is
   // mine or when I am waiting on someone else's claim. A bot's clock never
@@ -406,11 +424,12 @@ function TableInner({
           discarderName={names[view.lastDiscard.from]}
           discardCount={view.discardCount}
           coach={coach}
+          lesson={lesson}
           options={legal.claims!}
           onClaim={(claim) => act({ type: 'claim', seat: ME, claim })}
           onPass={() => act({ type: 'pass', seat: ME })}
           busy={busy}
-          {...(claimMs ? { claimMs: Math.max(1000, claimMs), clock: 'server' as const } : {})}
+          {...claimSheetClock(claimMs)}
         />
       )}
 
@@ -423,6 +442,7 @@ function TableInner({
           hand={view.concealed}
           count={legal.exchange.count}
           coach={coach}
+          lesson={lesson}
           busy={busy}
           tooSoon={tooSoonToLift}
           onDone={(tiles) => act({ type: 'exchange', seat: ME, tiles })}
@@ -432,6 +452,7 @@ function TableInner({
       {(view.phase === 'finished' || gameOver) && (
         <ResultSheet
           coach={coach}
+          lesson={lesson}
           gameOver={!!gameOver}
           // A tap meant for the table just as the hand ended mustn't skip the debrief.
           onNext={() => !tooSoon() && onNextHand()}
@@ -446,7 +467,7 @@ function TableInner({
         />
       )}
 
-      <TutorSheet coach={coach} clock={null} />
+      <TutorSheet coach={coach} clock={cardClock} />
     </>
   );
 }
@@ -455,6 +476,7 @@ function ExchangeSheet({
   hand,
   count,
   coach,
+  lesson,
   busy,
   tooSoon,
   onDone,
@@ -462,6 +484,7 @@ function ExchangeSheet({
   hand: readonly TileKind[];
   count: number;
   coach: CoachState;
+  lesson: Lesson | null;
   busy: boolean;
   /** true just after the hand was dealt, when a tap is a leftover from the hand before */
   tooSoon: () => boolean;
@@ -486,9 +509,12 @@ function ExchangeSheet({
       <div className="sheet">
         <div className="grabber" />
         <h2 className="font-display mb-1 text-xl">Goulash exchange</h2>
-        <p className="text-ivory-200/70 mb-3 text-sm">
-          Choose {count} tiles to pass. <CoachLine say={coach.say} origin="exchange" />
-        </p>
+        <div className="mb-3">
+          <p className="text-ivory-200/70 text-sm">
+            Choose {count} tiles to pass. <CoachLine say={coach.say} origin="exchange" />
+          </p>
+          <CoachNotes coach={coach} lesson={lesson} where="sheet" />
+        </div>
         {/* Room above each row for a lifted tile and its ring (10px + 3px): the caption's margin and a pixel, and the row gap. */}
         <div className="flex flex-wrap justify-center gap-x-1 gap-y-[13px] pt-px">
           {hand.map((k, i) => (
@@ -521,6 +547,7 @@ function ExchangeSheet({
  */
 function ResultSheet({
   coach,
+  lesson,
   gameOver,
   onNext,
   view,
@@ -533,6 +560,7 @@ function ResultSheet({
   onEndGame,
 }: {
   coach: CoachState;
+  lesson: Lesson | null;
   gameOver: boolean;
   onNext: () => void;
   nextLabel?: string | undefined;
@@ -572,6 +600,7 @@ function ResultSheet({
             <p className="text-ivory-100/90 text-sm">
               <CoachLine say={coach.say} origin="result" />
             </p>
+            <CoachNotes coach={coach} lesson={lesson} where="sheet" />
           </>
         )}
         {gameOver ? (

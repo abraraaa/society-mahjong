@@ -147,6 +147,26 @@ export function shapeOf(patternId: string, patterns: readonly Pattern[] = []): s
   return pattern ? genericShape(pattern) : '';
 }
 
+/**
+ * A hand's footnote, for a title that names more than one pattern and whose
+ * patterns differ: one line that's true of every one of them. Only those
+ * titles are here (shape.test.ts checks it), so a footnote made from a single
+ * pattern reads the same as one made from the whole round.
+ */
+export const TITLE_SHAPES: Readonly<Record<string, string>> = {
+  'Chow + 5 Honours': 'three runs, one suit or one per suit, plus five winds and dragons',
+  'Pung + 5 Honours': 'three pungs, one suit or one per suit, plus five winds and dragons',
+  'Numbers Pungs': 'a pung of the same number in each suit, plus five winds and dragons',
+  'Apple Blossom': 'three runs, a white dragon pung and a green dragon pair',
+};
+
+/** A hand's footnote line: the shape every pattern with this title shares, or `TITLE_SHAPES[title]` where they differ. */
+export function noteShapeOf(title: string, patterns: readonly Pattern[]): string {
+  if (Object.prototype.hasOwnProperty.call(TITLE_SHAPES, title)) return TITLE_SHAPES[title]!;
+  const same = patterns.filter((p) => titleOf(p) === title);
+  return same.length > 0 ? shapeOf(same[0]!.id, patterns) : '';
+}
+
 /** Exported for the catalogue test: every pattern the ruleset can deal should be here. */
 export function hasWrittenShape(patternId: string): boolean {
   return patternId in SHAPES;
