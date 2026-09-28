@@ -18,7 +18,21 @@ import {
   type TileKind,
   type Wind,
 } from '@society/engine';
-import { admitsRun, analyseFor, claimLine, coachFor, runNoteApplies, runTileFor, shortOfLine, suggestedDiscard, washoutLine } from './coach';
+import {
+  admitsRun,
+  analyseFor,
+  claimLine,
+  coachFor,
+  discardLine,
+  kongTip,
+  runNoteApplies,
+  runTileFor,
+  shortOfLine,
+  suggestedDiscard,
+  tellsSwitch,
+  washoutLine,
+  type Reason,
+} from './coach';
 import { GLOSSARY } from './glossary';
 import { goalFor } from './goal';
 import { hasWrittenShape, titleOf } from './shape';
@@ -26,7 +40,7 @@ import { stripGroups } from './strip';
 import { firstLookFor } from './first-look';
 import { NOTE_BUDGET, createLessons, createTaughtStore, lessonFor, lineKey, noteText } from './teach';
 import { NAMES as LONG_NAMES, ROUNDS, coachOf, playHand, stickyCoach } from './test-games';
-import type { PlanMark } from './plan-mark';
+import { nextPlanMark, type PlanMark } from './plan-mark';
 import type { CoachSegment, CoachState } from './types';
 import { SAY_BUDGET, isolate, myDiscardCount, textOf, visibleLength } from './words';
 
@@ -1033,6 +1047,35 @@ describe('kongs: advised when they cost the hand nothing, and warned off when th
     expect(visibleLength(textOf(coach.say))).toBeLessThanOrEqual(SAY_BUDGET);
   });
 
+  it('fits K2 in this order: full reason, then short reason, each with the one-tile-to-go clause, before K2 is dropped', () => {
+    // 'Discard 3 Characters: ' is 22 characters, K2 47, and the bubble takes 105.
+    const long: Reason = { full: ['Monty Wriggly Snake v2 only needs two of them'], short: ["you've got a spare"] };
+    const mid: Reason = { full: ['Goulash has no use for it'], short: ['your hand has no use for it'] };
+    const wait = ' One tile to go: you need 3 Dots or 6 Dots.';
+    const out = ' One tile to go, but every tile that finishes it is already out.';
+    const said = (reason: Reason, progress: string) => textOf(discardLine('m3', reason, progress, true));
+    // 1. The full reason and K2 fit.
+    expect(said(mid, '')).toBe(`Discard 3 Characters: Goulash has no use for it.${K2}`);
+    // 2. The full reason with K2 is too long, the short one with K2 isn't: K2 stays, rather than the full reason without it.
+    expect(visibleLength(`Discard 3 Characters: ${long.full[0]}.${K2}`)).toBeGreaterThan(SAY_BUDGET);
+    expect(said(long, '')).toBe(`Discard 3 Characters: you've got a spare.${K2}`);
+    // 3. Neither fits with K2 and the clause: the full reason and the clause.
+    expect(said(mid, wait)).toBe(`Discard 3 Characters: Goulash has no use for it.${wait}`);
+    // 4. Then the short reason and the clause.
+    expect(said(long, wait)).toBe(`Discard 3 Characters: you've got a spare.${wait}`);
+    // 5. Then the short reason alone.
+    expect(said(mid, out)).toBe('Discard 3 Characters: your hand has no use for it.');
+    for (const [reason, progress] of [
+      [long, ''],
+      [mid, ''],
+      [long, wait],
+      [mid, wait],
+    ] as const)
+      expect(visibleLength(said(reason, progress))).toBeLessThanOrEqual(SAY_BUDGET);
+    // With no kong to warn off, K2 is never tried.
+    expect(textOf(discardLine('m3', long, '', false))).toBe(`Discard 3 Characters: ${long.full[0]}.`);
+  });
+
   it('says it after a switch line too', () => {
     const view = kongView('E', 1, costly, ['s3']);
     const lead = analyseFor(view, karachi).candidates[0]!;
@@ -1047,6 +1090,39 @@ describe('kongs: advised when they cost the hand nothing, and warned off when th
     expect(coach.planSwitch).not.toBeNull();
     expect(textOf(coach.say)).toMatch(/^Discard .+\. Switching to .+ Don't press Kong: it would set your hand back\.$/);
     expect(visibleLength(textOf(coach.say))).toBeLessThanOrEqual(SAY_BUDGET);
+  });
+
+  it('holds a plan switch due on a turn it advises a free kong back for the next turn, which says it', () => {
+    // East hand 2: the goulash tiles make Pung + 5 Honours, and their four 2 Bamboo cost nothing to kong. The view
+    // before was on another plan, and nothing has told the switch yet.
+    const view = kongView('E', 1, free, ['s2']);
+    const analysis = analyseFor(view, karachi);
+    const lead = analysis.candidates[0]!;
+    const other = karachi.handSpec(view.progress).patterns.find((p) => titleOf(p) !== titleOf(lead))!;
+    const before: PlanMark = { game: 'g', hand: view.progress.handIndex, patternId: other.id, title: titleOf(other), switched: null };
+    expect(kongTip({ view, ruleset: karachi, analysis, stage: 'learning', firstLook: false })).toBe('s2');
+    expect(tellsSwitch({ view, ruleset: karachi, analysis, stage: 'learning', firstLook: false })).toBe(false);
+    // The hook's order: the mark after the view, then the tutor's words on it.
+    const onKong = nextPlanMark(before, 'g', view, lead, tellsSwitch({ view, ruleset: karachi, analysis, stage: 'learning', firstLook: false }));
+    expect(onKong?.switched).toEqual({ fromId: other.id, fromTitle: titleOf(other), toldAt: null });
+    const kong = coachAt(view, { mark: onKong!, analysis });
+    expect(kong.action.kind).toBe('kong');
+    expect(kong.planSwitch).toBeNull();
+    expect(textOf(kong.say)).toMatch(/^Kong 2 Bamboo: /);
+    // The replacement draw: her turn again, with no kong on offer. The switch is told there.
+    const drawn = { ...view, seq: 6, legal: { discard: free } } as unknown as PrivatePlayerView;
+    const drawnAnalysis = analyseFor(drawn, karachi, lead.patternId);
+    const told = nextPlanMark(
+      onKong,
+      'g',
+      drawn,
+      drawnAnalysis.candidates[0],
+      tellsSwitch({ view: drawn, ruleset: karachi, analysis: drawnAnalysis, stage: 'learning', firstLook: false }),
+    );
+    expect(told?.switched?.toldAt).toBe(6);
+    const next = coachAt(drawn, { mark: told!, analysis: drawnAnalysis });
+    expect(next.planSwitch?.from.title).toBe(titleOf(other));
+    expect(textOf(next.say)).toMatch(/^Discard [^.]+\. Switching to /);
   });
 
   it("keeps a first look's aim, and its tile to let go, with a free kong on offer: a lit Kong with nothing said would only puzzle", () => {

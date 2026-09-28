@@ -1,7 +1,7 @@
 'use client';
 import { useMemo, useState } from 'react';
 import type { PrivatePlayerView, Ruleset, Seat } from '@society/engine';
-import { analyseFor, coachFor } from './coach';
+import { analyseFor, coachFor, tellsSwitch } from './coach';
 import { nextPlanMark, preferFor, samePlanMark, type PlanMark } from './plan-mark';
 import type { CoachStage, CoachState } from './types';
 
@@ -48,7 +48,12 @@ export function useCoach(source: CoachSource | null): CoachState | null {
   const [mark, setMark] = useState<PlanMark | null>(null);
   const prefer = view && game !== null ? preferFor(mark, game, view) : undefined;
   const analysis = useMemo(() => (view && ruleset ? analyseFor(view, ruleset, prefer) : null), [view, ruleset, prefer]);
-  const next = view && game !== null && analysis ? nextPlanMark(mark, game, view, analysis.candidates[0]) : mark;
+  // A switch is told on the next turn whose bubble can say it: not one whose tip is a kong.
+  const tells = useMemo(
+    () => (view && ruleset && analysis && stage ? tellsSwitch({ view, ruleset, analysis, stage, firstLook }) : false),
+    [view, ruleset, analysis, stage, firstLook],
+  );
+  const next = view && game !== null && analysis ? nextPlanMark(mark, game, view, analysis.candidates[0], tells) : mark;
   if (!samePlanMark(next, mark)) setMark(next);
   return useMemo(
     () => (view && ruleset && analysis && stage && names ? coachFor({ view, ruleset, analysis, stage, names, firstLook, mark: next }) : null),

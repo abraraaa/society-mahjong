@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { karachi, startHand, viewFor, type GameProgress, type PublicPlayerView, type Seat } from '@society/engine';
+import { karachi, reduce, startHand, viewFor, type GameProgress, type PublicPlayerView, type Seat } from '@society/engine';
 import {
   exchangeGlow,
   exchangeHeading,
   exchangeProgress,
   exchangeStep,
   goesToLine,
+  passedKeys,
   passedLine,
   receiverOf,
   tileKeys,
@@ -126,5 +127,38 @@ describe('waitingFor', () => {
 
   it('is null when everyone has passed', () => {
     expect(waitingFor({ me: 2, players: players([0, 1, 2, 3]) }, NAMES)).toBeNull();
+  });
+});
+
+describe('passedKeys', () => {
+  const hand = ['s1', 's1', 'p4', 'm9', 'WE', 'DR'] as const;
+
+  it('keeps her own picks lifted when they are the tiles the table recorded', () => {
+    // The second 1 Bamboo, not the first: the very copy she picked stays up.
+    expect(passedKeys(hand, ['s1#1', 'm9#0', 'DR#0'], ['DR', 's1', 'm9'])).toEqual(['s1#1', 'm9#0', 'DR#0']);
+  });
+
+  it('lifts the tiles the table recorded when the clock passed for her, or her other phone passed others', () => {
+    // Nothing picked: the table passed for her.
+    expect(passedKeys(hand, [], ['p4', 'WE', 's1'])).toEqual(['s1#0', 'p4#0', 'WE#0']);
+    // Three picked, but other tiles went.
+    expect(passedKeys(hand, ['m9#0', 'DR#0', 's1#1'], ['p4', 'WE', 's1'])).toEqual(['s1#0', 'p4#0', 'WE#0']);
+    // A pick for a tile no longer in the hand doesn't count.
+    expect(passedKeys(hand, ['m9#0', 'DR#0', 'WW#0'], ['m9', 'DR', 'p4'])).toEqual(['p4#0', 'm9#0', 'DR#0']);
+  });
+
+  it("lifts nothing when the table hasn't said what went", () => {
+    expect(passedKeys(hand, ['s1#0', 'p4#0', 'm9#0'], undefined)).toEqual([]);
+  });
+
+  it('reads what went from the view, as the engine keeps it until everyone has passed', () => {
+    let s = startHand(karachi, { seed: 'exchange-0', progress: WEST, dealer: 0 });
+    const concealed = s.players[0].concealed;
+    const tiles = [concealed[4]!, concealed[0]!, concealed[9]!];
+    s = reduce(s, { type: 'exchange', seat: 0, tiles }, karachi);
+    const view = viewFor(s, karachi, 0);
+    const keys = tileKeys(view.concealed);
+    const lifted = passedKeys(view.concealed, [], view.myExchange).map((k) => view.concealed[keys.indexOf(k)]);
+    expect(lifted.sort()).toEqual([...tiles].sort());
   });
 });

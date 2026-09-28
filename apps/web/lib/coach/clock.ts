@@ -79,6 +79,21 @@ export function claimBar(fullMs: number, leftMs: number): { readonly durationMs:
 }
 
 /**
+ * The window's whole length for the claim sheet's bar, as the sheet stores it: what this discard's sheet first had,
+ * and longer whenever a fresh table for the same discard brings more time than that. The bar is then drawn full
+ * once (`claimBar`), and every later table measures against the longer length, so the bar never jumps back up.
+ * A new discard starts afresh. The same object when nothing changes, so a caller can compare it.
+ */
+export interface ClaimWindow {
+  readonly discardCount: number;
+  readonly ms: number;
+}
+export function nextClaimWindow(prev: ClaimWindow | null, discardCount: number, claimMs: number): ClaimWindow {
+  if (!prev || prev.discardCount !== discardCount) return { discardCount, ms: claimMs };
+  return claimMs > prev.ms ? { discardCount, ms: claimMs } : prev;
+}
+
+/**
  * What a card or a word says about the clock under it: the claim held (on the
  * bots), a live clock still running and how long it has, or nothing.
  */

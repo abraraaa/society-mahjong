@@ -8,11 +8,13 @@ import {
   claimTimer,
   mmss,
   msLeft,
+  nextClaimWindow,
   pauseCountdown,
   resumeCountdown,
   startCountdown,
   stepsAside,
   type CardClock,
+  type ClaimWindow,
 } from './clock';
 
 describe('a countdown that can be held', () => {
@@ -113,6 +115,31 @@ describe("the claim sheet's bar", () => {
     expect(claimBar(8_000, 9_000)).toEqual({ durationMs: 9_000, delayMs: 0 });
     expect(claimBar(8_000, 0)).toEqual({ durationMs: 8_000, delayMs: -8_000 });
     expect(claimBar(8_000, -500)).toEqual({ durationMs: 8_000, delayMs: -8_000 });
+  });
+
+  it('measures every later table against the longer length once a fresh table brings more time, so the bar never jumps back up', () => {
+    // A window that opened with 8 s, then a fresh table for the same discard with 20 s left, then 14 s left.
+    const tables = [8_000, 20_000, 14_000, 2_000];
+    let whole: ClaimWindow | null = null;
+    const drawn = tables.map((left) => {
+      whole = nextClaimWindow(whole, 3, left);
+      const { durationMs, delayMs } = claimBar(whole.ms, left);
+      return 1 + delayMs / durationMs; // how full the bar is drawn
+    });
+    expect(drawn[0]).toBe(1);
+    expect(drawn[1]).toBe(1);
+    // Six seconds gone of twenty, not six of eight: the bar goes on down from where it was, never back up to full.
+    expect(drawn[2]).toBeCloseTo(14_000 / 20_000);
+    expect(drawn[3]).toBeCloseTo(2_000 / 20_000);
+    for (let i = 1; i < drawn.length; i++) expect(drawn[i]!).toBeLessThanOrEqual(drawn[i - 1]!);
+  });
+
+  it('keeps the stored length while nothing brings more, and starts afresh with a new discard', () => {
+    const first = nextClaimWindow(null, 3, 8_000);
+    expect(first).toEqual({ discardCount: 3, ms: 8_000 });
+    expect(nextClaimWindow(first, 3, 5_000)).toBe(first);
+    expect(nextClaimWindow(first, 3, 8_000)).toBe(first);
+    expect(nextClaimWindow(first, 4, 5_000)).toEqual({ discardCount: 4, ms: 5_000 });
   });
 });
 

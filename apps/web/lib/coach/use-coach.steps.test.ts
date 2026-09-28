@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { karachi, type PrivatePlayerView } from '@society/engine';
+import { karachi, type PrivatePlayerView, type TileKind } from '@society/engine';
 import { preferFor, type PlanMark } from './plan-mark';
 import { NAMES, ROUNDS, coachOf, playHand, stickyCoach } from './test-games';
 import type { CoachInput } from './coach';
@@ -116,5 +116,38 @@ describe('useCoach, view after view', () => {
       // In North the held plan really does lead where the tutor with no plan would have named the other hand.
       if (game === 'N-1') expect(steadied).toBeGreaterThan(0);
     }
+  });
+
+  it('keeps a switch due on a turn whose tip is a free kong for the next turn, and tells it there', () => {
+    // East hand 2. Someone else's turn, on Chow + 5 Honours; then her turn, whose tiles make Pung + 5 Honours with a
+    // kong of 2 Bamboo that costs nothing; then the replacement draw, with no kong on offer.
+    const at = (seq: number, tiles: readonly TileKind[], mine: boolean, kong?: readonly TileKind[]) =>
+      ({
+        progress: { roundWind: 'E', roundIndex: 0, handInRound: 1, handIndex: 1 },
+        me: 0,
+        seq,
+        concealed: tiles,
+        players: (['E', 'S', 'W', 'N'] as const).map((seatWind, seat) => ({ seat, seatWind, melds: [], discards: [], bonus: [] })),
+        phase: 'turn',
+        turn: mine ? 0 : 1,
+        discardCount: 4,
+        legal: mine ? { discard: tiles, ...(kong ? { kong } : {}) } : {},
+        lastDiscard: null,
+        result: null,
+        revealed: {},
+        events: [{ seq: 1, type: 'discarded', seat: 0, tile: 'p9' }],
+      }) as unknown as PrivatePlayerView;
+    const runs: TileKind[] = ['s2', 's2', 's2', 's2', 's3', 's4', 'p5', 'p6', 'p7', 'm7', 'm8', 'm9', 'WE'];
+    const pungs: TileKind[] = ['s2', 's2', 's2', 's2', 'p5', 'p5', 'p5', 'm7', 'm7', 'm7', 'WE', 'WE', 'DR', 'DG'];
+    hooks.unmount();
+    const coachAt = (view: PrivatePlayerView) => hooks.render(() => useCoach({ view, ruleset: karachi, stage: 'learning', names: NAMES, game: 'E-2' }))!;
+    expect(coachAt(at(3, runs, false)).target?.title).toBe('Chow + 5 Honours');
+    const kong = coachAt(at(5, pungs, true, ['s2']));
+    expect(kong.target?.title).toBe('Pung + 5 Honours');
+    expect(kong.action).toMatchObject({ kind: 'kong', tile: 's2' });
+    expect(kong.planSwitch).toBeNull();
+    const drawn = coachAt(at(6, pungs, true));
+    expect(drawn.planSwitch?.from.title).toBe('Chow + 5 Honours');
+    expect(textOf(drawn.say)).toMatch(/^Discard [^.]+\. Switching to Pung \+ 5 Honours/);
   });
 });

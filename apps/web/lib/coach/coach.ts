@@ -224,7 +224,7 @@ function named(ref: CoachHandRef): CoachSegment {
 }
 
 /** A piece of a sentence: plain words, or a segment (the bold action, a hand's name). */
-type Part = CoachSegment | string;
+export type Part = CoachSegment | string;
 
 /** A sentence from its parts, neighbouring plain words joined into one segment so a glossary phrase is never split across two. */
 function line(...parts: readonly Part[]): CoachSegment[] {
@@ -244,7 +244,7 @@ function asMine(ref: CoachHandRef, whose: 'yours' | 'ifClaimed'): CoachHandRef {
   return { patternId: ref.patternId, title: ref.title, shape: ref.shape, whose, away: 0, layout: ref.layout, note: ref.note };
 }
 
-interface Reason {
+export interface Reason {
   readonly full: readonly Part[];
   readonly short: readonly Part[];
 }
@@ -399,12 +399,33 @@ export function suggestedDiscard(action: CoachAction): TileKind | null {
  * bots' own rule (bots/analysis.ts). Such a kong costs nothing and draws an extra tile. With no hand in reach,
  * nothing a kong does can cost it one.
  */
-function freeKong(input: CoachInput, spec: ReturnType<Ruleset['handSpec']>, target: CoachTarget | null): TileKind | null {
-  const { view, ruleset } = input;
-  const before = target?.away ?? Number.POSITIVE_INFINITY;
+function freeKong(input: Pick<CoachInput, 'view' | 'ruleset' | 'analysis'>): TileKind | null {
+  const { view, ruleset, analysis } = input;
+  const spec = ruleset.handSpec(view.progress);
+  const before = analysis.candidates[0]?.away ?? Number.POSITIVE_INFINITY;
   const awayAfter = (k: TileKind) =>
     analyseHand(handAfterKong(handOf(view), k), spec.patterns, ctxOf(view), ruleset.guards, { claims: ruleset.claims }).candidates[0]?.away ?? Number.POSITIVE_INFINITY;
   return view.legal.kong?.find((k) => awayAfter(k) <= before) ?? null;
+}
+
+/**
+ * The kong the tutor advises on this view (K1), or null: the player's own turn, with no win, a kong on offer that
+ * costs nothing, and not a first look, whose bubble is the round's aim (except for a regular, who has no aim bubble).
+ */
+export function kongTip(input: Pick<CoachInput, 'view' | 'ruleset' | 'analysis' | 'stage' | 'firstLook'>): TileKind | null {
+  const { view } = input;
+  if (view.phase !== 'turn' || view.turn !== view.me || view.legal.win || !view.legal.kong?.length) return null;
+  if (input.firstLook && input.stage !== 'solid') return null;
+  return freeKong(input);
+}
+
+/**
+ * Whether the tutor's bubble on this view can tell a plan switch (plan-mark.ts): a turn view (`isTurnView`) whose
+ * tip is a discard. A turn whose tip is a kong says K1 and nothing else, so a switch due then waits for the next
+ * turn view, the replacement draw's if the player takes the kong. The hook passes this to `nextPlanMark`.
+ */
+export function tellsSwitch(input: Pick<CoachInput, 'view' | 'ruleset' | 'analysis' | 'stage' | 'firstLook'>): boolean {
+  return isTurnView(input.view) && kongTip(input) === null;
 }
 
 /** K2, after a discard's reason on a turn whose only kongs would set the hand back: the Kong button is there, so say why not. */
@@ -633,7 +654,7 @@ function adviceFor(input: CoachInput): CoachState {
   // tile to let go is the tip there, as on any first look.
   const aimFirst = firstLook && !quiet;
   const kongs = myTurn && !aimFirst ? (view.legal.kong ?? []) : [];
-  const kong = kongs.length > 0 ? freeKong(input, spec, target) : null;
+  const kong = kongs.length > 0 ? kongTip(input) : null;
   const action: CoachAction = kong ? { kind: 'kong', tile: kong, discard: discardTile } : myTurn && discardTile ? { kind: 'discard', tile: discardTile } : { kind: 'wait' };
   const highlight = action.kind === 'discard' || action.kind === 'kong' ? [action.tile] : [];
 
@@ -708,14 +729,23 @@ function adviceFor(input: CoachInput): CoachState {
       planSwitch: { from: planSwitch.from, closerBy: planSwitch.closerBy },
     };
   }
-  // With K2: the full reason and the one-tile-to-go clause, then the short reason, before K2 itself is dropped.
-  const say = fitting([
-    ...(k2.length > 0 ? [line(lead, ': ', ...reason.full, `.${progress}`, ...k2), line(lead, ': ', ...reason.short, `.${progress}`, ...k2)] : []),
+  const say = discardLine(action.tile, reason, progress, k2.length > 0);
+  return { ...base, moment, action, say, reason: textOf(line(...reason.full)), highlight, teach };
+}
+
+/**
+ * The discard tip's line, the first that fits of: the full reason with `progress` (the one-tile-to-go clause), then
+ * the short reason with it, then the short reason alone. With `warnKong`, K2 goes after the first two of those, and
+ * both are tried with it before K2 itself is dropped.
+ */
+export function discardLine(tile: TileKind, reason: Reason, progress: string, warnKong: boolean): CoachSegment[] {
+  const lead = act(`Discard ${tileName(tile)}`);
+  return fitting([
+    ...(warnKong ? [line(lead, ': ', ...reason.full, `.${progress}`, KONG_SETS_BACK), line(lead, ': ', ...reason.short, `.${progress}`, KONG_SETS_BACK)] : []),
     line(lead, ': ', ...reason.full, `.${progress}`),
     line(lead, ': ', ...reason.short, `.${progress}`),
     line(lead, ': ', ...reason.short, '.'),
   ]);
-  return { ...base, moment, action, say, reason: textOf(line(...reason.full)), highlight, teach };
 }
 
 /**
