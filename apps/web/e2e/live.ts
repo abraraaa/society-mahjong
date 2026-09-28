@@ -304,8 +304,8 @@ export class Lobby {
   }
 }
 
-/** Open the invite link as a signed-in guest whose name is remembered, with the room routes answered by the test. */
-export async function openLobby(page: Page, routes: RoomRoutes): Promise<Lobby> {
+/** Open the invite link as a signed-in guest whose name is remembered, with the room routes answered by the test. `clock` installs Playwright's fake clock first, as openTable's does. */
+export async function openLobby(page: Page, routes: RoomRoutes, opts: { clock?: boolean } = {}): Promise<Lobby> {
   const l = new Lobby(page);
   await prepare(page);
   const log = (kind: Call['kind'], route: Route, sent?: unknown): Call => {
@@ -333,6 +333,7 @@ export async function openLobby(page: Page, routes: RoomRoutes): Promise<Lobby> 
     const reply = routes.sit ? routes.sit(sent, call.n) : { status: 500, body: { error: 'something went wrong' } };
     if (reply !== 'hold') await answer(route, reply);
   });
+  if (opts.clock) await page.clock.install();
   await page.goto(`/r/${ROOM_CODE}`);
   return l;
 }

@@ -145,6 +145,10 @@ export interface Fixtures {
   readonly handDone: GameSnapshot;
   /** That result sheet, the game ended there by the host, Amna: her final table. */
   readonly endedByHost: GameSnapshot;
+  /** That result sheet after Amna took a break between hands, from a Leave sheet still open as the hand ended: Bilal has the host's powers while she's away. */
+  readonly breakBetween: GameSnapshot;
+  /** The same, after her "I'm back": the host's result sheet again, Next hand still to tap. */
+  readonly breakBetweenBack: GameSnapshot;
   /** That result sheet after Amna's tap of Next hand: waiting for Bilal, twenty seconds on the clock. */
   readonly readyWaiting: GameSnapshot;
   /** That result sheet after Bilal's tap of Next hand, Amna still to tap: twenty seconds on the clock. */
@@ -284,6 +288,10 @@ function build(): Fixtures {
   const dealt = step({ game: amnaVoted, ruleset: karachi, seats: SEATS, policy: POLICY, now: amnaVoted.tableState.ready!.dealAt + 1, seed: live.seed });
   const doneScores = [...(live.end.tableState.scores ?? [0, 0, 0, 0])];
 
+  // Between hands, on that finished hand, Amna takes a break from the Leave sheet; then she's back.
+  const brokeBetween = step({ game: live.end, ruleset: karachi, seats: SEATS, policy: POLICY, now: MADE_AT, change: { type: 'break', seat: ME } });
+  const backBetween = step({ game: brokeBetween, ruleset: karachi, seats: SEATS, policy: POLICY, now: MADE_AT + 1, change: { type: 'back', seat: ME } });
+
   // The host ends the game on the finished hand, as the end route's step does: that step's end is what the page is told.
   const byHost = step({ game: live.end, ruleset: karachi, seats: SEATS, policy: POLICY, now: MADE_AT, end: { how: 'host', by: { userId: USER_ID, name: USER_NAME } } });
   const hostOver = byHost.tableState.over!;
@@ -334,6 +342,13 @@ function build(): Fixtures {
     bilalReady: snapshot(bilalVoted.state, 10, bilalVoted.deadlines, 'active', { scores: doneScores, ...waitOf(bilalVoted) }),
     nextDealt: snapshot(dealt.state, 11, dealt.deadlines, 'active', { scores: [...(dealt.tableState.scores ?? [0, 0, 0, 0])], ...waitOf(dealt) }),
     endedByHost: snapshot(byHost.state, 10, byHost.deadlines, 'finished', { scores: [...hostOver.scores], ended: publicGameOver(hostOver, USER_ID) }),
+    breakBetween: snapshot(brokeBetween.state, 10, brokeBetween.deadlines, 'active', {
+      scores: doneScores,
+      ...presence(brokeBetween.tableState.absence),
+      ...waitOf(brokeBetween),
+      isHost: false,
+    }),
+    breakBetweenBack: snapshot(backBetween.state, 11, backBetween.deadlines, 'active', { scores: doneScores, ...presence(backBetween.tableState.absence), ...waitOf(backBetween) }),
     lastHandOver,
     lastHandOverGuest: { ...lastHandOver, isHost: false },
     westSent: snapshot(west.w.state, 1, west.w.deadlines),

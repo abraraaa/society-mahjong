@@ -15,16 +15,20 @@ import { cleanDisplayName } from '../../../../../lib/live/validate';
  * (the sit route). A room whose game has ended,
  * but whose end isn't all recorded yet, is finished first (settleRoomGame), so a friend arriving after the last hand
  * finds the room between games rather than "already started".
+ *
+ * `rejoin: true` is the lobby asking by itself for someone it found without a seat between games: they're sat down again only
+ * if a newcomer was given their seat, never after they left (joinRoom's 'rejoin').
  */
 export async function POST(req: NextRequest, ctx: { params: Promise<{ code: string }> }) {
   try {
     const user = await currentUser();
     if (!user) throw new HttpError(401, 'sign in first');
     const { code } = await ctx.params;
-    const body = (await req.json().catch(() => null)) as { name?: unknown } | null;
+    const body = (await req.json().catch(() => null)) as { name?: unknown; rejoin?: unknown } | null;
     const name = cleanDisplayName(body?.name) ?? user.name;
     const now = Date.now();
-    const { room, seated, displaced, circle, offer } = await joinRoom(await settleRoomGame(await requireRoom(code), now), user.id, name, now);
+    const how = body?.rejoin === true ? 'rejoin' : 'open';
+    const { room, seated, displaced, circle, offer } = await joinRoom(await settleRoomGame(await requireRoom(code), now), user.id, name, now, how);
     const snap = roomSnapshot(room, user.id, now, circle, offer);
     if (seated) {
       await broadcast([roomPoke(room.id, 'seats', { seats: snap.seats })]);

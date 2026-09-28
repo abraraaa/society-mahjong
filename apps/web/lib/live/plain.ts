@@ -12,6 +12,7 @@ const UNDER_WAY = "All four seats are taken in this game. When it's over, open t
 const NO_TABLE = "There's no table with that code. Check it with whoever sent you the link.";
 const NOT_SEATED = "You're not in this game. Open the invite link again: if a bot's playing a seat, you can take over from it.";
 const FULL = 'All four seats are taken. If someone gets up, try again, or host a table of your own.';
+const LEFT = "You got up from it on another phone or tab. Sit back down if you'd still like to play.";
 const SEAT_TAKEN = 'Someone took that seat just as you did. Try again for another.';
 const NOT_FREE = "That seat isn't free. Open the invite link again to see where you can sit.";
 const CLOSED = "This table's been quiet for a while, so it's closed to new players. Ask someone who plays at this table to open the link, then try again.";
@@ -75,6 +76,8 @@ const BY_MESSAGE = new Map<string, string>(
     'this table has already started': UNDER_WAY,
     'no room with that code': NO_TABLE,
     'this table is full': FULL,
+    // The lobby's own rejoin, for someone who got up from the lobby on another phone or tab (joinTroubleTitle heads it).
+    'you left this table': LEFT,
     'this table has closed': CLOSED,
     'not at this table': NOT_SEATED,
     'not seated at this table': NOT_SEATED,
@@ -145,5 +148,15 @@ export function plainError(err: unknown): string {
  */
 export function joinRetryLabel(err: unknown): string {
   const status = typeof (err as { status?: unknown } | null)?.status === 'number' ? (err as { status: number }).status : 0;
+  if (plainError(err) === LEFT) return 'Sit back down';
   return status === 409 && plainError(err) !== SEAT_TAKEN ? 'Check again' : 'Try again';
+}
+
+/**
+ * The heading over a join that didn't work, when "That didn't work." would be
+ * wrong: someone who got up from the lobby on another phone or tab did what
+ * they meant to. Undefined keeps the usual heading.
+ */
+export function joinTroubleTitle(err: unknown): string | undefined {
+  return plainError(err) === LEFT ? "You've left this table." : undefined;
 }

@@ -3,7 +3,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { ApiError } from './client';
-import { joinRetryLabel, plainError } from './plain';
+import { joinRetryLabel, joinTroubleTitle, plainError } from './plain';
 import { parseRoomRequest } from './validate';
 
 const FALLBACK = 'Something went wrong at our end. Give it another go.';
@@ -199,6 +199,14 @@ describe('joinRetryLabel', () => {
   it('asks the visitor to check again when the table is under way or full, since an instant retry would meet the same answer', () => {
     expect(joinRetryLabel(new ApiError(409, 'this table has already started'))).toBe('Check again');
     expect(joinRetryLabel(new ApiError(409, 'this table is full'))).toBe('Check again');
+  });
+
+  it('offers to sit back down, under its own heading, someone the lobby found had got up on another phone or tab', () => {
+    const left = new ApiError(409, 'you left this table');
+    expect(plainError(left)).toBe("You got up from it on another phone or tab. Sit back down if you'd still like to play.");
+    expect(joinRetryLabel(left)).toBe('Sit back down');
+    expect(joinTroubleTitle(left)).toBe("You've left this table.");
+    expect(joinTroubleTitle(new ApiError(409, 'this table is full'))).toBeUndefined();
   });
 
   it('keeps Try again for a seat lost in the same instant, where another go at once can work, and for everything else', () => {

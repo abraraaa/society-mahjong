@@ -375,6 +375,73 @@ describe('standing up from the lobby', () => {
     });
     expect(store.saveSeats).not.toHaveBeenCalled();
   });
+
+  it('with their seat already taken by a newcomer, forgets that it was, so a rejoin on its way or on another phone can’t sit them down again', async () => {
+    const zaraForSana = { kind: 'human', userId: 'u-zara', name: 'Zara', displaced: 'u-sana' } as const;
+    const between: RoomRow = { ...room, status: 'finished', seats: [abrar, zaraForSana, { kind: 'human', userId: 'u-hana', name: 'Hana' }, null] };
+    const after = await leaveRoom(between, 'u-sana');
+    expect(vi.mocked(store.saveSeats).mock.calls[0]![1]).toEqual([abrar, { kind: 'human', userId: 'u-zara', name: 'Zara' }, between.seats[2], null]);
+    // The rejoin lands after the Leave: nothing says her seat was taken, so she's not sat down again.
+    await expect(joinRoom(after, 'u-sana', 'Sana', Date.now(), 'rejoin')).rejects.toMatchObject({ status: 409, message: 'you left this table' });
+    expect(store.saveSeats).toHaveBeenCalledTimes(1);
+  });
+
+  it('writes nothing for someone with no seat and nothing noting one', async () => {
+    const between: RoomRow = { ...room, status: 'finished', seats: [abrar, null, null, null] };
+    expect(await leaveRoom(between, 'u-sana')).toBe(between);
+    expect(store.saveSeats).not.toHaveBeenCalled();
+  });
+});
+
+describe('the lobby sitting someone down again by itself (rejoin)', () => {
+  const HOUR = 60 * 60 * 1000;
+  const abrar = { kind: 'human', userId: 'u-abrar', name: 'Abrar' } as const;
+  const bilal = { kind: 'human', userId: 'u-bilal', name: 'Bilal' } as const;
+  const hana = { kind: 'human', userId: 'u-hana', name: 'Hana' } as const;
+  const zara = { kind: 'human', userId: 'u-zara', name: 'Zara' } as const;
+  const zaraForOmar = { ...zara, displaced: 'u-omar' } as const;
+
+  it('sits down again someone whose seat went to a newcomer, in a free seat or a bot’s, and forgets the note', async () => {
+    const out = await joinRoom({ ...room, status: 'finished', seats: [abrar, bilal, { kind: 'bot', name: 'Sana' }, zaraForOmar] }, 'u-omar', 'Omar', Date.now(), 'rejoin');
+    expect(out).toMatchObject({ seated: true, displaced: false });
+    expect(out.room.seats[2]).toMatchObject({ kind: 'human', userId: 'u-omar' });
+    expect(out.room.seats[3]).toEqual(zara);
+  });
+
+  it('turns away someone who got up themselves, on this phone or another, and writes nothing', async () => {
+    await expect(joinRoom({ ...room, status: 'finished', seats: [abrar, bilal, null, null] }, 'u-omar', 'Omar', Date.now(), 'rejoin')).rejects.toMatchObject({
+      status: 409,
+      message: 'you left this table',
+    });
+    // Opening the link is another matter: that sits them down.
+    expect((await joinRoom({ ...room, status: 'finished', seats: [abrar, bilal, null, null] }, 'u-omar', 'Omar')).seated).toBe(true);
+    expect(store.saveSeats).toHaveBeenCalledTimes(1);
+  });
+
+  it('never takes anyone’s seat, so two lobbies that can’t check in can’t swap seats back and forth by themselves', async () => {
+    // Neither Omar nor Zara can be checked in (no member row); Bilal and Hana are here.
+    db.members = ['u-bilal', 'u-hana'].map((userId) => ({ userId, lastSeenAt: Date.now() - HOUR }));
+    const full: RoomRow = { ...room, status: 'finished', seats: [abrar, zaraForOmar, bilal, hana] };
+    await expect(joinRoom(full, 'u-omar', 'Omar', Date.now(), 'rejoin')).rejects.toMatchObject({ status: 409, message: 'this table is full' });
+    expect(store.roomMembers).not.toHaveBeenCalled();
+    expect(store.saveSeats).not.toHaveBeenCalled();
+    // Omar taps Check again, which is opening the link: Zara isn't here, so he's given her seat back, noting it.
+    const back = await joinRoom(full, 'u-omar', 'Omar');
+    expect(back).toMatchObject({ seated: true, displaced: true });
+    expect(back.room.seats[1]).toMatchObject({ userId: 'u-omar', displaced: 'u-zara' });
+    // Zara's lobby asks by itself once: nowhere free, and it stops there.
+    await expect(joinRoom(back.room, 'u-zara', 'Zara', Date.now(), 'rejoin')).rejects.toMatchObject({ status: 409, message: 'this table is full' });
+    expect(store.saveSeats).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives someone already seated their seat, and offers a bot’s seat at a game in play, as opening the link does', async () => {
+    const seated = await joinRoom({ ...room, status: 'finished', seats: [abrar, { ...bilal, since: 'x' }, null, null] }, 'u-bilal', 'Bilal', Date.now(), 'rejoin');
+    expect(seated).toMatchObject({ seated: false, room: { seats: [abrar, { ...bilal, since: 'x' }, null, null] } });
+    db.meta = playingMeta();
+    const offered = await joinRoom({ ...room, seats: [abrar, { kind: 'bot', name: 'Sana' }, hana, bilal] }, 'u-omar', 'Omar', Date.now(), 'rejoin');
+    expect(offered.offer).toMatchObject({ seat: 1, botName: 'Sana' });
+    expect(store.saveSeats).not.toHaveBeenCalled();
+  });
 });
 
 describe('who the lobby calls host', () => {
@@ -431,7 +498,8 @@ describe('a newcomer between games, when every seat is taken', () => {
     ];
     const out = await joinRoom(full, 'u-zara', 'Zara');
     expect(out).toMatchObject({ seated: true, displaced: true, offer: null });
-    expect(out.room.seats[3]).toMatchObject({ kind: 'human', userId: 'u-zara' });
+    // Her seat notes whose it was, so Omar's lobby can tell he didn't get up (the lobby's rejoin).
+    expect(out.room.seats[3]).toMatchObject({ kind: 'human', userId: 'u-zara', displaced: 'u-omar' });
     expect(out.room.seats.slice(0, 3)).toEqual(people.slice(0, 3));
   });
 

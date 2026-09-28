@@ -16,9 +16,15 @@ export type RoomStatus = 'lobby' | 'playing' | 'finished';
  * from): someone who left the table mid-game (`kept: 'left'`), or who wasn't
  * here when the game was dealt (`kept: 'late'`). They're offered it first
  * when they come back (seating.ts seatOffer, seatJoiner).
+ *
+ * A person given the seat of someone who wasn't here, between games (R18's
+ * last step), carries that person's id (`displaced`) until they're seated
+ * again, leave, or the game is dealt: how the lobby tells someone whose seat
+ * was taken from someone who got up (rooms.ts joinRoom's rejoin). It never
+ * leaves the server.
  */
 export type SeatEntry =
-  | { readonly kind: 'human'; readonly userId: string; readonly name: string; readonly since?: string }
+  | { readonly kind: 'human'; readonly userId: string; readonly name: string; readonly since?: string; readonly displaced?: string }
   | { readonly kind: 'bot'; readonly name: string; readonly heldFor?: string; readonly keptName?: string; readonly kept?: 'left' | 'late' }
   | null;
 export type Seats = readonly [SeatEntry, SeatEntry, SeatEntry, SeatEntry];

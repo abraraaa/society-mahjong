@@ -203,6 +203,21 @@ export function markAway(a: Absence, seats: Seats, seat: Seat, reason: AwayReaso
 }
 
 /**
+ * The seat's person is taking a break (`'self'`): as markAway, except that a
+ * seat already away for another reason is told it's a break from now, with
+ * what the bot has played for them so far kept. table.ts asks this only of a
+ * seat that wasn't away when the request found it, whose clock ran out a
+ * second time in that same step: they asked for the break, so that's what
+ * their note says.
+ */
+export function markOnBreak(a: Absence, seats: Seats, seat: Seat): Absence {
+  if (!isHuman(seats, seat)) return a;
+  const e = own(a, seats, seat);
+  if (e.away === null) return markAway(a, seats, seat, 'self');
+  return e.away === 'self' ? a : withEntry(a, seat, { ...e, away: 'self' });
+}
+
+/**
  * A clock ran out on the seat's person and a bot made `move` for them. It's
  * always told to them (`clockMoves`, `lastClockMove`). When it `counts` (a
  * turn or a pass of tiles), it's a miss too, and the second in a row makes

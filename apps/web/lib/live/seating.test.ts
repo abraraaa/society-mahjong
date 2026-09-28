@@ -12,9 +12,12 @@ import {
   seatOffer,
   seatsBack,
   seatsForDeal,
+  forgetDisplaced,
   standIn,
+  standUp,
   takeSeat,
   vacate,
+  wasDisplaced,
   withBots,
   type Circle,
 } from './seating';
@@ -215,6 +218,8 @@ describe('seatJoiner, knowing who’s here (R18)', () => {
   const zaraSat = { kind: 'human', ...zara, since: SINCE } as const;
   const keptForZara = { kind: 'bot', name: 'Hamza', heldFor: 'u-zara', keptName: 'Zara', kept: 'left' } as const;
   const keptForBilal = { kind: 'bot', name: 'Omar', heldFor: 'u-bilal', keptName: 'Bilal', kept: 'late' } as const;
+  /** Zara in the seat of someone who wasn't here, noting whose it was. */
+  const zaraFor = (displaced: string) => ({ ...zaraSat, displaced });
 
   it('gives the joiner the seat a bot has kept for them before anything else', () => {
     expect(seatJoiner([host, null, bot, keptForZara], 'finished', zara, NOW, pick())).toEqual([host, null, bot, zaraSat]);
@@ -229,21 +234,21 @@ describe('seatJoiner, knowing who’s here (R18)', () => {
   it('then the seat of someone who isn’t here: nobody seen before anyone seen, then the longest since they were', () => {
     // Nobody has seen Chand; Bilal and Dua were here last week, Dua before Bilal.
     const week = 7 * 24 * HOUR;
-    expect(seatJoiner([host, bilal, c, d], 'finished', zara, NOW, pick(seen({ 'u-bilal': NOW - week, 'u-d': NOW - week - HOUR })))).toEqual([host, bilal, zaraSat, d]);
+    expect(seatJoiner([host, bilal, c, d], 'finished', zara, NOW, pick(seen({ 'u-bilal': NOW - week, 'u-d': NOW - week - HOUR })))).toEqual([host, bilal, zaraFor('u-c'), d]);
     expect(seatJoiner([host, bilal, c, d], 'finished', zara, NOW, pick(seen({ 'u-bilal': NOW - week, 'u-c': NOW - 2 * week, 'u-d': NOW - week - HOUR })))).toEqual([
       host,
       bilal,
-      zaraSat,
+      zaraFor('u-c'),
       d,
     ]);
     expect(seatJoiner([host, bilal, c, d], 'finished', zara, NOW, pick(seen({ 'u-bilal': NOW - week, 'u-c': NOW - HOUR, 'u-d': NOW - week - HOUR })))).toEqual([
       host,
       bilal,
       c,
-      zaraSat,
+      zaraFor('u-d'),
     ]);
     // Ties by seat.
-    expect(seatJoiner([host, bilal, c, d], 'lobby', zara, NOW, pick())).toEqual([host, zaraSat, c, d]);
+    expect(seatJoiner([host, bilal, c, d], 'lobby', zara, NOW, pick())).toEqual([host, zaraFor('u-bilal'), c, d]);
   });
 
   it('never gives away the host’s seat, nor anyone’s who is here', () => {
@@ -259,7 +264,7 @@ describe('seatJoiner, knowing who’s here (R18)', () => {
       ]),
       lastEndedAt: NOW - 90 * 60 * 1000,
     };
-    expect(seatJoiner([host, bilal, c, d], 'finished', zara, NOW, pick(afterGame))).toEqual([host, zaraSat, c, d]);
+    expect(seatJoiner([host, bilal, c, d], 'finished', zara, NOW, pick(afterGame))).toEqual([host, zaraFor('u-bilal'), c, d]);
   });
 
   it('never gives a newcomer the host’s own kept seat: someone else’s seat who isn’t here, or none', () => {
@@ -267,7 +272,7 @@ describe('seatJoiner, knowing who’s here (R18)', () => {
     // Bilal was here last week, so his seat goes; the host's, kept by Sana, stays theirs.
     expect(seatJoiner([keptForHost, bilal, c, d], 'finished', zara, NOW, pick(seen({ 'u-bilal': NOW - 7 * 24 * HOUR, 'u-c': NOW - HOUR, 'u-d': NOW - HOUR })))).toEqual([
       keptForHost,
-      { kind: 'human', ...zara, since: SINCE },
+      zaraFor('u-bilal'),
       c,
       d,
     ]);
@@ -290,6 +295,47 @@ describe('seatJoiner, knowing who’s here (R18)', () => {
 
   it('seats nobody this way at a game in play', () => {
     expect(seatJoiner([host, bot, bot, bot], 'playing', zara, NOW, pick())).toBeNull();
+  });
+
+  it('notes whose seat a newcomer was given only at the last step, and drops a note of the joiner’s own once they’re seated again', () => {
+    // A free seat, or a bot's, was nobody's: nothing to note.
+    expect(seatJoiner([host, bilal, bot, d], 'finished', zara, NOW, pick())![2]).toEqual(zaraSat);
+    expect(seatJoiner([host, keptForBilal, c, d], 'finished', zara, NOW, pick())![1]).toEqual(zaraSat);
+    // Bilal was given Dua's seat; Dua comes back and finds a bot's seat free.
+    const bilalForDua = { ...bilal, since: SINCE, displaced: 'u-d' };
+    const dua = { userId: 'u-d', name: 'Dua' };
+    expect(wasDisplaced([host, bilalForDua, bot, c], 'u-d')).toBe(true);
+    expect(seatJoiner([host, bilalForDua, bot, c], 'finished', dua, NOW, pick())).toEqual([host, { ...bilal, since: SINCE }, { kind: 'human', ...dua, since: SINCE }, c]);
+  });
+});
+
+describe('who got up, and whose seat was taken (the lobby’s rejoin)', () => {
+  const dua = { kind: 'human', userId: 'u-d', name: 'Dua', since: SINCE } as const;
+  const zaraForDua = { kind: 'human', ...zara, since: SINCE, displaced: 'u-d' } as const;
+
+  it('knows someone was displaced only while a seat notes it', () => {
+    expect(wasDisplaced([host, zaraForDua, null, null], 'u-d')).toBe(true);
+    expect(wasDisplaced([host, zaraForDua, null, null], 'u-bilal')).toBe(false);
+    expect(wasDisplaced([host, { kind: 'human', ...zara, since: SINCE }, null, null], 'u-d')).toBe(false);
+    expect(forgetDisplaced([host, zaraForDua, null, null], 'u-d')).toEqual([host, { kind: 'human', ...zara, since: SINCE }, null, null]);
+    expect(forgetDisplaced([host, zaraForDua, null, null], 'u-bilal')).toBeNull();
+  });
+
+  it('standing up empties the seat and forgets any note of it; with no seat, forgets the note; with neither, changes nothing', () => {
+    expect(standUp([host, dua, bilal, null], 'u-d')).toEqual([host, null, bilal, null]);
+    expect(standUp([host, zaraForDua, bilal, null], 'u-d')).toEqual([host, { kind: 'human', ...zara, since: SINCE }, bilal, null]);
+    expect(standUp([host, zaraForDua, bilal, null], 'u-zara')).toEqual([host, null, bilal, null]);
+    expect(standUp([host, bilal, null, null], 'u-d')).toBeNull();
+  });
+
+  it('forgets every note at the deal: from then on, a bot’s seat is offered instead', () => {
+    const dealt = seatsForDeal([host, zaraForDua, bilal, null], () => true);
+    expect(dealt[1]).toEqual({ kind: 'human', ...zara, since: SINCE });
+    expect(wasDisplaced(dealt, 'u-d')).toBe(false);
+  });
+
+  it('taking a bot’s seat over drops a note of the taker’s own', () => {
+    expect(takeSeat([host, zaraForDua, bot, bilal], 2, { userId: 'u-d', name: 'Dua' }, NOW)).toEqual([host, { kind: 'human', ...zara, since: SINCE }, dua, bilal]);
   });
 });
 

@@ -15,7 +15,7 @@ import {
   type Seat,
 } from '@society/engine';
 import type { CoachStage } from '../coach/types';
-import { EVERYONE_HERE, awaySeats, isAway, markAway, markPresent, noteClockMove, noteHandEnd, notePlayed, presentUserIds, reconcileAbsence } from './absence';
+import { EVERYONE_HERE, awaySeats, isAway, markAway, markOnBreak, markPresent, noteClockMove, noteHandEnd, notePlayed, presentUserIds, reconcileAbsence } from './absence';
 import { addHandScores, endOfGame, everyoneReady, isLastHand, voteNextHand } from './lifecycle';
 import { policyFor, presentLevels } from './policy';
 import { NEW_TABLE, reconcileTook, sameTableState, withTakeOver, type Absence, type TableState } from './table-state';
@@ -402,6 +402,8 @@ export function step(input: StepInput): StepResult {
   // A tap is presence (R4): any action of a person's own, but letting a tile go, which is what their clock would have done.
   const saving = input.version ?? null;
   if (action && action.type !== 'pass' && actor !== undefined) absence = markPresent(absence, seats, actor, now, saving);
+  // Who was away when the request found the table, before any clock below ran out: a break asked for then is a break.
+  const awayAsFound = absence;
 
   const settleNow = (from: HandState) => {
     const settled = settleLogged(from, ruleset, seats, { ...(input.bots ? { bots: input.bots } : {}), absence });
@@ -466,11 +468,14 @@ export function step(input: StepInput): StepResult {
       if (!wasAway && live()) moves.push({ by: 'host', seat: change.seat, ...(host?.kind === 'human' ? { userId: host.userId } : {}), a: { type: 'away', reason: 'host' } });
     } else if (change.type === 'break') {
       // Taking a break: a bot plays their tiles from now until they're back, as for any away seat. It isn't a tap (R4), so it
-      // notes none. A seat already away stays as it is, with the reason it went away for.
+      // notes none. A seat that was already away when the request came stays as it is, with the reason it went away for. One
+      // whose clock ran out a second time in this same step asked for the break before it knew: it's a break (markOnBreak), and
+      // the log says so after the clock's note.
       if (target?.kind !== 'human') throw new NotYourMove('a bot already plays that seat');
-      const wasAway = isAway(absence, seats, change.seat);
-      absence = markAway(absence, seats, change.seat, 'self');
-      if (!wasAway && live()) moves.push({ by: 'player', seat: change.seat, userId: target.userId, a: { type: 'away', reason: 'self' } });
+      if (!isAway(awayAsFound, seats, change.seat)) {
+        absence = markOnBreak(absence, seats, change.seat);
+        if (live()) moves.push({ by: 'player', seat: change.seat, userId: target.userId, a: { type: 'away', reason: 'self' } });
+      }
     } else {
       // Taken over from a bot: the seats say who has it now, and they're at the table from this moment.
       if (target?.kind !== 'human') throw new NotYourMove('a bot already plays that seat');
