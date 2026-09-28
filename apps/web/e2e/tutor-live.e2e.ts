@@ -12,8 +12,8 @@ import { liveCoach, tutorFixtures } from './tutor-fixtures';
  * The tutor at a live table, on scenes made by the engine alone
  * (tutor-fixtures.ts): hand names that open the hand's card, wherever the
  * tutor says them, a card over a claim that shows the table's clock, and the
- * footnotes a first-timer gets the first time a hand or a flower comes up,
- * which stay for as long as the line they came with.
+ * footnotes a first-timer gets the first time a hand, a flower or a run tile
+ * going past comes up, which stay for as long as the line they came with.
  */
 test.describe('the tutor at a live table', () => {
   test("(l-winner) the result line names the winner's hand, explains it the first time, and a tap shows the tiles they won with", async ({ page }) => {
@@ -64,6 +64,20 @@ test.describe('the tutor at a live table', () => {
     // Taught for the visit, and the glossary's footnote for "flowers" with it: the same words.
     const taught = await page.evaluate((key) => JSON.parse(sessionStorage.getItem(key) ?? '[]') as string[], TAUGHT_KEY);
     expect(taught).toEqual(expect.arrayContaining(['rule:flowers', 'term:bonus']));
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test("(l-run) a tile she'd have wanted for a run went past: her next turn says why she couldn't take it", async ({ page }) => {
+    const fx = tutorFixtures();
+    const runs = liveCoach(fx.missedRun).teach.find((x) => x.key === 'rule:runs')!;
+    const t = await openTable(page, { view: () => ok(fx.missedRun) });
+    const note = t.stage().locator('[data-note="rule:runs"]');
+    await expect(note).toBeVisible();
+    await expect(note).toHaveText(runs.text);
+    expect(await note.textContent()).toMatch(/only come from the wall\.$/);
+    // Taught for the visit: the next run tile that goes past isn't explained again.
+    const taught = await page.evaluate((key) => JSON.parse(sessionStorage.getItem(key) ?? '[]') as string[], TAUGHT_KEY);
+    expect(taught).toContain('rule:runs');
     expect(t.pageErrors).toEqual([]);
   });
 

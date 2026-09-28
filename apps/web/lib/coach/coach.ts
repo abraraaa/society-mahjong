@@ -1,5 +1,6 @@
 import {
   analyseHand,
+  countOf,
   handAfterClaim,
   isHonourTile,
   isSuitTile,
@@ -7,24 +8,41 @@ import {
   numOf,
   sortTiles,
   suitOf,
-  suitTile,
   tileName,
   type ClaimOption,
   type HandAnalysis,
   type HandInput,
+  type LayoutGroup,
   type MatchCtx,
   type Pattern,
   type PatternCandidate,
   type PrivatePlayerView,
   type Ruleset,
   type Seat,
+  type SuitTile,
   type TileKind,
 } from '@society/engine';
 import { GLOSSARY } from './glossary';
 import { goalFor, roundNote } from './goal';
 import { handsThisRound, winnerRef, yoursRef } from './hand-card';
 import { shapeOf, titleOf } from './shape';
-import { SAY_BUDGET, countWord, flowerSinceMyLastMove, isLoner, isolate, liveCopies, myDiscardCount, planCount, textOf, tilesWord, visibleLength, waitList } from './words';
+import {
+  SAY_BUDGET,
+  countWord,
+  drawnSince,
+  flowerSinceMyLastMove,
+  isLoner,
+  isolate,
+  liveCopies,
+  missedRunNote,
+  myDiscardCount,
+  passedSince,
+  planCount,
+  textOf,
+  tilesWord,
+  visibleLength,
+  waitList,
+} from './words';
 import type { CoachAction, CoachGoal, CoachHandRef, CoachOutcome, CoachSegment, CoachStage, CoachState, CoachTarget, CoachTeach } from './types';
 
 /**
@@ -83,38 +101,81 @@ function targetOf(candidate: PatternCandidate | undefined, patterns: readonly Pa
   };
 }
 
-/** True when `kind` would finish a run with two tiles already in hand. */
-function completesRun(concealed: readonly TileKind[], kind: TileKind): boolean {
-  if (!isSuitTile(kind)) return false;
-  const suit = suitOf(kind);
-  const num = numOf(kind);
-  const has = (n: number) => n >= 1 && n <= 9 && concealed.includes(suitTile(suit, n));
-  return (has(num - 2) && has(num - 1)) || (has(num - 1) && has(num + 1)) || (has(num + 1) && has(num + 2));
-}
-
-/** Whether a pattern is built from same-suit runs: the only hands a run note can be about. */
-function hasRunGroup(pattern: Pattern | undefined): boolean {
-  return !!pattern?.components.some((c) => (c.c === 'set' && c.of === 'chow') || c.c === 'seq' || c.c === 'run');
+/**
+ * Whether `kind` would have made this group of the plan's lay-out a run: it's
+ * a run still to be laid down, one tile short. A run of three in one suit takes
+ * either tile that finishes it with the two held (the lay-out follows one way
+ * of making the hand, while the tiles wanted are every way's); any other run,
+ * a long one or one across the suits, takes only the tile it's missing.
+ */
+function makesRun(group: LayoutGroup, kind: SuitTile): boolean {
+  if (group.shape !== 'run' || group.exposed) return false;
+  const missing = group.tiles.filter((t) => !t.held);
+  if (missing.length !== 1) return false;
+  const suited = group.tiles.map((t) => t.kind).filter(isSuitTile);
+  const suit = suited.length > 0 ? suitOf(suited[0]!) : null;
+  if (group.tiles.length === 3 && suited.length === 3 && suited.every((k) => suitOf(k) === suit)) {
+    const held = group.tiles.flatMap((t) => (t.held && isSuitTile(t.kind) ? [numOf(t.kind)] : []));
+    const [a = 0, b = 0, c = 0] = [...held, numOf(kind)].sort((x, y) => x - y);
+    return suitOf(kind) === suit && b === a + 1 && c === b + 1;
+  }
+  return missing[0]!.kind === kind;
 }
 
 /**
- * True when the discard is a tile the plan wants for a same-suit run, one it
- * would finish with two tiles already held, and this ruleset never lets a run
- * be claimed. All of that matters: a goulash has no runs at all, Khalida's and
- * Crazy Chows take their "runs" across the suits, and a single tile a pung is
- * two short of is wall-only for a different reason.
+ * A group of the plan's lay-out that `kind` would have made into a run, or
+ * null. Only when runs can't be claimed, the plan is at least two tiles off
+ * (at one tile to go it would be the winning tile, and a win can be claimed),
+ * and the tile is one the plan wants from the wall. A goulash has no runs, and
+ * Khalida's 1 to 9 is single tiles, so neither ever has one.
+ */
+export function runTileFor(target: CoachTarget | null, goal: Pick<CoachGoal, 'chowsClaimable'>, kind: TileKind): LayoutGroup | null {
+  return runGroupsFor(target, goal, kind)[0] ?? null;
+}
+
+/** Every group `runTileFor` could name, in lay-out order. */
+function runGroupsFor(target: CoachTarget | null, goal: Pick<CoachGoal, 'chowsClaimable'>, kind: TileKind): LayoutGroup[] {
+  if (goal.chowsClaimable || !target || target.away < 2 || !isSuitTile(kind) || !target.wantsFromWall.includes(kind)) return [];
+  return (target.layout ?? []).filter((g) => makesRun(g, kind));
+}
+
+/**
+ * True when the discard is a tile the plan wants for a run, which this ruleset
+ * never lets anyone claim: the claim sheet says so. The hand's patterns and
+ * tiles are no longer read (the plan's lay-out says it all), and stay in the
+ * signature for its callers.
  */
 export function runNoteApplies(
   target: CoachTarget | null,
   goal: Pick<CoachGoal, 'chowsClaimable'>,
-  patterns: readonly Pattern[],
-  concealed: readonly TileKind[],
+  _patterns: readonly Pattern[],
+  _concealed: readonly TileKind[],
   kind: TileKind,
 ): boolean {
-  if (goal.chowsClaimable || !target || target.away < 2) return false;
-  if (!hasRunGroup(patterns.find((p) => p.id === target.patternId))) return false;
-  return target.wantsFromWall.includes(kind) && completesRun(concealed, kind);
+  return runTileFor(target, goal, kind) !== null;
 }
+
+/**
+ * The newest run tile that went past since the player last moved, told on
+ * their turn: who threw it, and why they couldn't take it. The run is judged
+ * on the plan as it stands now, but only with tiles the player held when the
+ * tile went by: every discard since their last move came before their draw,
+ * and a run that the drawn tile has only just begun wasn't one the discard
+ * would have finished. Whether the visit's been taught it already is for
+ * `lessonFor` to decide.
+ */
+function missedRun(view: PrivatePlayerView, target: CoachTarget, goal: CoachGoal, names: Readonly<Record<Seat, string>>): CoachTeach[] {
+  for (const passed of passedSince(view)) {
+    const drawn = drawnSince(view, passed.seq);
+    const heldThen = (kind: TileKind) => countOf(view.concealed, kind) - countOf(drawn, kind) > 0;
+    const group = runGroupsFor(target, goal, passed.tile).find((g) => g.tiles.every((t) => !t.held || heldThen(t.kind)));
+    if (group) return [{ key: 'rule:runs', place: 'note', text: missedRunNote(names[passed.seat], passed.tile, group) }];
+  }
+  return [];
+}
+
+/** The claim sheet's run line says the rule itself, so a footnote about a run tile going past would only say it again. */
+const RUNS_SAID: CoachTeach = { key: 'rule:runs', place: 'said', text: 'runs only come from the wall' };
 
 const CLAIM_VERB: Readonly<Record<ClaimOption['type'], string>> = { pung: 'Pung', kong: 'Kong', chow: 'Chow', win: 'Mahjong!' };
 
@@ -414,12 +475,14 @@ function adviceFor(input: CoachInput): CoachState {
         highlight: [],
       };
     }
+    const runs = runNoteApplies(target, goal, spec.patterns, view.concealed, discard.kind);
     const say: CoachSegment[] = !target
       ? [seg("Nothing here's worth breaking your hand for. "), act('Pass'), seg('.')]
-      : runNoteApplies(target, goal, spec.patterns, view.concealed, discard.kind)
+      : runs
         ? line(named(target.hand), " wants that tile in a run, and you can't claim for a run here. ", act('Pass'), '.')
         : line('That does nothing for ', named(target.hand), '. ', act('Pass'), '.');
-    return { ...base, moment: 'claim', action: { kind: 'pass', tile: discard.kind }, say, reason: 'no claim on this tile shortens the hand', highlight: [] };
+    const teach = runs ? [RUNS_SAID] : [];
+    return { ...base, moment: 'claim', action: { kind: 'pass', tile: discard.kind }, say, reason: 'no claim on this tile shortens the hand', highlight: [], teach };
   }
 
   // --- your turn -------------------------------------------------------------
@@ -460,15 +523,17 @@ function adviceFor(input: CoachInput): CoachState {
   if (quiet || !target) {
     return { ...base, moment, action, say: [], reason: null, highlight, teach: firstTurn };
   }
+  // The round comes first, then a run tile that went past since the player last moved.
+  const teach = [...firstTurn, ...missedRun(view, target, goal, names)];
 
   if (action.kind !== 'discard') {
-    return { ...base, moment, action, say: [seg("Every tile's pulling its weight. Pick the one you'd miss least.")], reason: null, highlight, teach: firstTurn };
+    return { ...base, moment, action, say: [seg("Every tile's pulling its weight. Pick the one you'd miss least.")], reason: null, highlight, teach };
   }
   const reason = discardReason(analysis, goal, target, view.concealed, action.tile, myDiscardCount(view));
   const lead = act(`Discard ${tileName(action.tile)}`);
   const progress = progressAfter(input, spec, target, action.tile);
   const say = fitting([line(lead, ': ', ...reason.full, `.${progress}`), line(lead, ': ', ...reason.short, `.${progress}`), line(lead, ': ', ...reason.short, '.')]);
-  return { ...base, moment, action, say, reason: textOf(line(...reason.full)), highlight, teach: firstTurn };
+  return { ...base, moment, action, say, reason: textOf(line(...reason.full)), highlight, teach };
 }
 
 /** The tile that was just thrown, from the river, for the debrief. */

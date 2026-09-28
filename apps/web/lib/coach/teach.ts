@@ -1,6 +1,6 @@
 import { GLOSSARY, termsIn, type Term } from './glossary';
 import type { CoachGoal, CoachHandRef, CoachMoment, CoachSegment, CoachState, CoachTeach } from './types';
-import { textOf, visibleLength } from './words';
+import { NOTE_BUDGET, textOf, visibleLength } from './words';
 
 /**
  * First-sight teaching. The first time this visit that a round, a hand, a rule
@@ -17,8 +17,8 @@ import { textOf, visibleLength } from './words';
 /** sessionStorage: this visit's footnotes, a JSON array of keys. Per tab, so a new tab or a new day teaches again. */
 export const TAUGHT_KEY = 'sm:taught';
 
-/** Visible characters over all the notes under one line: two lines at 375 px. */
-export const NOTE_BUDGET = 84;
+/** Visible characters over all the notes under one line: two lines at 375 px. It lives in words.ts, beside the bubble's budget, where the run tile's footnote is fitted to it. */
+export { NOTE_BUDGET };
 
 export interface Lesson {
   /** `lessonKey` of the tutor's state it was worked out for: a lesson is only drawn for that state */

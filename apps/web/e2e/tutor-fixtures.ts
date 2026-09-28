@@ -13,6 +13,7 @@ import {
   type Seat,
 } from '@society/engine';
 import { analyseFor, coachFor, type CoachStage, type CoachState } from '../lib/coach';
+import { lessonFor } from '../lib/coach/teach';
 import { flowerSinceMyLastMove, myDiscardCount, textOf } from '../lib/coach/words';
 import { liveStage } from '../lib/live/level';
 import type { GameSnapshot } from '../lib/live/snapshot';
@@ -53,6 +54,7 @@ const isBot = (seat: Seat) => SEATING[seat].kind === 'bot';
 const LIVE_NAMES: Readonly<Record<Seat, string>> = { 0: 'You', 1: SEATING[1].name, 2: SEATING[2].name, 3: SEATING[3].name };
 
 const EAST_HONOUR: GameProgress = { roundWind: 'E', roundIndex: 0, handInRound: 1, handIndex: 1 };
+const SOUTH: GameProgress = { roundWind: 'S', roundIndex: 1, handInRound: 0, handIndex: 4 };
 
 /** One forced or bot move, or null when a person has a real decision. A copy of `settleOnce` (lib/live/table.ts), with the server's default sharp bots. */
 function settleOnce(s: HandState): HandState | null {
@@ -201,6 +203,11 @@ export interface TutorFixtures {
    */
   readonly flowerTurn: GameSnapshot;
   /**
+   * Amna's turn in an East honour hand or South, after a tile she'd have wanted for a run went past, for a first-timer:
+   * the tutor explains why she couldn't take it. After her first discard of the hand, for the same reason as `flowerTurn`.
+   */
+  readonly missedRun: GameSnapshot;
+  /**
    * Two looks at the same hand-start bubble for a learner: Bilal deals, and Amna drew a flower in the deal. The next
    * look is the table once Bilal has thrown and the bots have moved on, with Bilal to answer again before Amna's first
    * turn and something in the river. The tutor's words are the same on both, and the flower is still news.
@@ -266,6 +273,23 @@ function build(): TutorFixtures {
     }
     return null;
   });
+  const missedRun = search("Amna's turn after a run tile went past, once she's discarded, where the tutor explains it", (seed) => {
+    for (const progress of [EAST_HONOUR, SOUTH]) {
+      let s = settle(startHand(karachi, { seed, progress, dealer: 0 }));
+      for (let i = 0; i < 400 && s.phase !== 'finished'; i++) {
+        if (s.phase === 'turn' && s.turn === ME && myDiscardCount(viewFor(s, karachi, ME)) > 0) {
+          const snap = snapshot(s, 9, 'new');
+          const coach = liveCoach(snap);
+          // A first visit's footnotes under the bubble: the run tile's comes first.
+          if (coach.say.length > 0 && lessonFor(coach, new Set()).notes[0]?.key === 'rule:runs') return snap;
+        }
+        const seat = pending(s)[0];
+        if (seat === undefined) break;
+        s = settle(reduce(s, personMove(s, seat), karachi));
+      }
+    }
+    return null;
+  });
   const handStartTwice = search('two looks at the same hand-start bubble for Amna, with a flower from the deal to explain', (seed) => {
     const s = settle(startHand(karachi, { seed, progress: EAST_HONOUR, dealer: 1 }));
     if (s.players[ME].bonus.length === 0 || pending(s).join() !== '1') return null;
@@ -278,7 +302,7 @@ function build(): TutorFixtures {
     const news = [a, b].every((c) => c.teach.some((t) => t.key === 'rule:flowers'));
     return same && news && riverOrder(next.view).length > 0 ? { first, next } : null;
   });
-  return { otherWin, claim, claimAgain, flowerTurn, handStartTwice };
+  return { otherWin, claim, claimAgain, flowerTurn, missedRun, handStartTwice };
 }
 
 let built: TutorFixtures | null = null;
