@@ -316,12 +316,16 @@ function TableInner({
   // or a word opened now says about the clock under it: the bots' claim held,
   // or a live clock still running.
   const live = claimMs != null;
+  // A win on offer is never passed for the player: on the bots it isn't timed, and at a live table the table's clock
+  // runs out and its stand-in takes it, so the sheet's bar and a card both count to the table's deadline.
+  const offersWin = claimOpen && !!legal.claims?.some((c) => c.type === 'win');
   const cardClock = cardClockFor({
     claimOpen,
-    soloClaimTimed: claimOpen && !live && !legal.claims?.some((c) => c.type === 'win'),
+    soloClaimTimed: claimOpen && !live && !offersWin,
     clock: clock ?? null,
     myTurn,
     exchange: !!legal.exchange,
+    winOffered: offersWin,
     passMarginMs: CLAIM_PASS_MARGIN_MS,
   });
 
@@ -418,7 +422,7 @@ function TableInner({
           onClaim={(claim) => act({ type: 'claim', seat: ME, claim })}
           onPass={() => act({ type: 'pass', seat: ME })}
           busy={busy}
-          {...claimSheetClock(claimMs)}
+          {...claimSheetClock(claimMs, offersWin, CLAIM_PASS_MARGIN_MS)}
         />
       )}
 

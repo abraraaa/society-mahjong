@@ -200,12 +200,14 @@ describe('the run tile that went past, told on the next turn', () => {
   // Chow + 5 Honours two tiles off, wanting 3 or 6 Bamboo for its 4-5 and 5 or 8 Characters for its 6-7.
   const tiles: TileKind[] = ['s4', 's5', 'p2', 'p3', 'p4', 'm6', 'm7', 'WE', 'WS', 'WW', 'WN', 'WN', 'DR', 'DG'];
   type Move = readonly [type: 'drew' | 'discarded' | 'claimed', seat: 0 | 1 | 2 | 3, tile?: TileKind];
-  /** Seat 0's turn after these moves, which follow their own last discard (unless `first`) and end with their draw. */
-  const turnAfter = (moves: readonly Move[], first = false) => {
+  /** Seat 0's turn after these moves, which follow their own last discard (unless `first`) and end with their draw, holding `hand` (the draw included). */
+  const turnAfter = (moves: readonly Move[], first = false, hand: readonly TileKind[] = tiles) => {
     const all: Move[] = [...(first ? [] : [['discarded', 0, 'p1'] as const]), ...moves];
     const events = all.map(([type, seat, tile], i) => ({ seq: i + 1, type, seat, ...(tile ? { tile } : {}), ...(type === 'drew' ? { secret: true } : {}) }));
-    return { ...turnView('E', 1, tiles), events } as unknown as PrivatePlayerView;
+    return { ...turnView('E', 1, hand), events } as unknown as PrivatePlayerView;
   };
+  /** The plan's lay-out in short: each group's shape, then its tiles, a '?' on each still to find. */
+  const layoutOf = (view: PrivatePlayerView) => (coachAt(view).target?.layout ?? []).map((g) => `${g.shape}:${g.tiles.map((t) => `${t.kind}${t.held ? '' : '?'}`).join(' ')}`);
   /** A round of discards since seat 0's own: each seat draws and throws, then seat 0 draws `drew`. */
   const round = (s1: TileKind, s2: TileKind, s3: TileKind, drew: TileKind = 'DG'): Move[] => [
     ['drew', 1],
@@ -249,6 +251,38 @@ describe('the run tile that went past, told on the next turn', () => {
   it("says nothing of a run the player's own draw has only just begun", () => {
     // The same hand, but its 5 Bamboo came in the draw after Bilal's 6 Bamboo went by: then, it would have finished nothing.
     expect(runsNote(turnAfter(round('s6', 'DR', 'WE', 's5')))).toBeUndefined();
+  });
+
+  it('says nothing of a run held with a second copy the draw brought, while the first sat in another set', () => {
+    // Chow + 5 Honours in one suit, two tiles off: 4-5-6 held, 5-7 wanting a 6, 8-9 wanting a 7. Both 5 Bamboo are in
+    // the lay-out, and the second came in the draw after Bilal's 6 Bamboo went by, when the one 5 there sat in 4-5-6.
+    const hand: TileKind[] = ['s4', 's5', 's5', 's6', 's7', 's8', 's9', 'WE', 'WS', 'WW', 'WN', 'WN', 'DR', 'DG'];
+    const drewTheFive = turnAfter(round('s6', 'DR', 'WE', 's5'), false, hand);
+    expect(coachAt(drewTheFive).target?.title).toBe('Chow + 5 Honours');
+    expect(layoutOf(drewTheFive)).toEqual(expect.arrayContaining(['run:s4 s5 s6', 'run:s5 s6? s7']));
+    expect(runsNote(drewTheFive)).toBeUndefined();
+    // With both 5s in hand when it went by (the draw was something else), it would have filled the 5-7.
+    expect(runsNote(turnAfter(round('s6', 'DR', 'WE', 'DG'), false, hand))?.text).toBe(
+      `${isolate('Bilal')}'s 6 Bamboo would have filled your 5-7 run, but runs only come from the wall.`,
+    );
+  });
+
+  it('tells only a tile the plan wants from the wall, never the far side of a run that has to start where it does', () => {
+    // Naila's Hand two tiles off: its 1-2-3 of Bamboo is held as 2-3 and wants the 1. A 4 Bamboo would make 2-3-4 of
+    // those two, which no way of making Naila's Hand has, so it would have finished nothing the plan can use.
+    const hand: TileKind[] = ['s2', 's3', 's3', 's4', 's5', 'p1', 'p2', 'm3', 'm4', 'm5', 'WN', 'WN', 'WE', 'DG'];
+    const four = turnAfter(round('s4', 'DR', 'WE'), false, hand);
+    const coach = coachAt(four);
+    expect(coach.target?.title).toBe("Naila's Hand");
+    expect(layoutOf(four)).toContain('run:s1? s2 s3');
+    expect(coach.target!.wantsFromWall).toContain('s1');
+    expect(coach.target!.wantsFromWall).not.toContain('s4');
+    expect(runTileFor(coach.target, coach.goal, 's4')).toBeNull();
+    expect(runsNote(four)).toBeUndefined();
+    // The 1 it does want is told.
+    expect(runsNote(turnAfter(round('s1', 'DR', 'WE'), false, hand))?.text).toBe(
+      `${isolate('Bilal')}'s 1 Bamboo would have finished your 2-3 run, but runs only come from the wall.`,
+    );
   });
 
   it("comes after the round's footnote on the player's first turn", () => {

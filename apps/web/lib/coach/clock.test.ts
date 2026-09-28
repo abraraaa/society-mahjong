@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { STEP_ASIDE_MS, cardClockFor, cardClockLine, claimSheetClock, mmss, msLeft, pauseCountdown, resumeCountdown, startCountdown, stepsAside, type CardClock } from './clock';
+import {
+  STEP_ASIDE_MS,
+  cardClockFor,
+  cardClockLine,
+  claimSheetClock,
+  claimTimer,
+  mmss,
+  msLeft,
+  pauseCountdown,
+  resumeCountdown,
+  startCountdown,
+  stepsAside,
+  type CardClock,
+} from './clock';
 
 describe('a countdown that can be held', () => {
   it('runs down from where it started', () => {
@@ -56,11 +69,34 @@ describe('whose clock the claim sheet runs on', () => {
   it('leaves solo, which passes nothing, to its own countdown', () => {
     expect(claimSheetClock(undefined)).toEqual({});
     expect(claimSheetClock(null)).toEqual({});
+    expect(claimSheetClock(undefined, true, 1500)).toEqual({});
+  });
+
+  it("runs a live win's bar to the table's own deadline: the margin kept for a pass goes back on", () => {
+    expect(claimSheetClock(8500, true, 1500)).toEqual({ claimMs: 10_000, clock: 'server' });
+    expect(claimSheetClock(0, true, 1500)).toEqual({ claimMs: 1500, clock: 'server' });
+    // Anything else still runs to the moment the sheet passes.
+    expect(claimSheetClock(8500, false, 1500)).toEqual({ claimMs: 8500, clock: 'server' });
+  });
+});
+
+describe('when the claim sheet passes for the player', () => {
+  it('passes on anything but a win, on the bots and at a live table, when its bar runs out', () => {
+    expect(claimTimer('solo', false)).toEqual({ bar: true, passes: true });
+    expect(claimTimer('server', false)).toEqual({ bar: true, passes: true });
+  });
+
+  it('never times a win on the bots', () => {
+    expect(claimTimer('solo', true)).toEqual({ bar: false, passes: false });
+  });
+
+  it("shows a live win's clock but never passes on it: the table's stand-in takes the win when the clock runs out", () => {
+    expect(claimTimer('server', true)).toEqual({ bar: true, passes: false });
   });
 });
 
 describe('the clock a card or a word shows', () => {
-  const none = { claimOpen: false, soloClaimTimed: false, clock: null, myTurn: false, exchange: false, passMarginMs: 1500 } as const;
+  const none = { claimOpen: false, soloClaimTimed: false, clock: null, myTurn: false, exchange: false, winOffered: false, passMarginMs: 1500 } as const;
 
   it('holds a solo claim with a countdown', () => {
     expect(cardClockFor({ ...none, claimOpen: true, soloClaimTimed: true })).toEqual({ kind: 'paused' });
@@ -70,6 +106,11 @@ describe('the clock a card or a word shows', () => {
     expect(cardClockFor({ ...none, claimOpen: true, clock: { kind: 'claim', ms: 10_000 } })).toEqual({ kind: 'running', what: 'claim', ms: 8500 });
     // In the window's last moments there is nothing left to show, and never less than nothing.
     expect(cardClockFor({ ...none, claimOpen: true, clock: { kind: 'claim', ms: 900 } })).toEqual({ kind: 'running', what: 'claim', ms: 0 });
+  });
+
+  it("shows a live win's time until the table's clock runs out, since the sheet never passes on it", () => {
+    expect(cardClockFor({ ...none, claimOpen: true, winOffered: true, clock: { kind: 'claim', ms: 10_000 } })).toEqual({ kind: 'running', what: 'claim', ms: 10_000 });
+    expect(cardClockFor({ ...none, claimOpen: true, winOffered: true, clock: { kind: 'claim', ms: 900 } })).toEqual({ kind: 'running', what: 'claim', ms: 900 });
   });
 
   it("shows the player's own turn clock", () => {
@@ -93,7 +134,7 @@ describe('the clock a card or a word shows', () => {
   });
 
   it('prefers the held claim, then a live claim, then the turn, then the exchange', () => {
-    const all = { claimOpen: true, soloClaimTimed: true, clock: { kind: 'claim', ms: 9000 }, myTurn: true, exchange: true, passMarginMs: 1500 } as const;
+    const all = { claimOpen: true, soloClaimTimed: true, clock: { kind: 'claim', ms: 9000 }, myTurn: true, exchange: true, winOffered: false, passMarginMs: 1500 } as const;
     expect(cardClockFor(all)?.kind).toBe('paused');
     expect(cardClockFor({ ...all, soloClaimTimed: false })).toMatchObject({ what: 'claim' });
     expect(cardClockFor({ ...all, soloClaimTimed: false, clock: { kind: 'turn', ms: 9000 } })).toMatchObject({ what: 'turn' });
@@ -120,9 +161,15 @@ describe('the clock a card or a word shows', () => {
     const at = (ms: number): CardClock => ({ kind: 'running', what: 'claim', ms });
     expect(stepsAside(at(STEP_ASIDE_MS + 1))).toBe(false);
     expect(stepsAside(at(STEP_ASIDE_MS))).toBe(true);
-    expect(stepsAside(at(0))).toBe(true);
+    expect(stepsAside(at(1))).toBe(true);
     expect(stepsAside({ kind: 'running', what: 'turn', ms: 3000 })).toBe(true);
     expect(stepsAside({ kind: 'paused' })).toBe(false);
     expect(stepsAside(null)).toBe(false);
+  });
+
+  it("doesn't step aside for a clock that's stopped at nought, waiting for the table to settle it", () => {
+    expect(stepsAside({ kind: 'running', what: 'claim', ms: 0 })).toBe(false);
+    expect(stepsAside({ kind: 'running', what: 'turn', ms: 0 })).toBe(false);
+    expect(stepsAside({ kind: 'running', what: 'exchange', ms: 0 })).toBe(false);
   });
 });
