@@ -1,4 +1,5 @@
 'use client';
+import { memo } from 'react';
 import { tileName, type TileKind } from '@society/engine';
 
 export type TileSize = '2xs' | 'xs' | 'sm' | 'md' | 'lg' | 'xl';
@@ -11,8 +12,11 @@ type TileStyle = React.CSSProperties & { '--tile-face'?: string };
  * a background layer (see `.tile` in globals.css); a tile with no `kind` (or
  * `back`) renders the felt-and-back-pattern face used for opponents'
  * concealed tiles and the wall.
+ *
+ * Memoised: a river holds up to 60 of these, and a pick in the hand changes
+ * the props of only the few it lifts, drops or fades.
  */
-export function Tile({
+export const Tile = memo(function Tile({
   kind,
   size = 'md',
   selectable,
@@ -25,6 +29,7 @@ export function Tile({
   latest,
   onClick,
   className,
+  picture,
 }: {
   kind?: TileKind | undefined;
   size?: TileSize | undefined;
@@ -43,8 +48,21 @@ export function Tile({
   latest?: boolean | undefined;
   onClick?: (() => void) | undefined;
   className?: string | undefined;
+  /** a tile drawn to be looked at, inside something else you tap: a plain element, since a button can't hold buttons */
+  picture?: boolean | undefined;
 }) {
   const face: TileStyle | undefined = !back && kind ? { '--tile-face': `url("/tiles/${kind}.svg")` } : undefined;
+  if (picture) {
+    return (
+      <span
+        className={`tile tile-${size}${className ? ` ${className}` : ''}`}
+        style={face}
+        data-back={back ? 'true' : undefined}
+        data-dim={dim ? 'true' : undefined}
+        aria-hidden="true"
+      />
+    );
+  }
   return (
     <button
       type="button"
@@ -63,4 +81,4 @@ export function Tile({
       disabled={!selectable}
     />
   );
-}
+});

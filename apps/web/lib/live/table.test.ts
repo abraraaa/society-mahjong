@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { IllegalAction, analysisBot, karachi, legalActions, viewFor, type Seat } from '@society/engine';
 import type { ClientAction, LiveGame } from './types';
-import { NotYourMove, actionIsForSeat, dealFirstHand, resolveExpired, settle, step } from './table';
+import { NotYourMove, actionIsForSeat, dealFirstHand, decisionRandom, resolveExpired, settle, step, type StepInput } from './table';
 import { isHuman, seatOf, type Seats } from './types';
 import { policyFor } from './policy';
 
@@ -235,5 +235,98 @@ describe('coming back after being away', () => {
     // a step with nothing expired reports nothing
     const quiet = step({ game: { state: r.state, deadlines: r.deadlines }, ruleset: karachi, seats, policy, now: later + 1000 });
     expect(quiet.standIns).toEqual([]);
+  });
+});
+
+/**
+ * The bots in empty seats play gently while anyone at the table is new
+ * (policy.ts emptySeatBots decides; the table only plays as it is told).
+ * Gentle is random, but seeded from the game, so a request always plays out
+ * the same way; and a bot standing in for a person whose clock ran out
+ * always plays sharp, because it is that person's hand.
+ */
+describe('the bots in empty seats', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** Is the table the same, tile for tile? */
+  const same = (a: LiveGame, b: LiveGame) => JSON.stringify(a.state) === JSON.stringify(b.state);
+
+  it('play the same way twice from the same request, with no randomness of their own', { timeout: 60_000 }, () => {
+    const random = vi.spyOn(Math, 'random');
+    const deal = () => dealFirstHand(karachi, seats, 'gentle-1', policy, T0, { bots: 'gentle' });
+    expect(deal()).toEqual(deal());
+    let game: LiveGame = deal();
+    for (let i = 0; i < 400 && game.state.phase !== 'finished'; i++) {
+      const a = analysisBot(viewFor(game.state, karachi, ME), karachi)!;
+      const input: StepInput = { game, ruleset: karachi, seats, policy, now: T0 + i * 1000, action: a as ClientAction, actor: ME, bots: 'gentle' };
+      const r = step(input);
+      expect(step(input)).toEqual(r);
+      game = r;
+    }
+    expect(game.state.phase).toBe('finished');
+    const next: StepInput = { game, ruleset: karachi, seats, policy, now: T0, action: { type: 'nextHand' }, actor: ME, seed: 'gentle-1', bots: 'gentle' };
+    expect(step(next)).toEqual(step(next));
+    expect(random).not.toHaveBeenCalled();
+  });
+
+  it('take their randomness from the game and the decision in front of them', () => {
+    const s = dealFirstHand(karachi, seats, 'rng-1', policy, T0).state;
+    const first = (r: () => number) => [r(), r(), r()];
+    expect(first(decisionRandom(s, 1))).toEqual(first(decisionRandom(s, 1)));
+    expect(first(decisionRandom(s, 1))).not.toEqual(first(decisionRandom(s, 2)));
+    expect(first(decisionRandom(s, 1))).not.toEqual(first(decisionRandom({ ...s, seq: s.seq + 1 }, 1)));
+    expect(first(decisionRandom(s, 1))).not.toEqual(first(decisionRandom({ ...s, preplayStep: s.preplayStep + 1 }, 1)));
+    expect(first(decisionRandom(s, 1))).not.toEqual(first(decisionRandom({ ...s, progress: { ...s.progress, handIndex: s.progress.handIndex + 1 } }, 1)));
+    expect(first(decisionRandom(s, 1))).not.toEqual(first(decisionRandom({ ...s, seed: 'rng-2' }, 1)));
+  });
+
+  it('play sharp when nobody says otherwise, as they always have', { timeout: 60_000 }, () => {
+    let plain: LiveGame = dealFirstHand(karachi, seats, 'plain-1', policy, T0);
+    let sharp: LiveGame = dealFirstHand(karachi, seats, 'plain-1', policy, T0, { bots: 'sharp' });
+    expect(sharp).toEqual(plain);
+    for (let i = 0; i < 400 && plain.state.phase !== 'finished'; i++) {
+      const a = analysisBot(viewFor(plain.state, karachi, ME), karachi)! as ClientAction;
+      plain = step({ game: plain, ruleset: karachi, seats, policy, now: T0 + i * 1000, action: a, actor: ME });
+      sharp = step({ game: sharp, ruleset: karachi, seats, policy, now: T0 + i * 1000, action: a, actor: ME, bots: 'sharp' });
+      expect(same(plain, sharp)).toBe(true);
+    }
+    expect(plain.state.phase).toBe('finished');
+  });
+
+  it('play differently when gentle: the same human moves meet different bot moves on some seed', { timeout: 60_000 }, () => {
+    /** The human plays the same sharp moves at both tables until the bots' play makes the tables differ. */
+    function differs(seed: string): boolean {
+      let sharp: LiveGame = dealFirstHand(karachi, seats, seed, policy, T0, { bots: 'sharp' });
+      let gentle: LiveGame = dealFirstHand(karachi, seats, seed, policy, T0, { bots: 'gentle' });
+      for (let i = 0; i < 400; i++) {
+        if (!same(sharp, gentle)) return true;
+        if (sharp.state.phase === 'finished') return false;
+        const a = analysisBot(viewFor(sharp.state, karachi, ME), karachi)! as ClientAction;
+        sharp = step({ game: sharp, ruleset: karachi, seats, policy, now: T0 + i * 1000, action: a, actor: ME, bots: 'sharp' });
+        gentle = step({ game: gentle, ruleset: karachi, seats, policy, now: T0 + i * 1000, action: a, actor: ME, bots: 'gentle' });
+      }
+      return false;
+    }
+    const seed = ['gentle-a', 'gentle-b', 'gentle-c', 'gentle-d', 'gentle-e', 'gentle-f'].find(differs);
+    expect(seed, 'no seed let a gentle bot play differently from a sharp one').toBeDefined();
+  });
+
+  it('never soften a clock’s stand-in: every move made for an absent human is the sharp analysis', { timeout: 60_000 }, () => {
+    for (const seed of ['clock-1', 'clock-2']) {
+      let game: LiveGame = dealFirstHand(karachi, seats, seed, policy, T0, { bots: 'gentle' });
+      let moves = 0;
+      for (let i = 0; i < 400 && game.state.phase !== 'finished'; i++) {
+        const late = (game.deadlines.turn ?? game.deadlines.claim)! + 1;
+        const sharp = analysisBot(viewFor(game.state, karachi, ME), karachi) ?? { type: 'pass' as const, seat: ME };
+        const r = step({ game, ruleset: karachi, seats, policy, now: late, bots: 'gentle' });
+        expect(r.standIns).toEqual([{ seat: ME, action: sharp }]);
+        moves++;
+        game = r;
+      }
+      expect(game.state.phase).toBe('finished');
+      expect(moves).toBeGreaterThan(3);
+    }
   });
 });

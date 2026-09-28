@@ -106,6 +106,14 @@ export function discardOffer(view: SelectionView, selected: TileKind | null, sug
  */
 export const SETTLE_MS = 400;
 
+/**
+ * The same grace for a tap that only lifts a tile, which the player can put
+ * straight back down. It still outlasts the second tap of a double tap, but
+ * ends as the exchange sheet finishes sliding in (its 0.28s sheet-in), so a
+ * sheet that looks ready takes the first tap on it.
+ */
+export const LIFT_SETTLE_MS = 280;
+
 /** What changes at a hand boundary: a new hand dealt, or this one finishing. The table's grace period starts again whenever it does. */
 export function handBoundary(view: Pick<PrivatePlayerView, 'progress' | 'phase'>): string {
   return `${view.progress.handIndex}:${view.phase === 'finished' ? 'over' : 'on'}`;

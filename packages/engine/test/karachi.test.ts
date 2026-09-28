@@ -110,3 +110,17 @@ describe('Karachi North', () => {
     expect(wins('N', hand(['m1', 'm2', 'm3', 'p5', 'p5', 'p5', 's7', 's8', 's9', 'WE', 'WE', 'WE', 'DR', 'DR']))).toHaveLength(0);
   });
 });
+
+describe('Crazy Chows', () => {
+  const S = karachi.handSpec({ roundWind: 'S', roundIndex: 1, handInRound: 0, handIndex: 4 }).patterns;
+  const wins = (tiles: string) =>
+    matchPatterns(S, { concealed: tiles.split(' ') as TileKind[], melds: [] }, { seatWind: 'E', roundWind: 'S' }, karachi.guards).map((m) => m.pattern.id);
+
+  it("keeps one suit order across the hand, as the guide's example does", () => {
+    expect(wins('s2 p3 m4 s4 p5 m6 s5 p6 m7 s7 p8 m9 s3 p7')).toContain('karachi.south.crazyChows');
+  });
+
+  it('is not four mixed runs each in its own suit order', () => {
+    expect(wins('s2 s3 s4 p5 p6 m3 m4 m5 m7 m7 p9 s8 s6 p1')).not.toContain('karachi.south.crazyChows');
+  });
+});

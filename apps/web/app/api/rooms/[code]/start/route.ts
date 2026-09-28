@@ -4,10 +4,10 @@ import { getRuleset } from '@society/engine';
 import { currentUser } from '../../../../../lib/live/auth';
 import { broadcast, roomPoke } from '../../../../../lib/live/broadcast';
 import { errorResponse, json } from '../../../../../lib/live/http';
-import { policyFor } from '../../../../../lib/live/policy';
+import { emptySeatBots, humanLevels, policyFor } from '../../../../../lib/live/policy';
 import { requireRoom, withBots } from '../../../../../lib/live/rooms';
 import { HttpError } from '../../../../../lib/live/service';
-import { stagesFor, startGame } from '../../../../../lib/live/store';
+import { stagesBySeat, startGame } from '../../../../../lib/live/store';
 import { dealFirstHand } from '../../../../../lib/live/table';
 import { newGameSeed } from '../../../../../lib/seed';
 
@@ -24,9 +24,10 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ code: str
     if (room.status === 'playing') throw new HttpError(409, 'a game is in progress');
     const seats = withBots(room.seats);
     const ruleset = getRuleset(room.ruleset_id);
-    const policy = policyFor(await stagesFor(seats), room.options['strict'] === true);
+    const strict = room.options['strict'] === true;
+    const levels = await stagesBySeat(seats);
     const now = Date.now();
-    const first = dealFirstHand(ruleset, seats, newGameSeed(), policy, now);
+    const first = dealFirstHand(ruleset, seats, newGameSeed(), policyFor(humanLevels(levels), strict), now, { bots: emptySeatBots(levels, strict) });
     const game = await startGame(room, first.state.seed, seats, first.state, first.deadlines);
     await broadcast([roomPoke(room.id, 'started', { gameId: game.id })]);
     return json({ gameId: game.id }, 201);

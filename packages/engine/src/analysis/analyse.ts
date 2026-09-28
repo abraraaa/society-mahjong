@@ -21,8 +21,9 @@ import {
 } from '../tiles';
 import type { HandInput } from '../hand';
 import type { Guards, MatchCtx, Pattern } from '../patterns/types';
-import { coverPattern, type CoverOptions, type CoverResult } from './coverage';
-import type { AnalysisOptions, HandAnalysis, PatternCandidate, TileRating } from './types';
+import { coverPattern, type CoverOptions, type CoverResult, type CoverSolution } from './coverage';
+import type { AnalysisOptions, HandAnalysis, LayoutGroup, PatternCandidate, TileRating } from './types';
+import type { Group } from '../patterns/types';
 
 const DEFAULT_TOP_N = 3;
 const DEFAULT_LIMIT = 8;
@@ -72,7 +73,7 @@ export function analyseHand(
   const handSize = concealed.length + hand.melds.reduce((n, m) => n + m.tiles.length, 0);
 
   const coverOptions: CoverOptions = options.claims ? { claims: options.claims } : {};
-  const rated: { pattern: Pattern; cover: CoverResult; away: number; concealedUsed: Counts }[] = [];
+  const rated: { pattern: Pattern; cover: CoverResult; away: number; concealedUsed: Counts; plan: CoverSolution | undefined }[] = [];
   for (const pattern of patterns) {
     const cover = coverPattern(pattern, hand, ctx, guards, coverOptions);
     if (!cover.reachable) continue;
@@ -82,7 +83,9 @@ export function analyseHand(
     const away = Math.max(cover.size, handSize) - cover.covered;
     // No lay-out at all means the search ran out of budget before it found one; the
     // pattern is still on the table, so it stays on the list with nothing to show for itself.
-    rated.push({ pattern, cover, away, concealedUsed: countKinds(cover.solutions[0]?.used ?? []) });
+    // A lay-out can come back with a group the search never filled; one without a hole is a plan the table can draw.
+    const first = cover.solutions.find(whole) ?? cover.solutions[0];
+    rated.push({ pattern, cover, away, concealedUsed: countKinds(first?.used ?? []), plan: first });
   }
 
   rated.sort(
@@ -92,10 +95,45 @@ export function analyseHand(
       (a.pattern.id < b.pattern.id ? -1 : 1),
   );
 
-  // `using` follows one concrete lay-out - the first the search found, which is its
-  // greedy best - so it reads as a plan and its spare tiles really are spare. `needs`
-  // is the union over every lay-out at that coverage, so a many-sided wait is whole.
-  const candidates: PatternCandidate[] = rated.slice(0, limit).map(({ pattern, cover, away, concealedUsed }) => ({
+  // A candidate usually has several lay-outs at its best coverage, and the search finds
+  // them characters first, then dots, then bamboo. Following whichever came first meant
+  // the tutor protected an arbitrary one and threw away tiles an equally good lay-out,
+  // or the next hand along, was using: most often a run in bamboo. So each leading
+  // candidate follows the lay-out that keeps the most tiles the other leaders can use,
+  // the closer ones counting more; a tie keeps the search's own order.
+  const lead = rated.slice(0, topN);
+  const reachable = lead.map(({ cover }) => {
+    const u: Counts = new Map();
+    for (const sol of cover.solutions) maxInto(u, countKinds(sol.used));
+    return u;
+  });
+  lead.forEach((r, i) => {
+    if (r.cover.solutions.length < 2) return;
+    let best = r.concealedUsed;
+    let bestPlan = r.plan;
+    let bestScore = -1;
+    for (const sol of r.cover.solutions) {
+      if (!whole(sol)) continue;
+      const used = countKinds(sol.used);
+      let score = 0;
+      reachable.forEach((u, j) => {
+        if (j === i) return;
+        for (const [k, n] of used) score += Math.min(n, u.get(k) ?? 0) / (j + 1);
+      });
+      if (score > bestScore + 1e-9) {
+        bestScore = score;
+        best = used;
+        bestPlan = sol;
+      }
+    }
+    r.concealedUsed = best;
+    r.plan = bestPlan;
+  });
+
+  // `using` follows that one concrete lay-out, so it reads as a plan and its spare tiles
+  // really are spare. `needs` is the union over every lay-out at that coverage, so a
+  // many-sided wait is whole.
+  const candidates: PatternCandidate[] = rated.slice(0, limit).map(({ pattern, cover, away, concealedUsed, plan }) => ({
     patternId: pattern.id,
     name: pattern.name,
     ...(pattern.localName ? { localName: pattern.localName } : {}),
@@ -106,6 +144,7 @@ export function analyseHand(
     using: sortTiles([...cover.meldTiles, ...countsToList(concealedUsed)]),
     usingConcealed: countsToList(concealedUsed),
     approximate: cover.approximate,
+    layout: plan && whole(plan) ? layoutOf(plan, concealedUsed) : null,
   }));
 
   const leaders = rated.slice(0, topN);
@@ -123,8 +162,13 @@ export function analyseHand(
   }
 
   const ratings: TileRating[] = [];
+  // What the copy you'd throw is worth: a leader counts only if it uses every copy held.
+  // Rated per kind, a spare third 2 Characters looked busier than the one tile the next
+  // hand along was counting on, and the tutor threw the wrong one.
+  const lastCopy = new Map<TileKind, number>();
   for (const [kind, n] of held) {
     let usefulness = 0;
+    let last = 0;
     const serves: string[] = [];
     leaders.forEach(({ pattern, concealedUsed }, i) => {
       const used = concealedUsed.get(kind) ?? 0;
@@ -132,11 +176,14 @@ export function analyseHand(
       serves.push(pattern.id);
       // The closest candidate is the one the player is most likely on, so it counts most.
       usefulness += used / (i + 1);
+      if (used >= n) last += 1 / (i + 1);
     });
+    lastCopy.set(kind, last);
     ratings.push({ kind, held: n, usefulness, serves });
   }
   ratings.sort(
     (a, b) =>
+      lastCopy.get(a.kind)! - lastCopy.get(b.kind)! ||
       a.usefulness - b.usefulness ||
       connection(a.kind, held) - connection(b.kind, held) ||
       tileOrder(b.kind) - tileOrder(a.kind),
@@ -154,4 +201,49 @@ export function analyseHand(
     bestDiscard: discardable ? discardable.kind : null,
     ratings,
   };
+}
+
+/** Every group of the lay-out has its tiles. */
+function whole(sol: CoverSolution): boolean {
+  return sol.groups.every((g) => g.tiles.length > 0);
+}
+
+/** What a player calls a group: a pung, a run, a pair, the honours. */
+function shapeOfGroup(g: Group): LayoutGroup['shape'] {
+  switch (g.c) {
+    case 'set':
+      return g.type === 'chow' ? 'run' : g.type === 'kong' ? 'kong' : g.type === 'pung' ? 'pung' : 'set';
+    case 'seq':
+    case 'run':
+    case 'mixedSeq':
+    case 'mixedRun':
+      return 'run';
+    case 'pair':
+    case 'mixedPair':
+      return 'pair';
+    case 'knit':
+      return 'knit';
+    case 'each':
+      return g.tiles.every((k) => !isSuitTile(k)) ? 'honours' : 'singles';
+    default:
+      return 'singles';
+  }
+}
+
+/**
+ * The plan's lay-out, tile by tile. Melds are held by definition; within the
+ * concealed groups each copy the player holds is marked held until the copies
+ * `used` gives run out, and the rest are the tiles still to find.
+ */
+function layoutOf(plan: CoverSolution, used: Counts): LayoutGroup[] {
+  const left = new Map(used);
+  return plan.groups.map((g, i) => {
+    const tiles = g.tiles.map((kind) => {
+      if (g.fromMeld) return { kind, held: true };
+      const n = left.get(kind) ?? 0;
+      if (n > 0) left.set(kind, n - 1);
+      return { kind, held: n > 0 };
+    });
+    return { shape: shapeOfGroup(g), exposed: g.fromMeld, open: !plan.fixed[i] && !tiles.some((t) => t.held), tiles };
+  });
 }

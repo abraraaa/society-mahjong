@@ -75,11 +75,11 @@ import {
   saveLive,
   saveSeats,
   settleScores,
-  stagesFor,
+  stagesBySeat,
   startGame,
   type RoomRow,
 } from './store';
-import { policyFor } from './policy';
+import { humanLevels, policyFor } from './policy';
 import type { Seats } from './types';
 
 const DOWN = { message: 'TypeError: fetch failed', code: '' };
@@ -156,7 +156,6 @@ describe('reads', () => {
     expect(await gameById(GAME)).toBeNull();
     expect(await loadLive('g-1')).toBeNull();
     expect(await expiredGames(0)).toEqual([]);
-    expect(await stagesFor(seats)).toEqual([]);
     expect(ran()).toContain('games:select');
   });
 
@@ -180,12 +179,33 @@ describe('reads', () => {
     await expect(gameById(GAME)).rejects.toBeInstanceOf(SupabaseError);
   });
 
-  it('count everyone as new when the player levels cannot be read, so the clocks are the most patient, and log it', async () => {
+  it("give each seat its own player's level, matching the rows to the seats by id whatever order they come back in", async () => {
+    const mixed: Seats = [{ kind: 'bot', name: 'Bilal' }, { kind: 'human', userId: 'u-abrar', name: 'Abrar' }, null, { kind: 'human', userId: 'u-hana', name: 'Hana' }];
+    answerAll(undefined, () => [
+      { id: 'u-hana', stats: { hands: 30, wins: 4 } },
+      { id: 'u-abrar', stats: { hands: 2, wins: 0 } },
+    ]);
+    expect(await stagesBySeat(mixed)).toEqual([null, 'learning', null, 'solid']);
+    expect(ran()).toEqual(['profiles:select']);
+    expect(supabase.log[0]!.steps).toEqual([
+      ['select', ['id, stats']],
+      ['in', ['id', ['u-abrar', 'u-hana']]],
+    ]);
+  });
+
+  it('count a human with no profile row, or no tally on it, as new', async () => {
+    answerAll(undefined, () => [{ id: 'u-hana', stats: null }]);
+    expect(await stagesBySeat(seats)).toEqual(['new', 'new', null, null]);
+    answerAll(undefined, () => null);
+    expect(await stagesBySeat(seats)).toEqual(['new', 'new', null, null]);
+  });
+
+  it('count every human as new when the player levels cannot be read, so the clocks are the most patient and the bots gentle, and log it', async () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     answerAll(is('profiles'));
-    const stages = await stagesFor(seats);
-    expect(stages).toEqual(['new', 'new']);
-    expect(policyFor(stages)).toEqual(policyFor(['new']));
+    const stages = await stagesBySeat(seats);
+    expect(stages).toEqual(['new', 'new', null, null]);
+    expect(policyFor(humanLevels(stages))).toEqual(policyFor(['new']));
     expect(log).toHaveBeenCalledTimes(1);
     const line = JSON.parse(log.mock.calls[0]![0] as string) as Record<string, unknown>;
     expect(line).toMatchObject({ level: 'error', event: 'stages_read_failed', name: 'SupabaseError', message: 'could not read the player levels: TypeError: fetch failed' });
@@ -193,7 +213,7 @@ describe('reads', () => {
 
   it('skip the database when there is nobody to look up', async () => {
     const bots: Seats = [null, { kind: 'bot', name: 'Bilal' }, null, null];
-    expect(await stagesFor(bots)).toEqual([]);
+    expect(await stagesBySeat(bots)).toEqual([null, null, null, null]);
     expect(supabase.log).toHaveLength(0);
   });
 });

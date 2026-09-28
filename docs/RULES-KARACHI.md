@@ -53,7 +53,7 @@ Every example below is a golden fixture in `packages/engine/test/karachi-catalog
 
 | Hand | Guide example | Definition in the engine |
 |---|---|---|
-| Chow + 5 Honors | 123b 123d 123c EEE RR | The general East chow form (article) |
+| Chow + 5 Honours | 123b 123d 123c EEE RR | The general East chow form (article) |
 | Apple Blossom | 123b 123d 123c WhWhWh GG | 123 in each suit, or three mixed chows (Sloper on T&M), white dragon pung, green dragon pair |
 | Windy Wonders | 123b 123d 123c EEE SS | Chows one per suit, wind pung, wind pair |
 | Windyfly | 111b 444d 777c E W N S(paired) | Pungs one per suit, NEWS with a wind paired (T&M Windvane) |
@@ -75,7 +75,7 @@ Every example below is a golden fixture in `packages/engine/test/karachi-catalog
 | Dirty Gertie's Garter | 1234567b 1234567d | 1–7 in two suits |
 | Knitting | 1b1d 2b2d 4b4d 5b5d 7b7d 8b8d 9b9d | Seven knitted pairs (same number, two suits), the same two suits throughout |
 | Crochet | 1b1d1c 4b4d4c 7b7d7c 7b7d7c 4b4b | Four knitted sets and a pair (T&M Triple Knitting) |
-| Crazy Chows | 2b3d4c 4b5d6c 5b6d7c 7b8d9c 3b 7d | Four mixed chows plus two suit tiles. ⚠ The example's tail 3b 7d is not a pair of any kind |
+| Crazy Chows | 2b3d4c 4b5d6c 5b6d7c 7b8d9c 3b 7d | Four mixed chows in one suit order across the hand (the example is bamboo, dots, characters every time), plus two suit tiles. The engine enforced no order until batch 2, which made this the easiest hand in South; if your table plays each chow in any order, it's one line in `patterns.ts`. ⚠ The example's tail 3b 7d is not a pair of any kind |
 
 ### North
 
@@ -83,14 +83,14 @@ Every example below is a golden fixture in `packages/engine/test/karachi-catalog
 |---|---|---|
 | Laila's Hand | 111d 999b R G Wh N E W S(paired) | Pung of 1s in one suit, pung of 9s in another, one of each dragon, NEWS with a wind paired |
 | Easy Virgin | 123b 111b R G Wh E S N W(paired) | 1-2-3 and a pung of 1s in the same suit, one of each dragon, NEWS with a wind paired |
-| 1-9 plus 5 Honors | 1–9b E S W N R | A 1–9 run in one suit, NEWS, any fifth honour (T&M Wriggly Snake) |
-| 1-7 plus 7 Honors | 1–7b E S W N R G Wh | A 1–7 run in one suit and all seven honours |
+| 1-9 plus 5 Honours | 1–9b E S W N R | A 1–9 run in one suit, NEWS, any fifth honour (T&M Wriggly Snake) |
+| 1-7 plus 7 Honours | 1–7b E S W N R G Wh | A 1–7 run in one suit and all seven honours |
 | Numbers Pungs | 555b 555d 555c E S W N R | Pungs of one number in all three suits, NEWS, any fifth honour. The Western form (EEE SS + three pungs) is also accepted |
 | Sind Club Hand | R G Wh E S W N 2b 5b 5d 1c 8c 7c 1c | A fixed hand; the pair is 1c |
 | Monty Wriggly Snake v2 | 111c 999c 234c 678c 5c(paired) | Gates of Heaven: one suit, pung of 1s, pung of 9s, 2–8, one of 2–8 paired |
 | Wriggly Snake v1 | 111b 999d 234c 678c 5c(paired) | Confused Gates: pung of 1s, pung of 9s, 2–8 in the third suit with one paired |
 | Four Blessings | EEE SSS WWW NNN RR | Four wind pungs and any pair |
-| All Honor Hand | 111b 999d EEE NNN RR | Pungs of terminals and honours, terminal-or-honour pair |
+| All Honour Hand | 111b 999d EEE NNN RR | Pungs of terminals and honours, terminal-or-honour pair |
 | Gertie's Garter | 1234567b 1234567d | 1–7 in two suits |
 | Green Jade | GGG 111b 444b 777b 88b | Green dragon pung, three bamboo pungs, bamboo pair (the guide lists "Ruby Jade" as its Karachi alias) |
 | Imperial Jade | GGG 222b 333b 444b 66b | Green tiles only |

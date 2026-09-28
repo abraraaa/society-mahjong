@@ -29,7 +29,7 @@
 -- * hand_results has one row per finished hand. winner is the winning seat
 --   (0 to 3), or null for a washout (the wall ran out).
 --
--- Columns used, checked against supabase/schema.sql and migrations 0001-0004:
+-- Columns used, checked against the migrations:
 --   rooms        id, code, host_id, seats, created_at
 --   games        id, room_id, status, started_at
 --   hand_results id, game_id, winner, created_at

@@ -17,24 +17,25 @@ interface GoalCopy {
 
 const COPY: Readonly<Record<string, GoalCopy>> = {
   goulash: {
-    aim: 'Four pungs and a pair. No runs at all.',
+    aim: 'Four pungs and a pair. A pung is three matching tiles.',
     // The gate is the goulash's one trap: docs/RULES-KARACHI.md, "Goulash".
-    watchOut: 'Honour pungs need two of: a dragon pung, the round wind, your own wind.',
+    watchOut: "Only keep winds and dragons if you've got lots.",
     honours: 'gated',
   },
   honour: {
-    aim: 'Three runs or three pungs, plus five honours.',
-    watchOut: 'Usually that is one of each wind with one paired — so keep your lone winds.',
+    aim: 'Three runs or three pungs, plus five winds and dragons.',
+    watchOut: "Usually that's all four winds with one paired.",
     honours: 'required',
   },
   noHonour: {
-    aim: 'Four sets and a pair, and not one wind or dragon.',
-    watchOut: 'Honours fit no hand this round. Let them go early.',
+    // Runs count here, and they're usually the quickest way: say so, or a player fresh from the goulash chases pungs.
+    aim: 'Four sets and a pair, runs or pungs, with no winds or dragons at all.',
+    watchOut: 'Let your winds and dragons go early.',
     honours: 'forbidden',
   },
   big: {
-    aim: 'Only the big named hands count this round.',
-    watchOut: 'Most want all four winds and the dragons — hold your honours for now.',
+    aim: 'Only the big named hands count: most are long runs in one suit, or full of winds and dragons.',
+    watchOut: 'Hold on to your winds and dragons for now.',
     honours: 'optional',
   },
 };

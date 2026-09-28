@@ -3,11 +3,12 @@ import { HttpError } from './errors';
 export { HttpError };
 import { withBots } from './rooms';
 import { getRuleset, publicView, viewFor, type Seat } from '@society/engine';
+import type { CoachStage } from '../coach/types';
 import type { GameSnapshot } from './snapshot';
 import { broadcast, gamePoke, roomPoke } from './broadcast';
 import { afterCommit, type CommitStep } from './commit';
 import { logError } from './log';
-import { policyFor } from './policy';
+import { emptySeatBots, humanLevels, policyFor } from './policy';
 import { SEAT_ATTEMPTS, vacate } from './seating';
 import {
   abandonGame,
@@ -24,7 +25,7 @@ import {
   saveLive,
   saveSeats,
   settleScores,
-  stagesFor,
+  stagesBySeat,
   type GameRow,
   type RoomRow,
 } from './store';
@@ -56,7 +57,8 @@ function snapshot(
   state: Parameters<typeof publicView>[0],
   me: Seat | null,
   now: number,
-  userId: string | null = null,
+  userId: string | null,
+  levels: readonly (CoachStage | null)[],
 ): GameSnapshot {
   const ruleset = getRuleset(room.ruleset_id);
   return {
@@ -73,6 +75,7 @@ function snapshot(
     view: me === null ? publicView(state) : viewFor(state, ruleset, me),
     status: game.status,
     now,
+    stage: me === null ? null : (levels[me] ?? 'new'),
   };
 }
 
@@ -81,9 +84,9 @@ export async function viewGame(gameId: string, userId: string, now = Date.now())
   const { game, room } = await loadGame(gameId);
   const me = seatOf(room.seats, userId);
   if (me === null && room.host_id !== userId) throw new HttpError(403, 'not at this table');
-  const live = await loadLive(gameId);
+  const [live, levels] = await Promise.all([loadLive(gameId), stagesBySeat(room.seats)]);
   if (!live) throw new HttpError(404, 'game has no live state');
-  return snapshot(game, room, live.version, live.deadlines, live.state, me, now, userId);
+  return snapshot(game, room, live.version, live.deadlines, live.state, me, now, userId, levels);
 }
 
 /**
@@ -113,29 +116,32 @@ export async function actOnGame(gameId: string, userId: string | null, clientAct
   if (userId !== null && me === null && room.host_id !== userId) throw new HttpError(403, 'not at this table');
   if (game.status !== 'active') throw new HttpError(409, 'game is over');
 
-  const live = await loadLive(gameId);
+  // The players' levels size the clocks and pick how the filler bots play; read alongside the table, not after it.
+  const [live, levels] = await Promise.all([loadLive(gameId), stagesBySeat(room.seats)]);
   if (!live) throw new HttpError(404, 'game has no live state');
   if (expectedVersion !== null && live.version !== expectedVersion) {
-    throw new HttpError(409, 'stale version', snapshot(game, room, live.version, live.deadlines, live.state, me, now, userId));
+    throw new HttpError(409, 'stale version', snapshot(game, room, live.version, live.deadlines, live.state, me, now, userId, levels));
   }
 
-  const policy = policyFor(await stagesFor(room.seats), room.options['strict'] === true);
+  const strict = room.options['strict'] === true;
+  const policy = policyFor(humanLevels(levels), strict);
+  const bots = emptySeatBots(levels, strict);
   let result;
   try {
-    result = step({ game: live, ruleset, seats: room.seats, policy, now, ...(action ? { action } : {}), ...(me !== null ? { actor: me } : {}), seed: game.seed });
+    result = step({ game: live, ruleset, seats: room.seats, policy, now, ...(action ? { action } : {}), ...(me !== null ? { actor: me } : {}), seed: game.seed, bots });
   } catch (err) {
     const status = rejectionStatus(err);
     if (status) throw new HttpError(status, (err as Error).message);
     throw err;
   }
 
-  if (!result.changed && !result.gameOver) return snapshot(game, room, live.version, live.deadlines, live.state, me, now, userId);
+  if (!result.changed && !result.gameOver) return snapshot(game, room, live.version, live.deadlines, live.state, me, now, userId, levels);
 
   const wasFinished = live.state.phase === 'finished';
   const ok = await saveLive(gameId, live.version, result.state, result.deadlines);
   if (!ok) {
     const fresh = await loadLive(gameId);
-    throw new HttpError(409, 'lost the race', fresh ? snapshot(game, room, fresh.version, fresh.deadlines, fresh.state, me, now, userId) : undefined);
+    throw new HttpError(409, 'lost the race', fresh ? snapshot(game, room, fresh.version, fresh.deadlines, fresh.state, me, now, userId, levels) : undefined);
   }
   const version = live.version + 1;
 
@@ -178,7 +184,7 @@ export async function actOnGame(gameId: string, userId: string | null, clientAct
   const poke = gamePoke(gameId, version, { phase: next.phase, turn: next.turn, seq: next.seq, gameOver: result.gameOver });
   await afterCommit(steps, () => broadcast([poke]), { gameId, version });
 
-  const snap = snapshot({ ...game, status: finished ? 'finished' : game.status }, { ...room, ledger }, version, result.deadlines, next, me, now, userId);
+  const snap = snapshot({ ...game, status: finished ? 'finished' : game.status }, { ...room, ledger }, version, result.deadlines, next, me, now, userId, levels);
   // Only the caller's own stand-in moves: another seat's exchange carries the tiles it passed, which stay private.
   const mine = me === null ? [] : result.standIns.filter((x) => x.seat === me);
   return mine.length > 0 ? { ...snap, standIns: mine } : snap;

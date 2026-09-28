@@ -29,7 +29,7 @@ vi.mock('./store', () => ({
     db.live = { version: expectedVersion + 1, state, deadlines };
     return true;
   }),
-  stagesFor: vi.fn(async () => ['new']),
+  stagesBySeat: vi.fn(async (seats: readonly ({ kind: string } | null)[]) => seats.map((s) => (s?.kind === 'human' ? 'new' : null))),
   appendAction: vi.fn(async () => {}),
   openHand: vi.fn(async () => {}),
   settleScores: vi.fn(async () => null),
@@ -197,6 +197,27 @@ describe('ticking a table', () => {
     const snap = await actOnGame(GAME, 'u-abrar', null, null, T0 + 1000);
     expect(store.saveLive).not.toHaveBeenCalled();
     expect(snap.version).toBe(live.version);
+  });
+});
+
+describe("each player's level", () => {
+  it('gives a seated caller their own level, and an unseated host none, reading levels alongside the table', async () => {
+    setTable();
+    vi.mocked(store.stagesBySeat).mockResolvedValueOnce(['learning', null, null, null]);
+    expect((await viewGame(GAME, 'u-abrar', T0)).stage).toBe('learning');
+    vi.mocked(store.stagesBySeat).mockResolvedValueOnce(['solid', null, null, null]);
+    expect((await viewGame(GAME, 'u-hana', T0)).stage).toBeNull();
+  });
+
+  it('plays the empty seats gently while anyone seated is new, and sharp once everyone is solid', async () => {
+    const live = setTable();
+    vi.mocked(store.stagesBySeat).mockResolvedValueOnce(['new', null, null, null]);
+    await actOnGame(GAME, 'u-abrar', null, null, expired(live));
+    expect(vi.mocked(table.step).mock.calls.at(-1)![0].bots).toBe('gentle');
+    setTable();
+    vi.mocked(store.stagesBySeat).mockResolvedValueOnce(['solid', null, null, null]);
+    await actOnGame(GAME, 'u-abrar', null, null, expired(live));
+    expect(vi.mocked(table.step).mock.calls.at(-1)![0].bots).toBe('sharp');
   });
 });
 

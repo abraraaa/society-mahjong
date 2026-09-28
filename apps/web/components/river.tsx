@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { TileKind } from '@society/engine';
 import { Tile } from './tile';
 import type { RiverTile } from '@/lib/river';
@@ -39,7 +39,7 @@ function capacityOf(el: HTMLDivElement) {
  * hand — a river that changes size every time the coach comes and goes is
  * harder to read than one that is a size too small.
  */
-export function River({ tiles, claimable, highlight }: { tiles: readonly RiverTile[]; claimable: boolean; highlight: TileKind | null }) {
+export const River = memo(function River({ tiles, claimable, highlight }: { tiles: readonly RiverTile[]; claimable: boolean; highlight: TileKind | null }) {
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   /** Once the river has outgrown the felt it stays small until the next hand. */
@@ -113,4 +113,4 @@ export function River({ tiles, claimable, highlight }: { tiles: readonly RiverTi
       )}
     </div>
   );
-}
+});

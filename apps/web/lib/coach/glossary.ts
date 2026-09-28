@@ -48,7 +48,7 @@ export const GLOSSARY: Readonly<Record<Term, TermEntry>> = {
   pung: {
     label: 'Pung',
     short: 'three of the same tile',
-    long: 'Three identical tiles. You can build one from the wall, or take a discard to complete it when you already hold two — that is what the Pung button does.',
+    long: "Three identical tiles. You can build one from the wall, or take a discard to complete it when you already hold two. That's what the Pung button does.",
     example: ['m5', 'm5', 'm5'],
     aliases: ['pungs', 'pung', 'pungged', 'three of a kind'],
   },
@@ -62,7 +62,7 @@ export const GLOSSARY: Readonly<Record<Term, TermEntry>> = {
   chow: {
     label: 'Run',
     short: 'three in a row, one suit',
-    long: 'Three tiles in sequence in one suit, like 3-4-5 of bamboo. Also called a chow. In Karachi rules you build runs from tiles you draw: you cannot claim a discard to make one, unless that tile completes your whole hand.',
+    long: "Three tiles in sequence in one suit, like 3-4-5 of bamboo. Also called a chow. In Karachi rules you build runs from tiles you draw: you can't claim a discard to make one, unless that tile completes your whole hand.",
     example: ['s3', 's4', 's5'],
     aliases: ['runs', 'run', 'chows', 'chow', 'sequence'],
   },
@@ -82,7 +82,7 @@ export const GLOSSARY: Readonly<Record<Term, TermEntry>> = {
   honours: {
     label: 'Honours',
     short: 'the winds and dragons',
-    long: 'The tiles that are not numbered: the four winds (East, South, West, North) and the three dragons (red, green, white). Some rounds want them, some forbid them.',
+    long: "The tiles that aren't numbered: the four winds (East, South, West, North) and the three dragons (red, green, white). Some rounds want them, some forbid them.",
     example: ['WE', 'WS', 'WW', 'WN', 'DR', 'DG', 'DW'],
     aliases: ['honours', 'honour', 'honors', 'honor'],
   },
@@ -105,7 +105,7 @@ export const GLOSSARY: Readonly<Record<Term, TermEntry>> = {
     short: 'characters, bamboo, dots — 1 to 9 each',
     long: 'The three numbered families, each running 1 to 9 with four copies of every tile: characters (the red numerals), bamboo (sticks, with a bird for the 1) and dots (circles).',
     example: ['m1', 's1', 'p1'],
-    aliases: ['suits', 'suit', 'characters', 'bamboo', 'dots'],
+    aliases: ['suits', 'suit', 'characters', 'character', 'bamboo', 'dots'],
   },
   goulash: {
     label: 'Goulash',
@@ -122,7 +122,7 @@ export const GLOSSARY: Readonly<Record<Term, TermEntry>> = {
   discard: {
     label: 'Discard',
     short: 'the tile you throw away each turn',
-    long: 'After drawing, you throw one tile face up into the middle. That is your discard, and for a few seconds the others may claim it.',
+    long: "After drawing, you throw one tile face up into the middle. That's your discard, and for a few seconds the others may claim it.",
     aliases: ['discards', 'discarded', 'discarding', 'discard'],
   },
   river: {
@@ -164,13 +164,13 @@ export const GLOSSARY: Readonly<Record<Term, TermEntry>> = {
   seatWind: {
     label: 'Your own wind',
     short: 'the wind of your seat',
-    long: 'Each seat is a wind: the dealer is East, then South, West and North to the right. A pung of your own wind counts for more in most rules.',
+    long: 'Each seat is a wind: the dealer is East, then South, West and North to the right. In a goulash hand, a pung of your own wind doubles the score.',
     aliases: ['your own wind', 'own wind', 'seat wind'],
   },
   bonus: {
     label: 'Flowers',
-    short: 'bonus tiles, set aside on sight',
-    long: 'Flower and season tiles are not part of any hand. When you draw one it is set aside face up and you draw a replacement. They add points to a goulash hand, and the winner’s own flower or season raises a flat stake.',
+    short: "bonus tiles; they're set aside and you draw again",
+    long: "Flower and season tiles aren't part of any hand. When you draw one, it's set aside face up and you draw another in its place. They add points to a goulash hand, and the winner's own flower or season raises a flat stake.",
     example: ['F1', 'S1'],
     aliases: ['flowers', 'flower', 'seasons', 'season', 'bonus tiles', 'bonus tile'],
   },
@@ -196,14 +196,14 @@ export const GLOSSARY: Readonly<Record<Term, TermEntry>> = {
   exposed: {
     label: 'Exposed',
     short: 'a set laid face up after a claim',
-    long: 'A set you completed by claiming a discard. It is placed face up and cannot change; the rest of your hand stays hidden.',
+    long: "A set you completed by claiming a discard. It's placed face up and can't change; the rest of your hand stays hidden.",
     aliases: ['exposed'],
   },
   draw: {
     label: 'Washed out',
     short: 'the wall ran out with no winner',
     long: 'Nobody completed a hand before the wall ran dry. No points change hands and the next hand is dealt.',
-    aliases: ['washed out', 'wall out', 'wall ran dry'],
+    aliases: ['washed out', 'wall out', 'wall ran dry', "wall's run dry"],
   },
 };
 

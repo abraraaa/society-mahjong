@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { Meld, Wind } from '@society/engine';
 import { Tile, type TileSize } from './tile';
 
@@ -13,7 +14,7 @@ import { Tile, type TileSize } from './tile';
  * laying every tile out — the suit an opponent is chasing is the part that
  * changes how you play, and the full strip is what used to run off both edges.
  */
-export function SeatPill({
+export const SeatPill = memo(function SeatPill({
   wind,
   name,
   concealedCount,
@@ -76,7 +77,7 @@ export function SeatPill({
       )}
     </div>
   );
-}
+});
 
 /** A pung or kong reads from one tile; anything mixed has to show its tiles. */
 function SetGlyph({ meld, size }: { meld: Meld; size: TileSize }) {

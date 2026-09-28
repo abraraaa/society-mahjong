@@ -45,7 +45,7 @@ const CHOWS_EACH = threeSets('chow', 'each').components;
 // East: three chows or three pungs (one suit, or one per suit) + five honours
 // ---------------------------------------------------------------------------
 
-/** The general East rule from the article. "Chow + 5 Honors" is the guide's name for the chow form. */
+/** The general East rule from the article. "Chow + 5 Honours" is the guide's name for the chow form. */
 export const EAST_GENERAL: readonly Pattern[] = (['chow', 'pung'] as const).flatMap((of) =>
   (['clean', 'each'] as const).flatMap((mode) =>
     (['news', 'pungPair'] as const).map((h): Pattern => {
@@ -53,7 +53,7 @@ export const EAST_GENERAL: readonly Pattern[] = (['chow', 'pung'] as const).flat
       return {
         id: `karachi.east.${of}s.${mode}.${h}`,
         name: `Three ${of}s (${mode === 'clean' ? 'one suit' : 'one per suit'}) + five honours (${h === 'news' ? 'NEWS, wind paired' : 'honour pung + pair'})`,
-        localName: of === 'chow' ? 'Chow + 5 Honors' : 'Pung + 5 Honors',
+        localName: of === 'chow' ? 'Chow + 5 Honours' : 'Pung + 5 Honours',
         source: ARTICLE,
         components: [...sets.components, ...(h === 'news' ? NEWS_WIND_PAIRED : HONOUR_PUNG_PAIR)],
         ...(sets.distinct ? { distinct: sets.distinct } : {}),
@@ -257,8 +257,8 @@ export const SOUTH: readonly Pattern[] = [
     id: 'karachi.south.crazyChows',
     name: 'Crazy Chows',
     source: `${GUIDE}; T&M p16`,
-    notes: 'Four mixed chows plus two suit tiles. ⚠ The guide example ends 3b 7d, which is not a pair of any kind; the tail is left as any two suit tiles.',
-    components: [{ c: 'mixedSeq', n: 4 }, { c: 'tiles', n: 2, filter: { suitTile: true } }],
+    notes: 'Four mixed chows in one suit order across the hand (the guide example runs bamboo, dots, characters in every chow, as mixedSeq promises), plus two suit tiles. ⚠ The guide example ends 3b 7d, which is not a pair of any kind; the tail is left as any two suit tiles.',
+    components: [{ c: 'mixedSeq', n: 4, order: '$O' }, { c: 'tiles', n: 2, filter: { suitTile: true } }],
     tags: ['south', 'named'],
   },
 ];
@@ -315,7 +315,7 @@ export const NORTH: readonly Pattern[] = [
   },
   {
     id: 'karachi.north.oneToNinePlusFiveHonours',
-    name: '1-9 plus 5 Honors',
+    name: '1-9 plus 5 Honours',
     source: `${GUIDE}; T&M Wriggly Snake p27`,
     notes: 'Guide example: 1–9 bamboo + E S W N + R. A 1–9 run in one suit plus NEWS and any fifth honour.',
     components: [{ c: 'run', from: 1, to: 9, suit: '$X' }, ...NEWS_ANY_HONOUR],
@@ -323,7 +323,7 @@ export const NORTH: readonly Pattern[] = [
   },
   {
     id: 'karachi.north.oneToSevenPlusSevenHonours',
-    name: '1-7 plus 7 Honors',
+    name: '1-7 plus 7 Honours',
     source: GUIDE,
     notes: 'Guide example: 1–7 bamboo + E S W N + R G Wh. Also Hitler\'s Blunder (Parsi), Seventh Heaven (Mumbai).',
     components: [{ c: 'run', from: 1, to: 7, suit: '$X' }, { c: 'each', kinds: WIND_TILES }, ALL_DRAGONS],
@@ -406,7 +406,7 @@ export const NORTH: readonly Pattern[] = [
   },
   {
     id: 'karachi.north.allHonorHand',
-    name: 'All Honor Hand',
+    name: 'All Honour Hand',
     source: `${GUIDE}; T&M p44`,
     notes: 'Guide example: 111b 999d EEE NNN RR. Pungs of terminals and honours, honour pair. ⚠ terminal pair assumed allowed.',
     components: [

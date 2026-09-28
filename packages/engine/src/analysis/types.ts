@@ -19,6 +19,32 @@ export interface PatternCandidate {
   readonly usingConcealed: readonly TileKind[];
   /** `away` is an upper bound: the search was cut short, so the hand may be closer */
   readonly approximate: boolean;
+  /**
+   * One complete hand of this pattern, the nearest to the player's: the same lay-out
+   * `using` follows, grouped into its sets, each tile marked held or still needed. So
+   * the tiles marked needed number exactly `away`. Null when the search found no
+   * lay-out at all.
+   */
+  readonly layout: readonly LayoutGroup[] | null;
+}
+
+/** A tile in a lay-out: one the player holds, or one still to find. */
+export interface LayoutTile {
+  readonly kind: TileKind;
+  readonly held: boolean;
+}
+
+/** One set of a lay-out, as a player would name it. */
+export interface LayoutGroup {
+  readonly shape: 'run' | 'pung' | 'kong' | 'pair' | 'knit' | 'honours' | 'singles' | 'set';
+  /** a set already laid face up */
+  readonly exposed: boolean;
+  /**
+   * Nothing held towards it and nothing pins which tiles it takes: the kinds shown are
+   * one choice of many (any pung, any pair), so a picture shouldn't promise them.
+   */
+  readonly open: boolean;
+  readonly tiles: readonly LayoutTile[];
 }
 
 /** Why one concealed tile kind is or is not worth keeping. */

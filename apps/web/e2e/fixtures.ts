@@ -76,6 +76,10 @@ function search<T>(what: string, make: (seed: string) => T | null): T {
 export interface Fixtures {
   /** Amna's turn to discard. */
   readonly turn: GameSnapshot;
+  /** The same turn for a first-timer, as the server tallies her. */
+  readonly newTurn: GameSnapshot;
+  /** The same turn for a regular. */
+  readonly solidTurn: GameSnapshot;
   /** The table after her discard: Bilal's turn, so she has no Discard button. */
   readonly turnAfter: GameSnapshot;
   /** The same hand, finished, with the game over. */
@@ -128,6 +132,8 @@ function build(): Fixtures {
 
   return {
     turn: snapshot(live.t.state, 5, live.t.deadlines),
+    newTurn: { ...snapshot(live.t.state, 5, live.t.deadlines), stage: 'new' },
+    solidTurn: { ...snapshot(live.t.state, 5, live.t.deadlines), stage: 'solid' },
     turnAfter: snapshot(live.after.state, 6, live.after.deadlines),
     finished: snapshot(live.end.state, 9, { claim: null, turn: null }, 'finished'),
     westSent: snapshot(west.w.state, 1, west.w.deadlines),

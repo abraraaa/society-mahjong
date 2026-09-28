@@ -1,4 +1,5 @@
 import type { PrivatePlayerView, PublicGameView, Seat } from '@society/engine';
+import type { CoachStage } from '../coach/types';
 import type { StandIn } from './table';
 import type { Deadlines } from './types';
 
@@ -23,6 +24,8 @@ export interface GameSnapshot {
   readonly view: PrivatePlayerView | PublicGameView;
   readonly status: 'active' | 'finished' | 'abandoned';
   readonly now: number;
+  /** the caller's own level, as their profile has tallied it (`new` until a hand is on it); null for someone not seated */
+  readonly stage?: CoachStage | null;
   /** moves an expired clock had a bot make for absent humans, in the request that produced this snapshot */
   readonly standIns?: readonly StandIn[];
 }

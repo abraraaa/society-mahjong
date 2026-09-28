@@ -1,4 +1,19 @@
-import { IllegalAction, SEATS, analysisBot, legalActions, nextHand, reduce, startHand, viewFor, type Action, type HandState, type Ruleset, type Seat } from '@society/engine';
+import {
+  IllegalAction,
+  SEATS,
+  analysisBot,
+  createRng,
+  legalActions,
+  nextHand,
+  reduce,
+  startHand,
+  viewFor,
+  type Action,
+  type BotOptions,
+  type HandState,
+  type Ruleset,
+  type Seat,
+} from '@society/engine';
 import { isBot, isClientActionType, isHuman, type ClientAction, type Deadlines, type LiveGame, type Seats, type TimerPolicy } from './types';
 
 /**
@@ -21,14 +36,35 @@ export class NotYourMove extends Error {
   }
 }
 
+/** How the table plays the seats nobody sits in. */
+export interface TableSetup {
+  /** the bots in empty seats: `gentle` while anyone at the table is still new (policy.ts emptySeatBots); sharp when omitted */
+  readonly bots?: 'sharp' | 'gentle';
+}
+
+/**
+ * The randomness a gentle bot's fumbles come from, for one seat's decision.
+ * Seeded from the game's seed and where the hand stands, so the same request
+ * always plays out the same way: `step` stays a pure function, a retried save
+ * replays identically, and the seed itself never leaves the server.
+ */
+export function decisionRandom(state: HandState, seat: Seat): () => number {
+  return createRng(`${state.seed}:bot:${state.progress.handIndex}:${state.seq}:${state.preplayStep}:${seat}`).next;
+}
+
+/** A bot in an empty seat: the analysis straight, or gently on this decision's own seeded randomness. */
+function botOptions(s: HandState, seat: Seat, setup: TableSetup | undefined): BotOptions {
+  return setup?.bots === 'gentle' ? { strength: 'gentle', random: decisionRandom(s, seat) } : {};
+}
+
 /**
  * Play every bot decision and every forced human response until a human has a
  * real decision to make or the hand is over.
  */
-export function settle(state: HandState, ruleset: Ruleset, seats: Seats): HandState {
+export function settle(state: HandState, ruleset: Ruleset, seats: Seats, setup?: TableSetup): HandState {
   let s = state;
   for (let i = 0; i < MAX_BOT_STEPS; i++) {
-    const next = settleOnce(s, ruleset, seats);
+    const next = settleOnce(s, ruleset, seats, setup);
     if (next === null) return s;
     s = next;
   }
@@ -36,13 +72,13 @@ export function settle(state: HandState, ruleset: Ruleset, seats: Seats): HandSt
 }
 
 /** One forced or bot move, or null when the table is waiting on a human. */
-function settleOnce(s: HandState, ruleset: Ruleset, seats: Seats): HandState | null {
+function settleOnce(s: HandState, ruleset: Ruleset, seats: Seats, setup: TableSetup | undefined): HandState | null {
   if (s.phase === 'finished') return null;
 
   if (s.phase === 'preplay') {
     for (const seat of SEATS) {
       if (!isBot(seats, seat)) continue;
-      const a = analysisBot(viewFor(s, ruleset, seat), ruleset);
+      const a = analysisBot(viewFor(s, ruleset, seat), ruleset, botOptions(s, seat, setup));
       if (a && a.type === 'exchange') return reduce(s, a, ruleset);
     }
     return null;
@@ -53,7 +89,7 @@ function settleOnce(s: HandState, ruleset: Ruleset, seats: Seats): HandState | n
       const legal = legalActions(s, ruleset, seat);
       if (!legal.claims) continue; // discarder, or already responded
       if (isBot(seats, seat)) {
-        const a = analysisBot(viewFor(s, ruleset, seat), ruleset) ?? { type: 'pass', seat };
+        const a = analysisBot(viewFor(s, ruleset, seat), ruleset, botOptions(s, seat, setup)) ?? { type: 'pass', seat };
         return reduce(s, a, ruleset);
       }
       // A human with nothing to claim is not asked; the engine still wants the pass.
@@ -64,7 +100,7 @@ function settleOnce(s: HandState, ruleset: Ruleset, seats: Seats): HandState | n
 
   // turn
   if (isBot(seats, s.turn)) {
-    const a = analysisBot(viewFor(s, ruleset, s.turn), ruleset);
+    const a = analysisBot(viewFor(s, ruleset, s.turn), ruleset, botOptions(s, s.turn, setup));
     if (!a) throw new Error(`bot at seat ${s.turn} has no move`);
     return reduce(s, a, ruleset);
   }
@@ -103,7 +139,8 @@ export function deadlinesFor(state: HandState, ruleset: Ruleset, seats: Seats, p
  * is decided by a bot standing in for them, in a claim window as in a turn:
  * it takes a win they were offered, claims a set only when that brings their
  * hand closer, and passes on the rest, so the table moves on and an absent
- * player's Mahjong is not thrown away.
+ * player's Mahjong is not thrown away. It is their hand and their points, so
+ * the stand-in always plays sharp, however gently the empty seats' bots do.
  */
 export function resolveExpired(game: LiveGame, ruleset: Ruleset, seats: Seats, now: number): HandState | null {
   return resolveExpiredWith(game, ruleset, seats, now)?.state ?? null;
@@ -152,6 +189,8 @@ export interface StepInput {
   readonly actor?: Seat;
   /** the game's seed, needed only to deal the next hand */
   readonly seed?: string;
+  /** how the bots in empty seats play (policy.ts emptySeatBots); sharp when omitted */
+  readonly bots?: 'sharp' | 'gentle';
 }
 
 export interface StepResult extends LiveGame {
@@ -171,6 +210,7 @@ export interface StepResult extends LiveGame {
  */
 export function step(input: StepInput): StepResult {
   const { ruleset, seats, policy, now } = input;
+  const setup: TableSetup = input.bots ? { bots: input.bots } : {};
   // A hand that ends inside this step, its clock run out, must be recorded as it closes, never dealt over. A finished
   // hand has no clock to resolve, so this refuses nothing the client offers.
   if (input.action?.type === 'nextHand' && input.game.state.phase !== 'finished') throw new IllegalAction('hand not finished');
@@ -179,7 +219,7 @@ export function step(input: StepInput): StepResult {
 
   const expired = resolveExpiredWith(input.game, ruleset, seats, now);
   if (expired) {
-    s = settle(expired.state, ruleset, seats);
+    s = settle(expired.state, ruleset, seats, setup);
     changed = true;
   }
 
@@ -194,16 +234,16 @@ export function step(input: StepInput): StepResult {
       if (input.seed === undefined) throw new Error('nextHand needs the seed');
       const n = nextHand(s, ruleset);
       if (n === null) gameOver = true;
-      else s = settle(startHand(ruleset, { seed: input.seed, ...n }), ruleset, seats);
+      else s = settle(startHand(ruleset, { seed: input.seed, ...n }), ruleset, seats, setup);
     } else {
       if (input.actor === undefined || input.action.seat !== input.actor) throw new NotYourMove('action is not for your seat');
       if (!isHuman(seats, input.actor)) throw new NotYourMove('that seat is a bot');
-      s = settle(reduce(s, input.action, ruleset), ruleset, seats);
+      s = settle(reduce(s, input.action, ruleset), ruleset, seats, setup);
     }
     changed = true;
   } else if (!expired) {
     // A sweep or a first load: still make sure nothing is waiting on a bot.
-    const settled = settle(s, ruleset, seats);
+    const settled = settle(s, ruleset, seats, setup);
     if (settled !== s) {
       s = settled;
       changed = true;
@@ -215,8 +255,8 @@ export function step(input: StepInput): StepResult {
 }
 
 /** A fresh hand for a game, with bots already played up to the first human decision. */
-export function dealFirstHand(ruleset: Ruleset, seats: Seats, seed: string, policy: TimerPolicy, now: number): LiveGame {
-  const state = settle(startHand(ruleset, { seed, progress: { roundWind: 'E', roundIndex: 0, handInRound: 0, handIndex: 0 }, dealer: 0 }), ruleset, seats);
+export function dealFirstHand(ruleset: Ruleset, seats: Seats, seed: string, policy: TimerPolicy, now: number, setup?: TableSetup): LiveGame {
+  const state = settle(startHand(ruleset, { seed, progress: { roundWind: 'E', roundIndex: 0, handInRound: 0, handIndex: 0 }, dealer: 0 }), ruleset, seats, setup);
   return { state, deadlines: deadlinesFor(state, ruleset, seats, policy, now) };
 }
 

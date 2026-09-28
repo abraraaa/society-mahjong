@@ -1,4 +1,4 @@
-import type { ClaimOption, Seat, TileKind, Wind } from '@society/engine';
+import type { ClaimOption, LayoutGroup, Seat, TileKind, Wind } from '@society/engine';
 
 /**
  * The coach's structured answer. Everything the bubble says is derived from these
@@ -47,6 +47,8 @@ export interface CoachTarget {
   readonly wantsFromDiscard: readonly TileKind[];
   /** needed tiles only the wall can supply - in Karachi, every run */
   readonly wantsFromWall: readonly TileKind[];
+  /** the nearest complete hand of this pattern, grouped into sets, each tile held or still to find; null when there isn't one */
+  readonly layout: readonly LayoutGroup[] | null;
 }
 
 export type CoachAction =

@@ -25,6 +25,32 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: example
 
+  # Every migration applied, in order and then again, to a real Postgres with a stand-in for the parts of
+  # Supabase they rely on, followed by the checks in supabase/tests/checks.sql (grants, RLS, commit_table).
+  db:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: supabase/tests/apply.sh
+        env:
+          PGHOST: localhost
+          PGPORT: 5432
+          PGUSER: postgres
+          PGPASSWORD: postgres
+
   # Browser tests against a production build of its own: the fake Supabase's address is baked into the
   # client bundle, so this job never shares a build with the check job above.
   e2e:
