@@ -160,6 +160,60 @@ begin
 end
 $$;
 
+-- game_players: the key the server writes on, and what happens when a game or a person goes.
+do $$
+declare
+  u uuid := gen_random_uuid();
+  w uuid := gen_random_uuid();
+  r uuid;
+  g uuid;
+begin
+  insert into auth.users (id, is_anonymous) values (u, true), (w, true);
+  insert into public.rooms (code, host_id, ruleset_id) values ('KHI-TEST3', u, 'karachi') returning id into r;
+  insert into public.games (room_id, seed) values (r, 'seed') returning id into g;
+
+  -- The deal writes four seats; the finish writes them again with score and place (upsert on game and seat).
+  insert into public.game_players (game_id, seat, user_id, kind, name) values (g, 0, u, 'human', 'Amna'), (g, 1, null, 'bot', 'Bilal'), (g, 2, null, 'bot', 'Sana'), (g, 3, w, 'human', 'Zara');
+  insert into public.game_players (game_id, seat, user_id, kind, name, score, place) values (g, 3, null, 'bot', 'Omar', -8504, 4)
+    on conflict (game_id, seat) do update set user_id = excluded.user_id, kind = excluded.kind, name = excluded.name, score = excluded.score, place = excluded.place;
+  assert (select count(*) from public.game_players where game_id = g) = 4, 'one row per seat';
+  assert (select name = 'Omar' and user_id is null and place = 4 from public.game_players where game_id = g and seat = 3), 'a seat''s row follows whoever holds it';
+  begin
+    insert into public.game_players (game_id, seat, kind, name) values (g, 4, 'bot', 'X');
+    raise exception 'seat 4 was accepted';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.game_players (game_id, seat, kind, name) values (g, 0, 'bot', 'X');
+    raise exception 'a second row for seat 0 was accepted';
+  exception when unique_violation then null;
+  end;
+  -- A person with no profile row is refused as 23503, the code the deal answers by writing the seats without ids (store.ts).
+  begin
+    update public.game_players set user_id = gen_random_uuid() where game_id = g and seat = 1;
+    raise exception 'a seat was given a person with no profile';
+  exception when foreign_key_violation then null;
+  end;
+
+  -- A person deleted: their game rows stay as history, without them.
+  update public.game_players set user_id = w, kind = 'human', name = 'Zara' where game_id = g and seat = 1;
+  update public.games set ended_by = w where id = g;
+  delete from auth.users where id = w;
+  assert (select ended_by is null from public.games where id = g), 'ended_by forgets a deleted person';
+  assert (select user_id is null and name = 'Zara' from public.game_players where game_id = g and seat = 1), 'a seat''s row forgets a deleted person and keeps their name';
+
+  -- A game deleted (the deal gives up on one part way): its players, hands and live table go with it.
+  insert into public.hands (game_id, hand_index, dealer, progress) values (g, 0, 0, '{}');
+  insert into public.live_state (game_id, version, state) values (g, 1, '{}');
+  delete from public.games where id = g;
+  assert not exists (select 1 from public.game_players where game_id = g), 'players go with their game';
+  assert not exists (select 1 from public.hands where game_id = g) and not exists (select 1 from public.live_state where game_id = g), 'and so do its hands and live table';
+
+  delete from public.rooms where id = r;
+  delete from auth.users where id = u;
+end
+$$;
+
 -- The move log holds every seat's moves: a seated player reads a hand's log only once it has ended.
 do $$
 declare
@@ -180,6 +234,22 @@ begin
   assert seen = 1, format('a seated player sees only the ended hand''s log (saw %s)', seen);
   delete from public.rooms where id = r;
   delete from auth.users where id = u;
+end
+$$;
+
+-- The server writes these through the service role: the deal and the finish (game_players), check-ins (room_members),
+-- the funnel (app_events). Supabase's default grants give it them; this says so out loud.
+do $$
+declare t text; p text;
+begin
+  foreach t in array array['game_players', 'room_members', 'app_events'] loop
+    foreach p in array array['select', 'insert', 'update'] loop
+      if not has_table_privilege('service_role', 'public.' || t, p) then raise exception 'the service role may not % on public.%', p, t; end if;
+    end loop;
+  end loop;
+  if not has_sequence_privilege('service_role', 'public.app_events_id_seq', 'usage') then raise exception 'the service role may not number app_events'; end if;
+  -- A deal that fails part way deletes its game (store.ts startGame).
+  if not has_table_privilege('service_role', 'public.games', 'delete') then raise exception 'the service role may not drop an unstarted game'; end if;
 end
 $$;
 

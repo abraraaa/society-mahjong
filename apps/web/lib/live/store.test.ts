@@ -77,7 +77,7 @@ import {
 } from './store';
 import { commitArgs, type TableWrite } from './hand-log';
 import { humanLevels, policyFor } from './policy';
-import type { Seats } from './types';
+import type { LiveGame, LoggedMove, Seats } from './types';
 
 const DOWN = { message: 'TypeError: fetch failed', code: '' };
 /** Game ids are uuids, as the database mints them. */
@@ -136,6 +136,18 @@ const wonHand = {
 } as unknown as HandState;
 const newGame = { id: 'g-2', room_id: 'r-1', seed: 'seed', status: 'active', hands_played: 0 };
 const T = Date.parse('2026-09-24T20:00:00.000Z');
+/** A deal as the start route hands it over: hand 0 waiting on Abrar's turn clock, with the moves made before it, stamped version 1. */
+const dealt = { dealer: 3, progress: { roundWind: 'E', roundIndex: 0, handInRound: 0, handIndex: 0 }, phase: 'turn' } as unknown as HandState;
+const first: LiveGame & { moves: LoggedMove[] } = {
+  state: dealt,
+  deadlines: { claim: null, turn: T + 90_000 },
+  moves: [
+    { v: 1, by: 'bot', seat: 3, a: { type: 'discard', seat: 3, tile: 's5' } },
+    { v: 1, by: 'table', seat: 1, a: { type: 'pass', seat: 1 } },
+  ],
+};
+/** What the deal's queries answer when they work: the new game's row, and the one room the pointer matched. */
+const dealAnswers = (q: Query): unknown => (q.target === 'games' ? newGame : q.target === 'rooms' ? [{ id: 'r-1' }] : null);
 /** Hana's win, as one request writes it: the hand ends, its points are in the running totals, and a clock waits on nobody. */
 const write: TableWrite = {
   state: wonHand,
@@ -279,8 +291,8 @@ interface Write {
   readonly labels: readonly string[];
   /** what a query that works answers */
   readonly data?: (q: Query) => unknown;
-  /** how the write ends when nothing fails: it resolves, unless it refuses with a 409 */
-  readonly ends?: 'resolves' | 'refuses';
+  /** after a failure at any query but its first, it deletes the game it made before throwing (startGame) */
+  readonly dropsGame?: boolean;
 }
 const WRITES: readonly Write[] = [
   {
@@ -293,16 +305,10 @@ const WRITES: readonly Write[] = [
   { name: 'commitTable', run: () => commitTable(GAME, 3, write), labels: ['save the table'], data: () => 4 },
   {
     name: 'startGame',
-    run: () => startGame(room, 'seed', seats, wonHand, { claim: null, turn: null }),
-    labels: ['create the game', 'deal the first hand', 'open the first hand', 'point the room at the game'],
-    data: (q) => (q.target === 'games' ? newGame : q.target === 'rooms' ? [{ id: 'r-1' }] : null),
-  },
-  {
-    name: 'startGame, when the seats moved before the deal',
-    run: () => startGame(room, 'seed', seats, wonHand, { claim: null, turn: null }),
-    labels: ['create the game', 'deal the first hand', 'open the first hand', 'point the room at the game', 'drop the unstarted game'],
-    data: (q) => (q.target === 'games' ? newGame : q.target === 'rooms' ? [] : null),
-    ends: 'refuses',
+    run: () => startGame(room, 'seed', seats, first),
+    labels: ['create the game', 'open the first hand', 'seat the players', 'deal the first hand', 'point the room at the game'],
+    data: dealAnswers,
+    dropsGame: true,
   },
   { name: 'finishGame', run: () => finishGame(GAME, 'r-1'), labels: ['close the room', 'finish the game'] },
   { name: 'abandonGame', run: () => abandonGame(GAME, 'r-1'), labels: ['close the room', 'abandon the game'] },
@@ -312,9 +318,7 @@ const WRITES: readonly Write[] = [
 describe('writes', () => {
   it.each(WRITES)('$name throws at whichever of its queries fails, naming it, and goes no further', async (w) => {
     answerAll(undefined, w.data);
-    const clean = await thrown(w.run());
-    if (w.ends === 'refuses') expect((clean as HttpError).status).toBe(409);
-    else expect(clean).toBeNull();
+    expect(await thrown(w.run())).toBeNull();
     expect(supabase.log).toHaveLength(w.labels.length);
 
     for (const [i, label] of w.labels.entries()) {
@@ -323,7 +327,10 @@ describe('writes', () => {
       const err = await thrown(w.run());
       expect(err).toBeInstanceOf(SupabaseError);
       expect((err as SupabaseError).what).toBe(label);
-      expect(supabase.log).toHaveLength(i + 1);
+      // Nothing after the failed query, except that a deal that had made its game deletes it.
+      const drops = w.dropsGame === true && i > 0;
+      expect(supabase.log).toHaveLength(i + 1 + (drops ? 1 : 0));
+      if (drops) expect(ran().at(-1)).toBe('games:delete');
     }
   });
 
@@ -333,13 +340,145 @@ describe('writes', () => {
     answerAll(undefined, () => null);
     expect(await commitTable(GAME, 3, write)).toBeNull();
   });
+});
 
-  it('drop the game and say so when the seats moved before the deal', async () => {
-    answerAll(undefined, (q) => (q.target === 'games' ? newGame : q.target === 'rooms' ? [] : null));
-    const err = await thrown(startGame(room, 'seed', seats, wonHand, { claim: null, turn: null }));
+/**
+ * The deal: five writes in an order that can't leave half a table. A game
+ * that doesn't make it all the way is deleted (its hand, players and live
+ * table go with it), so the room is never pointed at one that isn't all there,
+ * and the error thrown is always the one that stopped the deal.
+ */
+describe('dealing a game', () => {
+  /** The first argument of the first query on this table made this way: the row(s) it wrote. */
+  const wrote = (target: string, method: string): unknown => supabase.log.find(is(target, method))!.steps[0]![1][0];
+  /** Every write after the game's own row. */
+  const AFTER_THE_GAME = [
+    { label: 'open the first hand', at: is('hands', 'insert') },
+    { label: 'seat the players', at: is('game_players', 'insert') },
+    { label: 'deal the first hand', at: is('live_state', 'insert') },
+    { label: 'point the room at the game', at: is('rooms', 'update') },
+  ];
+  /** The one error line logged, parsed. */
+  const logged = (log: { mock: { calls: unknown[][] } }): Record<string, unknown> => {
+    expect(log.mock.calls).toHaveLength(1);
+    return JSON.parse(log.mock.calls[0]![0] as string) as Record<string, unknown>;
+  };
+
+  it("writes the game, its first hand with the deal's moves, who sat where, the live table, then the room, in that order", async () => {
+    answerAll(undefined, dealAnswers);
+    expect(await startGame(room, 'seed', seats, first)).toEqual(newGame);
+    expect(ran()).toEqual(['games:insert', 'hands:insert', 'game_players:insert', 'live_state:insert', 'rooms:update']);
+    expect(wrote('games', 'insert')).toEqual({ room_id: 'r-1', seed: 'seed' });
+    expect(wrote('hands', 'insert')).toEqual({ game_id: 'g-2', hand_index: 0, dealer: 3, progress: dealt.progress, actions: first.moves });
+    expect(wrote('game_players', 'insert')).toEqual([
+      { game_id: 'g-2', seat: 0, user_id: 'u-abrar', kind: 'human', name: 'Abrar' },
+      { game_id: 'g-2', seat: 1, user_id: 'u-hana', kind: 'human', name: 'Hana' },
+      { game_id: 'g-2', seat: 2, user_id: null, kind: 'bot', name: 'Bilal' },
+      { game_id: 'g-2', seat: 3, user_id: null, kind: 'bot', name: 'Sana' },
+    ]);
+    // Fresh bookkeeping (version 1, nobody on any points) and the wake time; acted_at is left to the database's now.
+    expect(wrote('live_state', 'insert')).toEqual({
+      game_id: 'g-2',
+      version: 1,
+      state: dealt,
+      table_state: { v: 1, scores: [0, 0, 0, 0] },
+      claim_deadline: null,
+      turn_deadline: '2026-09-24T20:01:30.000Z',
+      wake_at: '2026-09-24T20:01:30.000Z',
+    });
+    const point = supabase.log.find(is('rooms', 'update'))!;
+    expect(point.steps[0]).toEqual(['update', [{ status: 'playing', current_game_id: 'g-2', seats, updated_at: expect.any(String) }]]);
+    expect(point.steps).toContainEqual(['eq', ['id', 'r-1']]);
+    expect(point.steps).toContainEqual(['eq', ['updated_at', room.updated_at]]);
+  });
+
+  it('wakes the table at its earliest clock', async () => {
+    const cases = [
+      { deadlines: { claim: T + 30_000, turn: T + 90_000 }, wake: '2026-09-24T20:00:30.000Z' },
+      { deadlines: { claim: T + 30_000, turn: null }, wake: '2026-09-24T20:00:30.000Z' },
+      { deadlines: { claim: null, turn: null }, wake: null },
+    ];
+    for (const { deadlines, wake } of cases) {
+      supabase.log.length = 0;
+      answerAll(undefined, dealAnswers);
+      await startGame(room, 'seed', seats, { ...first, deadlines });
+      expect(wrote('live_state', 'insert')).toMatchObject({ wake_at: wake });
+    }
+  });
+
+  it.each(AFTER_THE_GAME)('deletes the game when "$label" fails, and throws that failure', async ({ label, at }) => {
+    answerAll(at, dealAnswers);
+    const err = await thrown(startGame(room, 'seed', seats, first));
+    expect(err).toBeInstanceOf(SupabaseError);
+    expect((err as SupabaseError).what).toBe(label);
+    const failedAt = supabase.log.findIndex(at);
+    expect(supabase.log).toHaveLength(failedAt + 2);
+    expect(supabase.log.at(-1)).toEqual({
+      target: 'games',
+      steps: [
+        ['delete', []],
+        ['eq', ['id', 'g-2']],
+      ],
+    });
+  });
+
+  it('still throws the failure that stopped the deal when the game cannot be deleted either, and logs the delete as drop_game_failed', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    answerAll((q) => is('game_players', 'insert')(q) || is('games', 'delete')(q), dealAnswers);
+    const err = await thrown(startGame(room, 'seed', seats, first));
+    expect((err as SupabaseError).what).toBe('seat the players');
+    expect(ran()).toEqual(['games:insert', 'hands:insert', 'game_players:insert', 'games:delete']);
+    expect(logged(log)).toMatchObject({
+      level: 'error',
+      event: 'drop_game_failed',
+      gameId: 'g-2',
+      name: 'SupabaseError',
+      message: 'could not drop the unstarted game: TypeError: fetch failed',
+    });
+  });
+
+  it('deletes the game and asks the host to start again when the seats moved before the deal, even if the delete fails', async () => {
+    answerAll(undefined, (q) => (q.target === 'rooms' ? [] : dealAnswers(q)));
+    const err = await thrown(startGame(room, 'seed', seats, first));
     expect(err).toBeInstanceOf(HttpError);
-    expect((err as HttpError).status).toBe(409);
-    expect(ran()).toEqual(['games:insert', 'live_state:insert', 'hands:insert', 'rooms:update', 'games:delete']);
+    expect(err).toMatchObject({ status: 409, message: 'the seats changed; start again' });
+    expect(ran()).toEqual(['games:insert', 'hands:insert', 'game_players:insert', 'live_state:insert', 'rooms:update', 'games:delete']);
+
+    supabase.log.length = 0;
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    answerAll(is('games', 'delete'), (q) => (q.target === 'rooms' ? [] : dealAnswers(q)));
+    expect(await thrown(startGame(room, 'seed', seats, first))).toMatchObject({ status: 409, message: 'the seats changed; start again' });
+    expect(logged(log)).toMatchObject({ event: 'drop_game_failed', gameId: 'g-2' });
+  });
+
+  it('writes who sat where once more without ids when a seated person has no profile row, and logs it as profile_missing', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const noProfile = { message: 'insert or update on table "game_players" violates foreign key constraint "game_players_user_id_fkey"', code: '23503' };
+    let tries = 0;
+    supabase.answer = (q) => (is('game_players', 'insert')(q) && tries++ === 0 ? { data: null, error: noProfile } : ok(dealAnswers(q)));
+    expect(await startGame(room, 'seed', seats, first)).toEqual(newGame);
+    expect(ran()).toEqual(['games:insert', 'hands:insert', 'game_players:insert', 'game_players:insert', 'live_state:insert', 'rooms:update']);
+    const [, again] = supabase.log.filter(is('game_players', 'insert'));
+    expect(again!.steps[0]![1][0]).toEqual([
+      { game_id: 'g-2', seat: 0, user_id: null, kind: 'human', name: 'Abrar' },
+      { game_id: 'g-2', seat: 1, user_id: null, kind: 'human', name: 'Hana' },
+      { game_id: 'g-2', seat: 2, user_id: null, kind: 'bot', name: 'Bilal' },
+      { game_id: 'g-2', seat: 3, user_id: null, kind: 'bot', name: 'Sana' },
+    ]);
+    expect(logged(log)).toMatchObject({ level: 'error', event: 'profile_missing', gameId: 'g-2', code: '23503', message: `could not seat the players: ${noProfile.message}` });
+    expect(log.mock.calls[0]![0]).not.toContain('u-abrar');
+  });
+
+  it('tries only once more, and not at all for any other failure, before giving the deal up', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    supabase.answer = (q) => (is('game_players', 'insert')(q) ? { data: null, error: { message: 'still no profile', code: '23503' } } : ok(dealAnswers(q)));
+    expect(await thrown(startGame(room, 'seed', seats, first))).toMatchObject({ what: 'seat the players', code: '23503' });
+    expect(ran()).toEqual(['games:insert', 'hands:insert', 'game_players:insert', 'game_players:insert', 'games:delete']);
+
+    supabase.log.length = 0;
+    answerAll(is('game_players', 'insert'), dealAnswers);
+    expect(await thrown(startGame(room, 'seed', seats, first))).toMatchObject({ what: 'seat the players' });
+    expect(ran()).toEqual(['games:insert', 'hands:insert', 'game_players:insert', 'games:delete']);
   });
 });
 
@@ -409,7 +548,7 @@ describe('saving the live table', () => {
     expect(ran()).toEqual(['rpc:commit_table:rpc']);
   });
 
-  it('is the only way the store writes a live table: nothing updates live_state or writes hand_results', async () => {
+  it('is the only way the store writes a live table: nothing updates live_state, writes hand_results or writes rooms.ledger', async () => {
     for (const gone of ['saveLive', 'appendAction', 'openHand', 'endHand', 'settleScores', 'recordResult', 'clearDeadlines']) expect(store, gone).not.toHaveProperty(gone);
     const everything: (() => Promise<unknown>)[] = [
       ...WRITES.map((w) => w.run),
@@ -427,6 +566,10 @@ describe('saving the live table', () => {
     }
     expect(supabase.log.length).toBeGreaterThan(everything.length);
     expect(ran().filter((q) => q === 'live_state:update' || q === 'live_state:upsert' || q.startsWith('hand_results:') || q.startsWith('hands:update'))).toEqual([]);
+    // The running totals live in table_state now: rooms.ledger is only ever read, to seed a table dealt before it.
+    const roomWrites = supabase.log.filter((q) => q.target === 'rooms').flatMap((q) => q.steps.filter(([m]) => m === 'insert' || m === 'update' || m === 'upsert'));
+    expect(roomWrites.length).toBeGreaterThan(1);
+    expect(roomWrites.filter(([, [row]]) => typeof row === 'object' && row !== null && 'ledger' in row)).toEqual([]);
   });
 });
 

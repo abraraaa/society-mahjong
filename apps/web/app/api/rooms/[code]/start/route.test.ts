@@ -89,4 +89,20 @@ describe('POST /api/rooms/[code]/start', () => {
     await start();
     expect(vi.mocked(table.dealFirstHand).mock.calls.at(-1)![5]).toEqual({ bots: 'gentle' });
   });
+
+  it("hands the store the deal with the bots' opening moves, each stamped with the live table's first version", async () => {
+    // The host in seat 2, so the bots in seats 0 and 1 move before anyone has to decide anything.
+    db.room = { ...room, status: 'finished', seats: [null, null, { kind: 'human', userId: 'u-abrar', name: 'Abrar' }, null] };
+    db.game = game('finished');
+    expect((await start()).status).toBe(201);
+    const dealt = vi.mocked(table.dealFirstHand).mock.results.at(-1)!.value as ReturnType<typeof table.dealFirstHand>;
+    expect(dealt.moves.length).toBeGreaterThan(0);
+    const [, seed, seats, first] = vi.mocked(store.startGame).mock.calls.at(-1)!;
+    expect(seed).toBe(dealt.state.seed);
+    expect(seats.map((s) => s?.kind)).toEqual(['bot', 'bot', 'human', 'bot']);
+    expect(first.state).toBe(dealt.state);
+    expect(first.deadlines).toBe(dealt.deadlines);
+    expect(first.moves).toEqual(dealt.moves.map((m) => ({ ...m, v: 1 })));
+    expect(first.moves.every((m) => m.v === 1 && (m.by === 'bot' || m.by === 'table'))).toBe(true);
+  });
 });

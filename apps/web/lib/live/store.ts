@@ -3,11 +3,11 @@ import type { HandState, RulesetId, Seat } from '@society/engine';
 import type { CoachStage } from '@/lib/coach';
 // Relative rather than '@/': vitest runs without the path alias, and the tests load this.
 import { createServiceClient } from '../supabase/service';
-import { HttpError, must } from './errors';
+import { HttpError, must, SupabaseError } from './errors';
 import { commitArgs, type TableWrite } from './hand-log';
 import { stageFromStats, tallyHand, type ProfileStats } from './stage';
-import { parseTableState, type TableState } from './table-state';
-import type { Deadlines, RoomStatus, Seats } from './types';
+import { NEW_TABLE, parseTableState, tableStateJson, wakeAt, type TableState } from './table-state';
+import type { Deadlines, LiveGame, LoggedMove, RoomStatus, Seats } from './types';
 import { logError } from './log';
 import { cleanDisplayName, isUuid } from './validate';
 
@@ -23,8 +23,8 @@ export interface RoomRow {
   readonly seats: Seats;
   readonly current_game_id: string | null;
   /**
-   * running totals per seat, as code before table_state kept them. Nothing writes it now but startGame's reset; it's read
-   * only to seed a legacy table's scores (table-state.ts withLegacyScores)
+   * running totals per seat, as code before table_state kept them. Nothing writes it now; it's read only to seed a legacy
+   * table's scores (table-state.ts withLegacyScores)
    */
   readonly ledger: readonly number[];
   /** the row's last write, as the database formats it; a seat write compares against it so a lost race is not a lost seat */
@@ -109,30 +109,91 @@ export async function gameById(id: string): Promise<GameRow | null> {
   return (data as GameRow | null) ?? null;
 }
 
-/** Creates the game and its first live state, and points the room at it. */
-export async function startGame(room: RoomRow, seed: string, seats: Seats, state: HandState, deadlines: Deadlines): Promise<GameRow> {
+/** Postgres's code for a foreign key that points at nothing: here, a person with no profile row. */
+const NO_SUCH_ROW = '23503';
+
+/**
+ * Deal a new game, in an order that can't leave half a table:
+ *   1. the game's own row;
+ *   2. its first hand, with the moves the bots made at the deal (stamped
+ *      version 1, the live table's first), so a live table never exists
+ *      without its hand;
+ *   3. who sat where (game_players, one row per seat as dealt);
+ *   4. the live table, with fresh bookkeeping (nobody has any points) and its
+ *      wake time; acted_at is the database's now, since the host just acted;
+ *   5. the room, pointed at the game, only if its seats are as the host read
+ *      them.
+ * Any failure after the first step deletes the game, and its hand, players
+ * and live table go with it, so the room is never pointed at a game that
+ * isn't all there. The error thrown is always the one that stopped the deal:
+ * a delete that fails as well is logged as drop_game_failed and nothing more.
+ */
+export async function startGame(room: RoomRow, seed: string, seats: Seats, first: LiveGame & { readonly moves: readonly LoggedMove[] }): Promise<GameRow> {
   const client = db();
   const g = must(await client.from('games').insert({ room_id: room.id, seed }).select('id, room_id, seed, status, hands_played').single(), 'create the game') as GameRow;
-  must(
-    await client.from('live_state').insert({ game_id: g.id, version: 1, state, claim_deadline: toIso(deadlines.claim), turn_deadline: toIso(deadlines.turn) }),
-    'deal the first hand',
-  );
-  must(await client.from('hands').insert({ game_id: g.id, hand_index: state.progress.handIndex, dealer: state.dealer, progress: state.progress }), 'open the first hand');
-  const rows = must(
-    await client
-      .from('rooms')
-      .update({ status: 'playing', current_game_id: g.id, seats, ledger: [0, 0, 0, 0], updated_at: new Date().toISOString() })
-      .eq('id', room.id)
-      .eq('updated_at', room.updated_at)
-      .select('id'),
-    'point the room at the game',
-  );
-  if (rows?.length !== 1) {
+  try {
+    const { state, deadlines } = first;
+    must(
+      await client.from('hands').insert({ game_id: g.id, hand_index: state.progress.handIndex, dealer: state.dealer, progress: state.progress, actions: first.moves }),
+      'open the first hand',
+    );
+    await seatPlayers(client, g.id, seats);
+    must(
+      await client.from('live_state').insert({
+        game_id: g.id,
+        version: 1,
+        state,
+        table_state: tableStateJson(NEW_TABLE),
+        claim_deadline: toIso(deadlines.claim),
+        turn_deadline: toIso(deadlines.turn),
+        wake_at: toIso(wakeAt({ deadlines, table: NEW_TABLE, actedAt: Date.now() })),
+      }),
+      'deal the first hand',
+    );
+    const rows = must(
+      await client
+        .from('rooms')
+        .update({ status: 'playing', current_game_id: g.id, seats, updated_at: new Date().toISOString() })
+        .eq('id', room.id)
+        .eq('updated_at', room.updated_at)
+        .select('id'),
+      'point the room at the game',
+    );
     // The seats moved after the host read them (someone sat down or stood up); dealing now could hand a seat to a bot. Drop the game and ask again.
-    must(await client.from('games').delete().eq('id', g.id), 'drop the unstarted game');
-    throw new HttpError(409, 'the seats changed; start again');
+    if (rows?.length !== 1) throw new HttpError(409, 'the seats changed; start again');
+  } catch (err) {
+    await dropGame(client, g.id);
+    throw err;
   }
   return g;
+}
+
+/**
+ * game_players at the deal: one row per seat, with the person's id on a
+ * human's row (the start route has put a bot in every empty seat, so there
+ * are four). Every signed-in person gets a profile row when they sign up,
+ * but a seat whose person has none would refuse the whole insert, so on that
+ * refusal it's logged as profile_missing and written once more without ids:
+ * the rows still say who sat where, by name, and nobody is kept from playing.
+ */
+async function seatPlayers(client: ReturnType<typeof db>, gameId: string, seats: Seats): Promise<void> {
+  const rows = seats.flatMap((s, seat) => (s === null ? [] : [{ game_id: gameId, seat, user_id: s.kind === 'human' ? s.userId : null, kind: s.kind, name: s.name }]));
+  const res = await client.from('game_players').insert(rows);
+  if (res.error?.code !== NO_SUCH_ROW) {
+    must(res, 'seat the players');
+    return;
+  }
+  logError('profile_missing', new SupabaseError('seat the players', res.error), { gameId });
+  must(await client.from('game_players').insert(rows.map((r) => ({ ...r, user_id: null }))), 'seat the players');
+}
+
+/** Delete a game the deal gave up on. Best-effort: the caller is already throwing the error that matters, so a failure here is only logged. */
+async function dropGame(client: ReturnType<typeof db>, gameId: string): Promise<void> {
+  try {
+    must(await client.from('games').delete().eq('id', gameId), 'drop the unstarted game');
+  } catch (err) {
+    logError('drop_game_failed', err, { gameId });
+  }
 }
 
 /** The live table, with its bookkeeping parsed (table-state.ts), or null when the game has none. */
