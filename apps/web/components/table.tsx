@@ -12,6 +12,19 @@ import { NO_SCORES, handDeltas, signed, standings, type Scores } from '@/lib/led
 import { LIFT_SETTLE_MS, discardOffer, handBoundary, heldSelection, selectTile, settling, type Selection } from '@/lib/table-flow';
 import { suggestedDiscard, type CoachState } from '@/lib/coach';
 import { cardClockFor, claimSheetClock } from '@/lib/coach/clock';
+import {
+  WAIT_SHOW_MS,
+  exchangeGlow,
+  exchangeHeading,
+  exchangeProgress,
+  goesToLine,
+  passedLine,
+  receiverOf,
+  tileKeys,
+  viewExchangeStep,
+  waitingFor,
+  type ExchangeStep,
+} from '@/lib/coach/exchange';
 import { CLAIM_PASS_MARGIN_MS } from '@/lib/live/timing';
 import type { Lesson } from '@/lib/coach/teach';
 
@@ -314,6 +327,8 @@ function TableInner({
   );
 
   const claimOpen = view.phase === 'claim' && !!legal.claims && legal.claims.length > 0 && !!view.lastDiscard;
+  // Which pass of the West exchange this is, and which way it goes; null outside the exchange.
+  const exchange = viewExchangeStep(view);
   // In a claim window the live table always passes claimMs (0 in the window's
   // last moments, so never test it for truth), and solo never does. What a card
   // or a word opened now says about the clock under it: the bots' claim held,
@@ -429,14 +444,16 @@ function TableInner({
         />
       )}
 
-      {view.phase === 'preplay' && legal.exchange && (
-        // Keyed on the event sequence: each of the three passes (right, across,
-        // left) gets a fresh sheet, so picks from the last pass cannot linger and
-        // swallow the taps of the next.
+      {view.phase === 'preplay' && (
+        // One sheet from the first pass to the last, waits included, so it never slides away and back between passes.
+        // The sheet lets go of the last pass's picks itself when the next one starts.
         <ExchangeSheet
-          key={view.seq}
           hand={view.concealed}
-          count={legal.exchange.count}
+          count={legal.exchange?.count ?? exchange?.count ?? 3}
+          step={exchange}
+          to={exchange ? isolate(names[receiverOf(ME, exchange.direction)]) : null}
+          waiting={!legal.exchange}
+          waitingLine={waitingFor(view, names)}
           coach={coach}
           lesson={lesson}
           busy={busy}
@@ -468,6 +485,10 @@ function TableInner({
 function ExchangeSheet({
   hand,
   count,
+  step,
+  to,
+  waiting,
+  waitingLine,
   coach,
   lesson,
   busy,
@@ -476,6 +497,14 @@ function ExchangeSheet({
 }: {
   hand: readonly TileKind[];
   count: number;
+  /** which pass this is, and which way it goes */
+  step: ExchangeStep | null;
+  /** who gets the tiles, isolated */
+  to: string | null;
+  /** the player has passed and the others haven't */
+  waiting: boolean;
+  /** who hasn't passed yet, or null when nobody's left */
+  waitingLine: string | null;
   coach: CoachState;
   lesson: Lesson | null;
   busy: boolean;
@@ -483,47 +512,83 @@ function ExchangeSheet({
   tooSoon: () => boolean;
   onDone: (tiles: TileKind[]) => void;
 }) {
-  const [picked, setPicked] = useState<number[]>([]);
-  // The coach has already worked out which tiles no candidate hand is using; the
-  // player can overrule it, but the sheet opens on its answer rather than empty.
+  // Picks by kind and copy, not place, so the next pass's hand can't move a pick onto another tile.
+  const keys = useMemo(() => tileKeys(hand), [hand]);
+  const [picked, setPicked] = useState<string[]>([]);
+  // A new pass lets go of the last one's picks. A table that comes back on the same pass (another player's exchange
+  // landing first) keeps them.
+  const [at, setAt] = useState(step?.step);
+  if (at !== step?.step) {
+    setAt(step?.step);
+    setPicked([]);
+  }
+  // A short wait looks like no wait: the sheet keeps the line and footnotes of the player's pass until a wait has
+  // lasted, and only then says who it's waiting for, clears its tint and lets taps through to the table above it.
+  const [line, setLine] = useState({ coach, lesson });
+  if (!waiting && (line.coach !== coach || line.lesson !== lesson)) setLine({ coach, lesson });
+  const shown = waiting ? line : { coach, lesson };
+  const [waited, setWaited] = useState(false);
+  useEffect(() => {
+    if (!waiting) return;
+    const t = setTimeout(() => setWaited(true), WAIT_SHOW_MS);
+    return () => clearTimeout(t);
+  }, [waiting]);
+  if (!waiting && waited) setWaited(false);
+  const waitingShown = waiting && waited;
+
+  // The coach has already worked out which tiles no candidate hand is using; the player can overrule it, but the
+  // sheet opens on its answer rather than empty. Exactly the copies it suggests are lit: one of two held, if one.
   const suggested = coach.action.kind === 'exchange' ? coach.action.tiles : [];
+  const glow = exchangeGlow(hand, suggested);
+  const chosen = picked.filter((k) => keys.includes(k));
   // A pick past the count lets go of the oldest rather than doing nothing.
   const taps = useMemo(
     () =>
-      hand.map((_, i) => () => {
+      keys.map((key) => () => {
         if (tooSoon()) return;
-        setPicked((p) => (p.includes(i) ? p.filter((x) => x !== i) : [...p, i].slice(-count)));
+        setPicked((p) => (p.includes(key) ? p.filter((x) => x !== key) : [...p, key].slice(-count)));
       }),
-    [hand, count, tooSoon],
+    [keys, count, tooSoon],
   );
   return (
     <>
-      <div className="scrim" />
-      <div className="sheet">
+      <div className="scrim scrim-plain" data-waiting={waitingShown || undefined} />
+      <div className="sheet" data-sheet="exchange" data-waiting={waitingShown || undefined}>
         <div className="grabber" />
-        <h2 className="font-display mb-1 text-xl">Goulash exchange</h2>
+        <h2 className="font-display mb-1 text-xl">
+          {exchangeHeading(step, count)}
+          {step && <span className="step"> · {exchangeProgress(step)}</span>}
+        </h2>
         <div className="mb-3">
-          <p className="text-ivory-200/70 text-sm">
-            Choose {count} tiles to pass. <CoachLine say={coach.say} origin="exchange" />
-          </p>
-          <CoachNotes coach={coach} lesson={lesson} where="sheet" />
+          {waitingShown ? (
+            <p className="text-ivory-200/70 text-sm">{passedLine(waitingLine)}</p>
+          ) : (
+            <>
+              <p className="text-ivory-200/70 text-sm">
+                {to && `${goesToLine(to)} `}
+                <CoachLine say={shown.coach.say} origin="exchange" />
+              </p>
+              <CoachNotes coach={shown.coach} lesson={shown.lesson} where="sheet" />
+            </>
+          )}
         </div>
         {/* Room above each row for a lifted tile and its ring (10px + 3px): the caption's margin and a pixel, and the row gap. */}
         <div className="flex flex-wrap justify-center gap-x-1 gap-y-[13px] pt-px">
           {hand.map((k, i) => (
             <Tile
-              key={i}
+              key={keys[i]}
               kind={k}
               size="md"
-              selectable
-              selected={picked.includes(i)}
+              selectable={!waiting}
+              selected={picked.includes(keys[i]!)}
               // The tips stay lit after the first pick; a picked tile's fades under its ring.
-              coached={suggested.includes(k)}
+              coached={!waiting && glow[i]}
               onClick={taps[i]}
             />
           ))}
         </div>
-        <button className="btn btn-primary btn-block mt-3" disabled={busy || picked.length !== count} onClick={() => onDone(picked.map((i) => hand[i]!))}>
+        {/* The same words throughout, so the button never changes width. */}
+        <button className="btn btn-primary btn-block mt-3" disabled={busy || waiting || chosen.length !== count} onClick={() => onDone(chosen.map((k) => hand[keys.indexOf(k)]!))}>
           Pass tiles
         </button>
       </div>

@@ -1,4 +1,5 @@
 import type { ClaimOption, LayoutGroup, Seat, TileKind, Wind } from '@society/engine';
+import type { ExchangeStep } from './exchange';
 
 /**
  * The coach's structured answer. Everything the bubble says is derived from these
@@ -103,7 +104,8 @@ export type CoachAction =
   | { readonly kind: 'discard'; readonly tile: TileKind }
   /** a kong that costs the hand nothing; `discard` is the tile to let go instead, for someone who'd rather not */
   | { readonly kind: 'kong'; readonly tile: TileKind; readonly discard: TileKind | null }
-  | { readonly kind: 'exchange'; readonly tiles: readonly TileKind[] }
+  /** the West exchange: the tiles to pass, and which pass it is (which way, which of the three) */
+  | { readonly kind: 'exchange'; readonly tiles: readonly TileKind[]; readonly step?: ExchangeStep | null }
   | { readonly kind: 'claim'; readonly option: ClaimOption; readonly tile: TileKind }
   | { readonly kind: 'pass'; readonly tile: TileKind }
   | { readonly kind: 'win' };

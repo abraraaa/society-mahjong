@@ -79,7 +79,7 @@ test.describe('live table', () => {
   test('(c) a 409 with the table attached is taken, and the move goes once more against it while it is still open', async ({ page }) => {
     const fx = fixtures();
     const t = await openTable(page, { view: () => ok(fx.westSent), act: (_, n) => (n === 1 ? 'hold' : ok(fx.westLanded)) });
-    const sheet = page.locator('.sheet', { hasText: 'Goulash exchange' });
+    const sheet = page.locator('.sheet[data-sheet="exchange"]');
     const tiles = sheet.locator('button.tile');
     await tapUntilLifted(tiles.nth(0));
     await tiles.nth(1).click();

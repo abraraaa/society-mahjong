@@ -1,16 +1,17 @@
 import { expect, test, type Page } from '@playwright/test';
-import { tileName, type PrivatePlayerView } from '@society/engine';
+import { karachi, tileName, type PrivatePlayerView } from '@society/engine';
 import { FIRST_LOOK_NOTE } from '../lib/coach';
 import { cardClockLine } from '../lib/coach/clock';
+import { exchangeGlow, exchangeHeading, exchangeProgress, exchangeStep, goesToLine, passedLine } from '../lib/coach/exchange';
 import { cardCaption } from '../lib/coach/hand-card';
 import { TAUGHT_KEY, handNote, noteText } from '../lib/coach/teach';
-import { textOf } from '../lib/coach/words';
+import { isolate, textOf } from '../lib/coach/words';
 import { CLAIM_PASS_MARGIN_MS } from '../lib/live/timing';
 import type { GameSnapshot } from '../lib/live/snapshot';
 import { riverOrder } from '../lib/river';
 import { POLL_MS } from '../lib/table-sync';
-import { flush, ok, openTable, pauseClock, type LiveTable } from './live';
-import { liveCoach, tutorFixtures } from './tutor-fixtures';
+import { flush, ok, openTable, pauseClock, tapUntilLifted, type LiveTable } from './live';
+import { liveCoach, spareCopy, tutorFixtures } from './tutor-fixtures';
 
 /**
  * Opens the table on `before`, then stops the page's clock and lets the game channel's join through: the page looks
@@ -36,8 +37,9 @@ async function openThenLook(page: Page, s: { readonly before: GameSnapshot; read
  * claim sheet leaves to the table's clock rather than passing on, the
  * footnotes a first-timer gets the first time a hand, a flower or a run tile
  * going past comes up, which stay for as long as the line they came with, the
- * round's aim for someone who takes a bot's seat over part-way through, and a
- * kong that costs nothing lit as the tip.
+ * round's aim for someone who takes a bot's seat over part-way through, a
+ * kong that costs nothing lit as the tip, and a West exchange sheet that says
+ * which way each pass goes and stays up from one pass to the next.
  */
 test.describe('the tutor at a live table', () => {
   test("(l-winner) the result line names the winner's hand, explains it the first time, and a tap shows the tiles they won with", async ({ page }) => {
@@ -399,6 +401,106 @@ test.describe('the tutor at a live table', () => {
     await expect(t.discard()).toBeEnabled();
     // Lit in her hand, as on any turn.
     await expect(t.stage().locator('.hand-dock .tile[data-coached="true"]').first()).toBeVisible();
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(l-exchange) the exchange sheet says which way and which pass, lights only the suggested copies, and stays up between passes', async ({ page }) => {
+    const { westSent, westWaiting, westLanded } = tutorFixtures();
+    let table = westSent;
+    const t = await openTable(
+      page,
+      {
+        view: () => ok(table),
+        act: () => {
+          table = westWaiting;
+          return ok(westWaiting);
+        },
+      },
+      { clock: true },
+    );
+    const sheet = page.locator('.sheet[data-sheet="exchange"]');
+    const tiles = sheet.locator('button.tile');
+    const coached = sheet.locator('button.tile[data-coached="true"]');
+    const pass = sheet.getByRole('button', { name: 'Pass tiles' });
+    await expect(sheet).toBeVisible();
+    await pauseClock(page);
+    // Past the moment after the table arrives when a tap is let go, so her taps count.
+    await page.clock.runFor(500);
+
+    // Which way, and which pass: the first, to the right, so to Bilal.
+    const view = westSent.view as PrivatePlayerView;
+    const first = exchangeStep(karachi.handSpec(view.progress), 0)!;
+    await expect(sheet.locator('h2')).toHaveText(`${exchangeHeading(first, 3)} · ${exchangeProgress(first)}`);
+    expect(await sheet.locator('h2').textContent()).toBe(`${exchangeHeading(first, 3)} · ${exchangeProgress(first)}`);
+    await expect(sheet).toContainText(goesToLine(isolate('Bilal')));
+
+    // The tutor's three are lit, and stay lit as she picks them.
+    const tip = liveCoach(westSent).action;
+    if (tip.kind !== 'exchange') throw new Error('the fixture is an exchange');
+    const lit = exchangeGlow(view.concealed, tip.tiles).flatMap((on, i) => (on ? [i] : []));
+    expect(lit).toHaveLength(3);
+    await expect(coached).toHaveCount(3);
+    for (const i of lit) await expect(tiles.nth(i)).toHaveAttribute('data-coached', 'true');
+    await tapUntilLifted(tiles.nth(lit[0]!));
+    await expect(coached).toHaveCount(3);
+    await expect(tiles.nth(lit[1]!)).toHaveAttribute('data-coached', 'true');
+    await expect(tiles.nth(lit[2]!)).toHaveAttribute('data-coached', 'true');
+    await tiles.nth(lit[1]!).click();
+    await tiles.nth(lit[2]!).click();
+
+    // She passes, and Bilal hasn't: the same sheet, which for a moment changes nothing but the tiles.
+    const handle = await sheet.elementHandle();
+    await pass.click();
+    await expect.poll(() => t.of('act').map((c) => c.body?.action)).toEqual([{ type: 'exchange', seat: 0, tiles: lit.map((i) => view.concealed[i]) }]);
+    await expect(coached).toHaveCount(0);
+    await expect(pass).toBeDisabled();
+    expect(await handle!.evaluate((e) => e.isConnected)).toBe(true);
+    await expect(sheet).not.toHaveAttribute('data-waiting');
+    await expect(sheet).toContainText(goesToLine(isolate('Bilal')));
+    // The tiles she passed are still in her hand until everyone has passed, lifted as she left them.
+    for (const i of lit) await expect(tiles.nth(i)).toHaveAttribute('data-selected', 'true');
+
+    // A wait that lasts says who it's for, and lets the table above it be used.
+    await page.clock.runFor(700);
+    await expect(sheet).toHaveAttribute('data-waiting', 'true');
+    await expect(sheet).toContainText(passedLine(isolate('Bilal')));
+    await t.stage().getByRole('button', { name: 'Glossary' }).click();
+    const list = page.locator('[data-sheet="list"]');
+    await expect(list).toBeVisible();
+    await list.getByRole('button', { name: 'Got it' }).click();
+    await expect(list).toBeHidden();
+    // The Leave confirmation draws over the waiting sheet: a plain click on Stay fails if anything covers it.
+    await t.stage().getByRole('button', { name: 'Leave' }).click();
+    const confirm = page.getByRole('dialog', { name: 'Leave the table?' });
+    await expect(confirm).toBeVisible();
+    await confirm.getByRole('button', { name: 'Stay' }).click();
+    await expect(confirm).toBeHidden();
+    expect(await handle!.evaluate((e) => e.isConnected)).toBe(true);
+
+    // Bilal passes and the bots pass again: the next pass, across, on the same sheet, with nothing picked.
+    table = westLanded;
+    const looks = t.count('view');
+    await page.clock.runFor(POLL_MS);
+    await expect.poll(() => t.count('view')).toBeGreaterThan(looks);
+    const next = exchangeStep(karachi.handSpec(view.progress), 1)!;
+    await expect(sheet.locator('h2')).toHaveText(`${exchangeHeading(next, 3)} · ${exchangeProgress(next)}`);
+    await expect(sheet.locator('h2')).toContainText('across');
+    await expect(sheet.locator('h2')).toContainText('2 of 3');
+    expect(await handle!.evaluate((e) => e.isConnected)).toBe(true);
+    await expect(sheet).not.toHaveAttribute('data-waiting');
+    await expect(sheet.locator('button.tile[data-selected="true"]')).toHaveCount(0);
+    await expect(coached).toHaveCount(3);
+    // She holds more of one kind than the tutor suggests passing: exactly the suggested copies are lit, not every copy.
+    const hand = (westLanded.view as PrivatePlayerView).concealed;
+    const nextTip = liveCoach(westLanded).action;
+    if (nextTip.kind !== 'exchange') throw new Error('the fixture is an exchange');
+    const kind = spareCopy(hand, nextTip.tiles)!;
+    const name = tileName(kind);
+    const held = hand.filter((k) => k === kind).length;
+    const suggested = nextTip.tiles.filter((k) => k === kind).length;
+    expect(held).toBeGreaterThan(suggested);
+    await expect(sheet.locator(`button.tile[aria-label="${name}"]`)).toHaveCount(held);
+    await expect(sheet.locator(`button.tile[aria-label="${name}"][data-coached="true"]`)).toHaveCount(suggested);
     expect(t.pageErrors).toEqual([]);
   });
 });

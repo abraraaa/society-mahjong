@@ -970,6 +970,25 @@ b .term {
   max-height: 80dvh;
   overflow-y: auto;
 }
+/* The exchange sheet stays up from the first pass to the last. Its scrim keeps the tint without the blur, which cost
+   frames as its tiles lifted. */
+.scrim.scrim-plain {
+  backdrop-filter: none;
+}
+/* Once a wait after the player's pass has lasted, the scrim clears and lets taps through, so Tutor, ? and Leave work
+   above the sheet, and the sheet drops below every other sheet and scrim: a Leave confirmation, a card or the ? sheet
+   opened during the wait draws over it. */
+.scrim[data-waiting='true'] {
+  background: transparent;
+  pointer-events: none;
+}
+.sheet[data-sheet='exchange'][data-waiting='true'] {
+  z-index: 15;
+}
+.sheet[data-sheet='exchange'] .step {
+  font-weight: 400;
+  color: rgb(243 236 219 / 0.6);
+}
 .glossary {
   display: flex;
   flex-direction: column;

@@ -8,10 +8,12 @@ import {
   isDragonTile,
   isWindTile,
   karachi,
+  reduce,
   startHand,
   tileName,
   viewFor,
   type GameProgress,
+  type HandState,
   type PrivatePlayerView,
   type TileKind,
   type Wind,
@@ -1097,5 +1099,52 @@ describe('kongs: advised when they cost the hand nothing, and warned off when th
     // The corpus has to reach both.
     expect(seen.advised).toBeGreaterThan(0);
     expect(seen.warned).toBeGreaterThan(0);
+  });
+});
+
+describe('the West exchange', () => {
+  /** Seat 0 passes the tutor's tiles, then (with `others`) each other seat passes what the bot would. */
+  const pass = (state: HandState, tiles: readonly TileKind[], others: boolean): HandState => {
+    let s = reduce(state, { type: 'exchange', seat: 0, tiles: [...tiles] }, karachi);
+    if (!others) return s;
+    for (const seat of [1, 2, 3] as const) {
+      const move = analysisBot(viewFor(s, karachi, seat), karachi);
+      if (move?.type !== 'exchange') throw new Error('a bot with no exchange');
+      s = reduce(s, move, karachi);
+    }
+    return s;
+  };
+
+  it('says which way the pass goes and which pass it is, and the wait after the pass is still the exchange, with nothing said', () => {
+    for (let h = 0; h < 3; h++) {
+      let state = startHand(karachi, { seed: `west-${h}`, progress: ROUNDS.W, dealer: h as 0 | 1 | 2 });
+      for (const expected of [
+        { direction: 'right', count: 3, step: 1, of: 3 },
+        { direction: 'across', count: 3, step: 2, of: 3 },
+        { direction: 'left', count: 3, step: 3, of: 3 },
+      ] as const) {
+        const coach = coachOf(viewFor(state, karachi, 0), 'new');
+        expect(coach.moment).toBe('exchange');
+        if (coach.action.kind !== 'exchange') throw new Error('an exchange view with no exchange tip');
+        expect(coach.action.step).toEqual(expected);
+        expect(coach.action.tiles).toHaveLength(3);
+        // Passed, and the others haven't: not the hand-start bubble, whose footnotes would be spent under the sheet.
+        const waiting = pass(state, coach.action.tiles, false);
+        const view = viewFor(waiting, karachi, 0);
+        expect(view.phase).toBe('preplay');
+        expect(view.legal.exchange).toBeUndefined();
+        for (const stage of ['new', 'learning', 'solid'] as const) {
+          const wait = coachOf(view, stage);
+          expect(wait.moment).toBe('exchange');
+          expect(wait.action).toEqual({ kind: 'wait' });
+          expect(wait.say).toEqual([]);
+          expect(wait.highlight).toEqual([]);
+          expect(lessonFor(wait, new Set()).notes).toEqual([]);
+        }
+        state = pass(state, coach.action.tiles, true);
+      }
+      // Play starts after the third pass: the dealer's first turn, and the round's aim comes then.
+      expect(state.phase).toBe('turn');
+    }
   });
 });

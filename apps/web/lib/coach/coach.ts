@@ -23,6 +23,7 @@ import {
   type SuitTile,
   type TileKind,
 } from '@society/engine';
+import { exchangeStep } from './exchange';
 import { GLOSSARY } from './glossary';
 import { goalFor, roundNote } from './goal';
 import { exampleRef, handsThisRound, winnerRef, yoursRef } from './hand-card';
@@ -515,7 +516,7 @@ function adviceFor(input: CoachInput): CoachState {
     const count = view.legal.exchange.count;
     const spare = analysis.spare.length >= count;
     const loose = spare ? analysis.spare.slice(0, count) : analysis.ratings.slice(0, count).map((r) => r.kind);
-    const action: CoachAction = { kind: 'exchange', tiles: loose };
+    const action: CoachAction = { kind: 'exchange', tiles: loose, step: exchangeStep(spec, view.preplayStep) };
     const n = countWord(count);
     const say = !target
       ? [seg(`I've lit up ${n} you can spare.`)]
@@ -523,6 +524,11 @@ function adviceFor(input: CoachInput): CoachState {
         ? line(`I've lit up ${n} you can spare: none of them helps `, named(target.hand), '.')
         : line(`I've lit up the ${n} doing the least for `, named(target.hand), '.');
     return { ...base, moment: 'exchange', action, say, reason: 'the exchange is a chance to shed dead tiles', highlight: loose };
+  }
+  // Passed, and waiting for the others: still the exchange, whose sheet stays up, so there's nothing to say under it.
+  // The round's aim comes on the first bubble of play, as it does after any deal.
+  if (view.phase === 'preplay') {
+    return { ...base, moment: 'exchange', action: { kind: 'wait' }, say: [], reason: null, highlight: [] };
   }
 
   // --- a claim window --------------------------------------------------------
