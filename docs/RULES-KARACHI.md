@@ -51,6 +51,8 @@ Every example below is a golden fixture in `packages/engine/test/karachi-fixture
 
 When a hand fits more than one entry, it's announced under the most specific: named hands before the round's general hand. While a hand is being built, the tutor names the round's general hand when a named one is only equally close.
 
+Every hand has a worked example in `packages/engine/src/rulesets/karachi/examples.ts`, the one its card shows. A test checks each is a complete hand announced under its own name. Chow + 5 Honours and Pung + 5 Honours, one set per suit with the four winds, have exactly the shape of Windy Chows and Windyfly, so a hand of that shape is always announced under the named hand.
+
 ### East
 
 | Hand | Guide example | Definition in the engine |

@@ -4,23 +4,10 @@
  * the catalogue test (each matches its pattern) and the announcement test (each
  * is announced under its own name). Guide notation b/d/c = bamboo/dots/characters.
  */
-import type { TileKind, Wind } from '../src/index';
+import type { Wind } from '../src/index';
 
-/** "1b 2b 3b E R Wh" -> engine kinds */
-export function tiles(spec: string): TileKind[] {
-  const suit: Record<string, string> = { b: 's', d: 'p', c: 'm' };
-  return spec
-    .trim()
-    .split(/\s+/)
-    .map((t) => {
-      if (/^[1-9][bdc]$/.test(t)) return `${suit[t[1]!]}${t[0]}` as TileKind;
-      if (t === 'R') return 'DR';
-      if (t === 'G') return 'DG';
-      if (t === 'Wh') return 'DW';
-      if ('ESWN'.includes(t)) return `W${t}` as TileKind;
-      throw new Error(`bad tile ${t}`);
-    });
-}
+/** "1b 2b 3b E R Wh" -> engine kinds: the guide notation the examples are written in. */
+export { guideTiles as tiles } from '../src/index';
 
 export interface Fixture {
   readonly id: string;

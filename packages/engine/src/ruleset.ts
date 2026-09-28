@@ -94,6 +94,10 @@ export interface Ruleset {
   handSpec(progress: GameProgress): HandSpec;
   readonly guards: Guards;
   score(win: WinInput): Settlement;
+  /** patternId → one complete hand of that pattern, for showing a newcomer what it looks like. The analyser lays it out. */
+  readonly examples?: Readonly<Record<string, readonly TileKind[]>>;
+  /** patternId → the pattern a hand of its shape is always announced under, where two share exactly the same components. Showing one, show the other's example. */
+  readonly aliases?: Readonly<Record<string, string>>;
 }
 
 export const ROUND_WINDS: readonly Wind[] = ['E', 'S', 'W', 'N'];

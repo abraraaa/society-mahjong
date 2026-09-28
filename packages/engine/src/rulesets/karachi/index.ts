@@ -1,6 +1,7 @@
 import { FULL_SET, isDragonTile, isWindTile, windOf } from '../../tiles';
 import type { Guard, Guards } from '../../patterns/types';
 import type { GameProgress, HandSpec, Ruleset, Settlement, WinInput } from '../../ruleset';
+import { KARACHI_ALIASES, KARACHI_EXAMPLES } from './examples';
 import { EAST_GENERAL, EAST_NAMED, GOULASH, NORTH, SOUTH } from './patterns';
 import { scoreKarachi } from './scoring';
 
@@ -92,7 +93,10 @@ export const karachi: Ruleset = {
   handSpec: karachiHandSpec,
   guards: karachiGuards,
   score: karachiScore,
+  examples: KARACHI_EXAMPLES,
+  aliases: KARACHI_ALIASES,
 };
 
+export * from './examples';
 export * from './patterns';
 export * from './scoring';
