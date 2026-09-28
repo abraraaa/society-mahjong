@@ -66,7 +66,7 @@ export async function joinRoom(room: RoomRow, userId: string, name: string): Pro
     if (current.status === 'playing') throw new HttpError(409, 'this table has already started');
     // A code is enough to sit down, so a room does not stay open to strangers forever: a week after its last game, only its own people get back in.
     if (isClosedRoom(current, Date.now())) throw new HttpError(410, 'this table has closed');
-    const seats = seatJoiner(current.seats, current.status, { userId, name });
+    const seats = seatJoiner(current.seats, current.status, { userId, name }, Date.now());
     if (!seats) throw new HttpError(409, 'this table is full');
     const updated_at = await saveSeats(current.id, seats, current.updated_at);
     if (updated_at) return { room: { ...current, seats, updated_at }, seated: true };

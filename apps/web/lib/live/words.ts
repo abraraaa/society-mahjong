@@ -18,6 +18,13 @@ export function countOf(n: number, noun: 'hand' | 'bot' | 'turn' | 'set'): strin
   return `${numberWord(n)} ${noun}${n === 1 ? '' : 's'}`;
 }
 
+const TIMES = ['once', 'twice'];
+
+/** How many times, inside a sentence: "once", "twice", "three times" … "nine times", then "10 times". */
+export function timesOf(n: number): string {
+  return TIMES[n - 1] ?? `${numberWord(n)} times`;
+}
+
 /** "A", "A and B", "A, B and C". */
 export function nameList(names: readonly string[]): string {
   if (names.length <= 1) return names[0] ?? '';

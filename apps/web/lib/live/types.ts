@@ -69,6 +69,17 @@ export interface GameEnd {
 }
 
 /**
+ * A change to who plays a seat, built by the server only and never parsed
+ * from a body (service.ts changeSeat): the seat's own person is back
+ * (`back`), or whoever has the host's powers (`bySeat`) hands another
+ * person's seat to a bot (`letBotPlay`), as long as that person hasn't tapped
+ * since the host's table was sent (`sawAt`, the server's clock then).
+ */
+export type SeatChange =
+  | { readonly type: 'back'; readonly seat: Seat }
+  | { readonly type: 'letBotPlay'; readonly seat: Seat; readonly bySeat: Seat; readonly sawAt: number | null };
+
+/**
  * Who made a move, as the hand log records it: the seat's own person, by
  * request (`player`); a bot in its seat (`bot`); a stand-in when that
  * person's clock ran out (`clock`); the bot playing an away seat (`away`);

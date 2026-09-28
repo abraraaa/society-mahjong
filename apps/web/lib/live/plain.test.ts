@@ -134,6 +134,14 @@ describe('plainError: the rest of what the server can say', () => {
     expect(api(403, 'only the host can end the game')).toBe("Only the host can end the game. Ask them if everyone's had enough.");
   });
 
+  it('a hand-over to a bot the caller can’t make says who can, or where to tap, and one that’s too late says why', () => {
+    expect(api(403, 'only the host can hand a seat to a bot')).toBe("Only the host can let a bot play for someone. Ask them if a friend's stepped away.");
+    expect(api(400, 'that is your own seat')).toBe('You can only let a bot play for someone else. Tap their name at the top of the table.');
+    expect(api(400, 'that is not a seat')).toBe('You can only let a bot play for someone else. Tap their name at the top of the table.');
+    expect(api(409, 'a bot already plays that seat')).toBe("A bot's already playing that seat, so there's nothing to do.");
+    expect(api(409, 'that player has just played')).toBe("They've just played, so they're still at the table.");
+  });
+
   it('a lapsed session says to try again or come back through the link, by message or by any 401', () => {
     const line = "We've lost track of who you are on this phone. Try again, or open the invite link again.";
     expect(api(401, 'sign in first')).toBe(line);

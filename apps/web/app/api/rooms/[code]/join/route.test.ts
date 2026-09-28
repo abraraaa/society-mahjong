@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { EVERYONE_HERE } from '../../../../../lib/live/absence';
 import type { NextRequest } from 'next/server';
 import type { GameRow, LiveMeta, RoomRow } from '../../../../../lib/live/store';
 import type { GameOver } from '../../../../../lib/live/table-state';
@@ -59,7 +60,7 @@ const over: GameOver = { how: 'complete', by: null, at: 1, hands: 16, scores: [9
 /** The table, last moved by a person a minute ago: a game in play, not one left for hours. */
 const meta = (o: GameOver | null): LiveMeta => ({
   version: 40,
-  table: { v: 1, scores: [9, -3, -3, -3], over: o, extra: {} },
+  table: { v: 1, scores: [9, -3, -3, -3], over: o, absence: EVERYONE_HERE, extra: {} },
   legacy: false,
   actedAt: Date.now() - 60_000,
   updatedAt: Date.now() - 60_000,
@@ -121,6 +122,13 @@ describe('POST /api/rooms/[code]/join, counted for the funnel', () => {
     expect(events.recordEvent).toHaveBeenCalledWith({ type: 'seat_taken', roomId: 'r-1', userId: 'u-zara', data: { how: 'join', status: 'lobby' } });
     const order = [store.saveSeats, events.recordEvent].map((fn) => vi.mocked(fn).mock.invocationCallOrder[0]!);
     expect(order[0]).toBeLessThan(order[1]!);
+  });
+
+  it('counts a host who stood up in their own lobby and sat back down by the link, as funnel.sql query 9 says', async () => {
+    // Zara made this room, so her first seat counted as room_made; she stood up, and the link seats her again.
+    db.room = { ...room, host_id: 'u-zara', status: 'lobby', current_game_id: null, seats: [null, room.seats[0], null, null] };
+    expect((await join()).status).toBe(200);
+    expect(events.recordEvent).toHaveBeenCalledWith({ type: 'seat_taken', roomId: 'r-1', userId: 'u-zara', data: { how: 'join', status: 'lobby' } });
   });
 
   it('counts nothing for someone coming back to the seat they already have', async () => {

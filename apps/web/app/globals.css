@@ -993,6 +993,34 @@ b .term {
   max-height: 80dvh;
   overflow-y: auto;
 }
+/* A question (ConfirmSheet) shows whole, answers and all: where a definition stops at 80% of the screen, a question may
+   take all of it bar a sliver, and on a phone lying down its spacing tightens. Should it ever run longer still, its answers
+   stay pinned to its foot, their row carrying the sheet's bottom padding, and the words scroll above them. */
+.sheet.sheet-top.sheet-ask {
+  max-height: calc(100dvh - var(--safe-top) - 8px);
+  padding-bottom: 0;
+  overscroll-behavior: contain;
+}
+.sheet-ask .answers {
+  position: sticky;
+  bottom: 0;
+  padding-bottom: calc(20px + var(--safe-bottom));
+  background: var(--color-felt-900);
+}
+@media (orientation: landscape) and (height < 32rem) {
+  .sheet.sheet-top.sheet-ask {
+    padding-top: 12px;
+  }
+  .sheet-ask .grabber {
+    margin-bottom: 10px;
+  }
+  .sheet-ask .ask-body {
+    margin-bottom: 12px;
+  }
+  .sheet-ask .answers {
+    padding-bottom: calc(12px + var(--safe-bottom));
+  }
+}
 .glossary {
   display: flex;
   flex-direction: column;

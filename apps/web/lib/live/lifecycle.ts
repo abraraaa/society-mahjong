@@ -1,5 +1,6 @@
-import { nextHand, type HandState, type PublicGameView, type Ruleset } from '@society/engine';
-import type { GameOver, Scores4, TableState } from './table-state';
+import { SEATS, nextHand, type HandState, type PublicGameView, type Ruleset } from '@society/engine';
+import { isAway } from './absence';
+import type { Absence, GameOver, Scores4, TableState } from './table-state';
 import type { GameEndHow, Seats } from './types';
 
 /**
@@ -54,13 +55,17 @@ export function endOfGame(how: GameEndHow, state: HandState, t: TableState, seat
 }
 
 /**
- * Who was at the table when the game ended: the people in its seats then. An
+ * Who was at the table when the game ended: the people in its seats then,
+ * less anyone a bot was playing for (`absence`, the table's at the end). An
  * abandoned game had nobody left (that's what ended it), and nor does one
  * that ended because nobody was playing.
  */
-export function presentAtEnd(over: GameOver): string[] {
+export function presentAtEnd(over: GameOver, absence: Absence | undefined): string[] {
   if (over.how === 'abandoned' || over.how === 'idle') return [];
-  return over.seats.flatMap((s) => (s?.kind === 'human' ? [s.userId] : []));
+  return SEATS.flatMap((seat) => {
+    const s = over.seats[seat];
+    return s?.kind === 'human' && !isAway(absence, over.seats, seat) ? [s.userId] : [];
+  });
 }
 
 /** How the game ended, as a player may see it: no ids, only whether it was them who ended it. */

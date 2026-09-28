@@ -14,8 +14,11 @@ import {
   type Ruleset,
   type Seat,
 } from '@society/engine';
+import type { CoachStage } from '../coach/types';
+import { EVERYONE_HERE, awaySeats, isAway, markAway, markPresent, noteClockMove, noteHandEnd, notePlayed, reconcileAbsence } from './absence';
 import { addHandScores, endOfGame, isLastHand } from './lifecycle';
-import { NEW_TABLE, sameTableState, type TableState } from './table-state';
+import { policyFor, presentLevels } from './policy';
+import { NEW_TABLE, sameTableState, type Absence, type TableState } from './table-state';
 import {
   isBot,
   isClientActionType,
@@ -26,6 +29,7 @@ import {
   type LiveGame,
   type Move,
   type PlayerMove,
+  type SeatChange,
   type Seats,
   type TimerPolicy,
 } from './types';
@@ -35,9 +39,10 @@ import {
  *
  * A route handler loads the live state, calls `step` with the caller's action
  * (or none, for a deadline sweep), and stores what comes back. Everything
- * that is not a human decision happens inside `step`: bots take their turns,
- * claim windows nobody can use close at once, and expired deadlines resolve
- * before the new action is applied, so a stale table never wedges a game.
+ * that is not a person's decision happens inside `step`: bots take their
+ * turns, a bot plays the tiles of anyone who's away, claim windows nobody can
+ * use close at once, and expired deadlines resolve before the new action is
+ * applied, so a stale table never wedges a game.
  */
 
 /** Bot turns per step before we assume the engine is looping. A hand is well under this. */
@@ -58,10 +63,20 @@ export class GameIsOver extends Error {
   }
 }
 
-/** How the table plays the seats nobody sits in. */
+/** The host asked a bot to play a seat whose person has tapped since the host's table was sent: they're still at the table (R8). */
+export class JustPlayed extends Error {
+  constructor() {
+    super('that player has just played');
+    this.name = 'JustPlayed';
+  }
+}
+
+/** How the table plays the seats nobody decides for. */
 export interface TableSetup {
   /** the bots in empty seats: `gentle` while anyone at the table is still new (policy.ts emptySeatBots); sharp when omitted */
   readonly bots?: 'sharp' | 'gentle';
+  /** who's away: a bot plays their seats too, sharply, since it's their hand and their points; everyone's here when omitted */
+  readonly absence?: Absence;
 }
 
 /**
@@ -89,35 +104,54 @@ function engineMove(a: Action): PlayerMove {
 }
 
 /**
- * Play every bot decision and every forced human response until a human has a
- * real decision to make or the hand is over.
+ * Play every bot decision, every away seat's and every forced human response
+ * until a person has a real decision to make or the hand is over.
  */
 export function settle(state: HandState, ruleset: Ruleset, seats: Seats, setup?: TableSetup): HandState {
   return settleLogged(state, ruleset, seats, setup).state;
 }
 
-/** `settle`, with the moves it made in the order it made them. Nothing to play gives back `state` itself and no moves. */
-function settleLogged(state: HandState, ruleset: Ruleset, seats: Seats, setup: TableSetup | undefined): { readonly state: HandState; readonly moves: readonly EngineMove[] } {
+/**
+ * `settle`, with the moves it made in the order it made them, and the
+ * absence with what the bot has played for each away seat added. Nothing to
+ * play gives back `state` itself and no moves.
+ */
+function settleLogged(
+  state: HandState,
+  ruleset: Ruleset,
+  seats: Seats,
+  setup: TableSetup | undefined,
+): { readonly state: HandState; readonly moves: readonly EngineMove[]; readonly absence: Absence } {
   let s = state;
+  let absence = setup?.absence ?? EVERYONE_HERE;
   const moves: EngineMove[] = [];
   for (let i = 0; i < MAX_BOT_STEPS; i++) {
     const m = forcedMove(s, ruleset, seats, setup);
-    if (m === null) return { state: s, moves };
+    if (m === null) return { state: s, moves, absence };
     s = reduce(s, m.a, ruleset);
     moves.push(m);
+    if (m.by === 'away') absence = notePlayed(absence, m);
   }
   throw new Error('settle: bots did not reach a human decision');
 }
 
-/** The next forced or bot move, or null when the table is waiting on a human. */
+/** Who plays a seat without asking anyone: a bot in it, or the bot playing for its away person. Null for a person, who decides. */
+function playedBy(s: HandState, seats: Seats, seat: Seat, setup: TableSetup | undefined): { readonly by: 'bot' | 'away'; readonly options: BotOptions } | null {
+  if (isBot(seats, seat)) return { by: 'bot', options: botOptions(s, seat, setup) };
+  // It's the away person's hand and points, so their bot plays sharply, however gently the empty seats' bots do.
+  return isAway(setup?.absence, seats, seat) ? { by: 'away', options: {} } : null;
+}
+
+/** The next forced or bot move, or null when the table is waiting on a person. */
 function forcedMove(s: HandState, ruleset: Ruleset, seats: Seats, setup: TableSetup | undefined): EngineMove | null {
   if (s.phase === 'finished') return null;
 
   if (s.phase === 'preplay') {
     for (const seat of SEATS) {
-      if (!isBot(seats, seat)) continue;
-      const a = analysisBot(viewFor(s, ruleset, seat), ruleset, botOptions(s, seat, setup));
-      if (a && a.type === 'exchange') return { by: 'bot', seat, a };
+      const player = playedBy(s, seats, seat, setup);
+      if (!player) continue;
+      const a = analysisBot(viewFor(s, ruleset, seat), ruleset, player.options);
+      if (a && a.type === 'exchange') return { by: player.by, seat, a };
     }
     return null;
   }
@@ -126,37 +160,41 @@ function forcedMove(s: HandState, ruleset: Ruleset, seats: Seats, setup: TableSe
     for (const seat of SEATS) {
       const legal = legalActions(s, ruleset, seat);
       if (!legal.claims) continue; // discarder, or already responded
-      if (isBot(seats, seat)) return { by: 'bot', seat, a: engineMove(analysisBot(viewFor(s, ruleset, seat), ruleset, botOptions(s, seat, setup)) ?? { type: 'pass', seat }) };
-      // A human with nothing to claim is not asked; the engine still wants the pass.
+      const player = playedBy(s, seats, seat, setup);
+      if (player) return { by: player.by, seat, a: engineMove(analysisBot(viewFor(s, ruleset, seat), ruleset, player.options) ?? { type: 'pass', seat }) };
+      // A person with nothing to claim is not asked; the engine still wants the pass.
       if (legal.claims.length === 0) return { by: 'table', seat, a: { type: 'pass', seat } };
     }
     return null;
   }
 
   // turn
-  if (isBot(seats, s.turn)) {
-    const a = analysisBot(viewFor(s, ruleset, s.turn), ruleset, botOptions(s, s.turn, setup));
+  const player = playedBy(s, seats, s.turn, setup);
+  if (player) {
+    const a = analysisBot(viewFor(s, ruleset, s.turn), ruleset, player.options);
     if (!a) throw new Error(`bot at seat ${s.turn} has no move`);
-    return { by: 'bot', seat: s.turn, a: engineMove(a) };
+    return { by: player.by, seat: s.turn, a: engineMove(a) };
   }
   return null;
 }
 
-/** Seats with a human who still owes the table a response in this phase. */
-function humansPending(s: HandState, ruleset: Ruleset, seats: Seats): Seat[] {
-  if (s.phase === 'claim') return SEATS.filter((seat) => isHuman(seats, seat) && legalActions(s, ruleset, seat).claims !== undefined);
-  if (s.phase === 'preplay') return SEATS.filter((seat) => isHuman(seats, seat) && legalActions(s, ruleset, seat).exchange !== undefined);
-  if (s.phase === 'turn') return isHuman(seats, s.turn) ? [s.turn] : [];
+/** Seats with a person (here, not away) who still owes the table a response in this phase. */
+function personsPending(s: HandState, ruleset: Ruleset, seats: Seats, absence: Absence | undefined): Seat[] {
+  const person = (seat: Seat) => isHuman(seats, seat) && !isAway(absence, seats, seat);
+  if (s.phase === 'claim') return SEATS.filter((seat) => person(seat) && legalActions(s, ruleset, seat).claims !== undefined);
+  if (s.phase === 'preplay') return SEATS.filter((seat) => person(seat) && legalActions(s, ruleset, seat).exchange !== undefined);
+  if (s.phase === 'turn') return person(s.turn) ? [s.turn] : [];
   return [];
 }
 
-/** Whether any human still to answer this window was offered the win. */
+/** Whether any person still to answer this window was offered the win. */
 function winOffered(state: HandState, ruleset: Ruleset, pending: readonly Seat[]): boolean {
   return pending.some((seat) => legalActions(state, ruleset, seat).claims?.some((c) => c.type === 'win') ?? false);
 }
 
-export function deadlinesFor(state: HandState, ruleset: Ruleset, seats: Seats, policy: TimerPolicy, now: number): Deadlines {
-  const pending = humansPending(state, ruleset, seats);
+/** The clocks for the decision the table is waiting on: persons only, since a bot plays the away seats at once and needs no clock. */
+export function deadlinesFor(state: HandState, ruleset: Ruleset, seats: Seats, policy: TimerPolicy, now: number, absence?: Absence): Deadlines {
+  const pending = personsPending(state, ruleset, seats, absence);
   if (pending.length === 0) return { claim: null, turn: null };
   if (state.phase === 'claim') {
     // A winning tile runs on the turn clock, not the claim clock. Twenty
@@ -170,49 +208,57 @@ export function deadlinesFor(state: HandState, ruleset: Ruleset, seats: Seats, p
 }
 
 /**
- * Resolve deadlines that have passed. Whatever a human did not answer in time
- * is decided by a bot standing in for them, in a claim window as in a turn:
- * it takes a win they were offered, claims a set only when that brings their
- * hand closer, and passes on the rest, so the table moves on and an absent
- * player's Mahjong is not thrown away. It is their hand and their points, so
- * the stand-in always plays sharp, however gently the empty seats' bots do.
+ * Whether two tables wait on the same decision (R7): the same hand, phase,
+ * event, pass of tiles and turn. One person's answer in a claim window or a
+ * pass of tiles leaves the others' decision where it was.
+ */
+export function sameDecision(a: HandState, b: HandState): boolean {
+  return a.progress.handIndex === b.progress.handIndex && a.phase === b.phase && a.seq === b.seq && a.preplayStep === b.preplayStep && a.turn === b.turn;
+}
+
+/**
+ * Resolve deadlines that have passed. Whatever a person did not answer in
+ * time is decided by a bot standing in for them, in a claim window as in a
+ * turn: it takes a win they were offered, claims a set only when that brings
+ * their hand closer, and passes on the rest, so the table moves on and an
+ * absent player's Mahjong is not thrown away. It is their hand and their
+ * points, so the stand-in always plays sharp, however gently the empty seats'
+ * bots do.
  */
 export function resolveExpired(game: LiveGame, ruleset: Ruleset, seats: Seats, now: number): HandState | null {
-  return resolveExpiredWith(game, ruleset, seats, now)?.state ?? null;
+  return resolveExpiredWith(game, ruleset, seats, now, game.tableState?.absence)?.state ?? null;
 }
 
-/** A move a bot made on an absent human's behalf, so the table can tell them. */
-export interface StandIn {
-  readonly seat: Seat;
-  readonly action: PlayerMove;
-}
-
-function resolveExpiredWith(game: LiveGame, ruleset: Ruleset, seats: Seats, now: number): { state: HandState; standIns: StandIn[]; moves: EngineMove[] } | null {
+/** The expired clocks' moves, each made for a person whose clock ran out, and the phase each decision was in (a turn and a pass of tiles count as misses; a claim window never does, R2). */
+function resolveExpiredWith(
+  game: LiveGame,
+  ruleset: Ruleset,
+  seats: Seats,
+  now: number,
+  absence: Absence | undefined,
+): { state: HandState; moves: EngineMove[]; misses: boolean } | null {
   const { state, deadlines } = game;
-  const standIns: StandIn[] = [];
   const moves: EngineMove[] = [];
   if (deadlines.claim !== null && now >= deadlines.claim && state.phase === 'claim') {
     let s = state;
-    for (const seat of humansPending(s, ruleset, seats)) {
+    for (const seat of personsPending(s, ruleset, seats, absence)) {
       if (s.phase !== 'claim') break;
       const a = engineMove(analysisBot(viewFor(s, ruleset, seat), ruleset) ?? { type: 'pass' as const, seat });
       s = reduce(s, a, ruleset);
-      standIns.push({ seat, action: a });
       moves.push({ by: 'clock', seat, a });
     }
-    return { state: s, standIns, moves };
+    return { state: s, moves, misses: false };
   }
   if (deadlines.turn !== null && now >= deadlines.turn && (state.phase === 'turn' || state.phase === 'preplay')) {
     let s = state;
-    for (const seat of humansPending(s, ruleset, seats)) {
+    for (const seat of personsPending(s, ruleset, seats, absence)) {
       const found = analysisBot(viewFor(s, ruleset, seat), ruleset);
       if (!found) continue;
       const a = engineMove(found);
       s = reduce(s, a, ruleset);
-      standIns.push({ seat, action: a });
       moves.push({ by: 'clock', seat, a });
     }
-    return { state: s, standIns, moves };
+    return { state: s, moves, misses: true };
   }
   return null;
 }
@@ -221,6 +267,7 @@ export interface StepInput {
   readonly game: LiveGame;
   readonly ruleset: Ruleset;
   readonly seats: Seats;
+  /** the clocks, when `levels` isn't given */
   readonly policy: TimerPolicy;
   readonly now: number;
   /** the caller's action, already validated by parseClientAction; omit for a sweep */
@@ -230,12 +277,18 @@ export interface StepInput {
   readonly seed?: string;
   /** how the bots in empty seats play (policy.ts emptySeatBots); sharp when omitted */
   readonly bots?: 'sharp' | 'gentle';
+  /** each seat's level: with these, the clocks are sized by the people who are here once this step is done (R10), and `policy` isn't used */
+  readonly levels?: readonly (CoachStage | null)[];
+  /** a strict room's clocks, with `levels` */
+  readonly strict?: boolean;
+  /** a change to who plays a seat (someone back, or the host handing a seat to a bot); never with an action or an end */
+  readonly change?: SeatChange;
   /** end the game here, before its last hand is scored: the host ending it, nobody playing it for hours, or the last person leaving; never with an action */
   readonly end?: GameEnd;
 }
 
 export interface StepResult extends LiveGame {
-  /** the table's bookkeeping after this step: the input's, or a fresh table's, with a hand won in this step added to the running scores, and how the game ended once it has */
+  /** the table's bookkeeping after this step: the input's, or a fresh table's, with a hand won in this step added to the running scores, who's away now, and how the game ended once it has */
   readonly tableState: TableState;
   /** true when the state or the table's bookkeeping changed at all, so a sweep with nothing to do writes nothing */
   readonly changed: boolean;
@@ -247,8 +300,10 @@ export interface StepResult extends LiveGame {
   readonly dealt: boolean;
   /** a hand went from live to finished in this step, so its result is new */
   readonly finishedHand: boolean;
-  /** moves made for absent humans by expired clocks in this step */
-  readonly standIns: readonly StandIn[];
+  /** which seats were away at the moment that hand finished, so a bot's win never counts on its person's profile; null when no hand finished */
+  readonly awayAtEnd: readonly boolean[] | null;
+  /** the caller's move came in after their own clock had run out and a bot had already moved for them in this step: it wasn't played (R5) */
+  readonly dropped: boolean;
 }
 
 /**
@@ -264,27 +319,38 @@ export interface StepResult extends LiveGame {
  *
  * The table's bookkeeping (`game.tableState`) comes back as `tableState`:
  * the same document, unless a hand finished here, when a win's points are
- * added to its running scores, or the game ended here. A step finishes at
- * most one hand, the one it returns: a deal needs the hand before it over,
- * and it plays on from there.
+ * added to its running scores, or someone's absence changed, or the game
+ * ended here. A step finishes at most one hand, the one it returns: a deal
+ * needs the hand before it over, and it plays on from there.
+ *
+ * Absence (R1-R8, absence.ts). A bot plays an away person's tiles at once,
+ * sharply, and the clocks wait on the people who are here. A turn or a pass
+ * of tiles whose clock runs out on someone is a miss, and the second in a row
+ * makes them away, played for in the same step; a claim window that runs out
+ * never counts. Any action of a person's own but a pass brings them back
+ * (R4), and so does "I'm back" (`change: back`). A move that arrives after
+ * its own clock ran out in this same step isn't played, nor counted as a miss
+ * (`dropped`, R5). The host's `change: letBotPlay` hands another person's
+ * seat to a bot, unless they've tapped since the host's table was sent. When
+ * the table still waits on the same decision, for no new person, its clock
+ * keeps running (R7).
  *
  * The game ends in the step that ends it (R12), with `tableState.over` set:
  * when its last hand is scored, however that happened (a move, a clock, the
  * bots), with no tap needed; or on `end` (the host, six idle hours, or the
  * last person leaving). An end mid-hand leaves that hand unfinished: it
  * doesn't count, no points move, and its log gets one note saying who ended
- * it. From then on every action and end is refused with GameIsOver, a step
- * with neither changes nothing, and no clock runs.
+ * it. From then on every action, change and end is refused with GameIsOver,
+ * a step with none of them changes nothing, and no clock runs.
  */
 export function step(input: StepInput): StepResult {
-  const { ruleset, seats, policy, now } = input;
-  const setup: TableSetup = input.bots ? { bots: input.bots } : {};
+  const { ruleset, seats, now } = input;
   const tableBefore = input.game.tableState ?? NEW_TABLE;
   const before = input.game.state;
-  if (input.action && input.end) throw new Error('a step takes an action or an end, not both');
+  if ([input.action, input.end, input.change].filter((x) => x !== undefined).length > 1) throw new Error('a step takes one of an action, a change or an end');
   if (tableBefore.over) {
-    if (input.action || input.end) throw new GameIsOver();
-    return { ...input.game, tableState: tableBefore, changed: false, gameOver: false, moves: [], dealt: false, finishedHand: false, standIns: [] };
+    if (input.action || input.end || input.change) throw new GameIsOver();
+    return { ...input.game, tableState: tableBefore, changed: false, gameOver: false, moves: [], dealt: false, finishedHand: false, awayAtEnd: null, dropped: false };
   }
   // A hand that ends inside this step, its clock run out, must be recorded as it closes, never dealt over. A finished
   // hand has no clock to resolve, so this refuses nothing the client offers.
@@ -293,27 +359,77 @@ export function step(input: StepInput): StepResult {
   let table = tableBefore;
   let changed = false;
   let finishedHand = false;
+  let awayAtEnd: readonly boolean[] | null = null;
+  let dropped = false;
   const moves: Move[] = [];
+  const live = () => s.phase !== 'finished';
 
-  // After every settle: a hand that has just finished puts a win's points on the running scores, and when it was the
-  // game's last, the game is over (the natural end), in the same step, before anything else in it can happen.
-  const noteFinish = () => {
+  // Who's away, matched to the seats as they are now: a seat someone has left, or sat down in afresh, starts from nothing.
+  let absence = reconcileAbsence(tableBefore.absence, seats);
+  // Who the table was waiting on before this step, for R7.
+  const pendingBefore = personsPending(before, ruleset, seats, absence);
+  const { action, actor } = input;
+  const isMove = !!action && action.type !== 'nextHand';
+  // A tap is presence (R4): any action of a person's own, but letting a tile go, which is what their clock would have done.
+  if (action && action.type !== 'pass' && actor !== undefined) absence = markPresent(absence, seats, actor, now);
+
+  const settleNow = (from: HandState) => {
+    const settled = settleLogged(from, ruleset, seats, { ...(input.bots ? { bots: input.bots } : {}), absence });
+    s = settled.state;
+    absence = settled.absence;
+    moves.push(...settled.moves);
+    noteFinish();
+  };
+
+  // After every settle: a hand that has just finished puts a win's points on the running scores, notes a hand (and a win)
+  // for each away seat, and when it was the game's last, the game is over (the natural end), in the same step, before
+  // anything else in it can happen.
+  function noteFinish(): void {
     if (finishedHand || s.phase !== 'finished') return;
     // A dealt hand starts live, so a hand finished in the step that dealt it is newly finished too.
     if (s.progress.handIndex === before.progress.handIndex && before.phase === 'finished') return;
     finishedHand = true;
+    awayAtEnd = awaySeats(seats, absence);
+    absence = noteHandEnd(absence, seats, s);
     const scores = addHandScores(table.scores ?? [0, 0, 0, 0], s);
     if (scores !== table.scores) table = { ...table, scores };
     if (!table.over && isLastHand(s, ruleset)) table = { ...table, over: endOfGame('complete', s, table, seats, null, now) };
-  };
+  }
 
-  const expired = resolveExpiredWith(input.game, ruleset, seats, now);
+  const expired = resolveExpiredWith(input.game, ruleset, seats, now, absence);
   if (expired) {
-    const settled = settleLogged(expired.state, ruleset, seats, setup);
-    s = settled.state;
-    moves.push(...expired.moves, ...settled.moves);
+    s = expired.state;
+    for (const m of expired.moves) {
+      // A move of the caller's own that this clock has just answered for them: not a miss, and not played (R5).
+      const late = isMove && m.seat === actor;
+      if (late) dropped = true;
+      const wasAway = isAway(absence, seats, m.seat!);
+      absence = noteClockMove(absence, seats, m, expired.misses && !late);
+      moves.push(m);
+      if (!wasAway && isAway(absence, seats, m.seat!) && live()) moves.push({ by: 'table', seat: m.seat!, a: { type: 'away', reason: 'clock' } });
+    }
     changed = true;
-    noteFinish();
+    settleNow(s);
+  }
+
+  const change = input.change;
+  if (change) {
+    const target = seats[change.seat];
+    if (change.type === 'back') {
+      const wasAway = isAway(absence, seats, change.seat);
+      absence = markPresent(absence, seats, change.seat, now);
+      if (wasAway && live() && target?.kind === 'human') moves.push({ by: 'player', seat: change.seat, userId: target.userId, a: { type: 'back' } });
+    } else {
+      if (target?.kind !== 'human') throw new NotYourMove('a bot already plays that seat');
+      // A pass never stamps a tap (R4), so a page left open answering claim windows by itself never refuses this.
+      const tapped = absence[change.seat].lastTap;
+      if (change.sawAt !== null && tapped !== null && tapped > change.sawAt) throw new JustPlayed();
+      const host = seats[change.bySeat];
+      const wasAway = isAway(absence, seats, change.seat);
+      absence = markPresent(markAway(absence, seats, change.seat, 'host'), seats, change.bySeat, now);
+      if (!wasAway && live()) moves.push({ by: 'host', seat: change.seat, ...(host?.kind === 'human' ? { userId: host.userId } : {}), a: { type: 'away', reason: 'host' } });
+    }
+    settleNow(s);
   }
 
   if (input.end) {
@@ -325,14 +441,14 @@ export function step(input: StepInput): StepResult {
       const how = input.end.how === 'abandoned' ? 'abandoned' : isLastHand(s, ruleset) ? 'complete' : input.end.how;
       table = { ...table, over: endOfGame(how, s, table, seats, by, now) };
       // Logged only on a live hand, so its log says why nobody moved after this; a finished hand's log is complete.
-      if (s.phase !== 'finished') moves.push({ by: by ? 'host' : 'table', ...(by ? { userId: by.userId } : {}), a: { type: 'endGame', how } });
+      if (live()) moves.push({ by: by ? 'host' : 'table', ...(by ? { userId: by.userId } : {}), a: { type: 'endGame', how } });
     }
-  } else if (input.action) {
+  } else if (action) {
     // The route validates what a client sends, but the table does not rely on
     // it: a server-only move (resolveClaims closes everyone's claim window at
     // once) is never a player's to make, whichever seat it names.
-    if (!isClientActionType((input.action as { readonly type: unknown }).type)) throw new NotYourMove('only the table makes that move');
-    if (input.action.type === 'nextHand') {
+    if (!isClientActionType((action as { readonly type: unknown }).type)) throw new NotYourMove('only the table makes that move');
+    if (action.type === 'nextHand') {
       if (s.phase !== 'finished') throw new IllegalAction('hand not finished');
       const n = nextHand(s, ruleset);
       if (n === null) {
@@ -340,39 +456,45 @@ export function step(input: StepInput): StepResult {
         table = { ...table, over: endOfGame('complete', s, table, seats, null, now) };
       } else {
         if (input.seed === undefined) throw new Error('nextHand needs the seed');
-        const dealt = settleLogged(startHand(ruleset, { seed: input.seed, ...n }), ruleset, seats, setup);
-        s = dealt.state;
-        moves.push(...dealt.moves);
-        noteFinish();
+        settleNow(startHand(ruleset, { seed: input.seed, ...n }));
       }
     } else {
-      if (input.actor === undefined || input.action.seat !== input.actor) throw new NotYourMove('action is not for your seat');
-      const entry = seats[input.actor];
+      if (actor === undefined || action.seat !== actor) throw new NotYourMove('action is not for your seat');
+      const entry = seats[actor];
       if (entry?.kind !== 'human') throw new NotYourMove('that seat is a bot');
-      const settled = settleLogged(reduce(s, input.action, ruleset), ruleset, seats, setup);
-      s = settled.state;
-      moves.push({ by: 'player', seat: input.actor, userId: entry.userId, a: input.action }, ...settled.moves);
-      noteFinish();
+      // Dropped: the clock has already answered this decision for them, and the table has moved on from it.
+      if (!dropped) {
+        moves.push({ by: 'player', seat: actor, userId: entry.userId, a: action });
+        settleNow(reduce(s, action, ruleset));
+      }
     }
     changed = true;
-  } else if (!expired) {
+  } else if (!expired && !change) {
     // A sweep or a first load: still make sure nothing is waiting on a bot.
-    const settled = settleLogged(s, ruleset, seats, setup);
-    if (settled.state !== s) {
-      s = settled.state;
-      moves.push(...settled.moves);
-      changed = true;
-      noteFinish();
-    }
+    settleNow(s);
   }
 
+  if (absence !== table.absence) table = { ...table, absence };
   const dealt = s.progress.handIndex > before.progress.handIndex;
-  // Anything new in the table's bookkeeping is a change too: the running scores, or the game's end.
-  if (!sameTableState(table, tableBefore)) changed = true;
-  // A game that's over waits on nobody.
-  const deadlines = table.over ? { claim: null, turn: null } : changed ? deadlinesFor(s, ruleset, seats, policy, now) : input.game.deadlines;
+  // Anything new in the table itself or its bookkeeping is a change too: a move, the running scores, someone's absence
+  // (a reset of a seat's old entry included), or the game's end.
+  if (s !== before || !sameTableState(table, tableBefore)) changed = true;
+  const policy = input.levels ? policyFor(presentLevels(input.levels, seats, absence), input.strict ?? false) : input.policy;
+  // The same decision as before, waiting on nobody new (one person answered and another still owes theirs, someone came
+  // back, a seat nobody was waiting on went to a bot): its clock keeps running (R7). Never a clock that has just run out:
+  // whatever it didn't settle gets a fresh one, as before.
+  const pendingNow = personsPending(s, ruleset, seats, absence);
+  const clockRunning = input.game.deadlines.claim !== null || input.game.deadlines.turn !== null;
+  const sameWait = !expired && clockRunning && sameDecision(before, s) && pendingNow.every((seat) => pendingBefore.includes(seat));
+  const deadlines = table.over
+    ? { claim: null, turn: null }
+    : s.phase === 'finished'
+      ? { claim: null, turn: null }
+      : !changed || sameWait
+        ? input.game.deadlines
+        : deadlinesFor(s, ruleset, seats, policy, now, absence);
   const gameOver = table.over !== null;
-  return { state: s, deadlines, tableState: table, changed, gameOver, moves, dealt, finishedHand, standIns: expired?.standIns ?? [] };
+  return { state: s, deadlines, tableState: table, changed, gameOver, moves, dealt, finishedHand, awayAtEnd, dropped };
 }
 
 /** A fresh hand for a game, with bots already played up to the first human decision, and the moves they made. */
@@ -392,6 +514,7 @@ export function rejectionStatus(err: unknown): number | null {
   if (err instanceof NotYourMove) return 403;
   if (err instanceof IllegalAction) return 400;
   if (err instanceof GameIsOver) return 409;
+  if (err instanceof JustPlayed) return 409;
   return null;
 }
 

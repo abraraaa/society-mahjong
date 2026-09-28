@@ -67,8 +67,12 @@ export interface TableProps {
   readonly clock?: { readonly kind: 'turn' | 'claim'; readonly ms: number } | null;
   /** a move is on its way to the table: the action buttons are disabled, and a second tap does nothing until it lands */
   readonly busy?: boolean;
-  /** what plays each seat that a person doesn't: a bot's seat is marked on its pill, in the result sheet's rows and on the final table */
+  /** what plays each seat that a person doesn't: a bot's seat is marked on its pill, in the result sheet's rows and on the final table; an away person's on its pill */
   readonly marks?: Readonly<Partial<Record<Seat, 'bot' | 'away'>>>;
+  /** seats whose name is a button (the host handing a seat to a bot): what a screen reader hears, and what a tap does */
+  readonly seatActions?: Readonly<Partial<Record<Seat, { readonly label: string; readonly onTap: () => void }>>>;
+  /** the note a player comes back to while a bot plays their tiles: drawn in place of the claim and pass sheets while it's set */
+  readonly awayNote?: React.ReactNode;
   /** the line under the final scores, when the page knows how the game ended; "That's the game." and who finished top otherwise */
   readonly endLine?: string;
   /** the host ends the game here, from the result sheet: shown only between hands of a game still in play; the page asks first */
@@ -116,6 +120,8 @@ function TableInner({
   nextLabel,
   busy = false,
   marks,
+  seatActions,
+  awayNote,
   endLine,
   onEndGame,
 }: TableProps) {
@@ -318,6 +324,8 @@ function TableInner({
       clock={clock && clock.kind === 'turn' && view.phase === 'turn' && view.turn === p.seat ? mmss(clock.ms) : undefined}
       urgent={urgent}
       mark={marks?.[p.seat]}
+      onTap={seatActions?.[p.seat]?.onTap}
+      tapLabel={seatActions?.[p.seat]?.label}
       {...(orientation ? { orientation } : {})}
     />
   );
@@ -423,7 +431,7 @@ function TableInner({
         </div>
       </div>
 
-      {claimOpen && view.lastDiscard && !gameOver && (
+      {claimOpen && view.lastDiscard && !gameOver && !awayNote && (
         <ClaimSheet
           discardKind={view.lastDiscard.kind}
           discarderName={names[view.lastDiscard.from]}
@@ -438,7 +446,7 @@ function TableInner({
         />
       )}
 
-      {view.phase === 'preplay' && legal.exchange && !gameOver && (
+      {view.phase === 'preplay' && legal.exchange && !gameOver && !awayNote && (
         // Keyed on the event sequence: each of the three passes (right, across,
         // left) gets a fresh sheet, so picks from the last pass cannot linger and
         // swallow the taps of the next.
@@ -471,6 +479,9 @@ function TableInner({
           onEndGame={gameOver ? undefined : onEndGame}
         />
       )}
+
+      {/* Never beside the result sheet: the page sets it only while a hand is being played. */}
+      {awayNote}
 
       <TutorSheet coach={coach} clock={cardClock} />
     </>

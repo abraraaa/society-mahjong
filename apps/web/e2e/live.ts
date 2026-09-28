@@ -31,10 +31,12 @@ export interface ActBody {
 }
 
 export interface Call {
-  readonly kind: 'view' | 'act' | 'tick' | 'end';
+  readonly kind: 'view' | 'act' | 'tick' | 'end' | 'back' | 'away';
   /** 1-based, per kind */
   readonly n: number;
   readonly body: ActBody | null;
+  /** what the page sent, as it sent it, for the routes whose body isn't a move */
+  readonly sent?: unknown;
   readonly route: Route;
 }
 
@@ -43,6 +45,10 @@ export interface GameRoutes {
   readonly act?: (body: ActBody, n: number) => Reply;
   /** the host's End the game; a 500 when the test gives none */
   readonly end?: (n: number) => Reply;
+  /** "I'm back"; a 500 when the test gives none */
+  readonly back?: (n: number) => Reply;
+  /** the host's "Let a bot play", with what the page sent; a 500 when the test gives none */
+  readonly away?: (sent: unknown, n: number) => Reply;
 }
 
 const b64url = (s: string) => Buffer.from(s).toString('base64url');
@@ -200,8 +206,8 @@ export async function openTable(page: Page, routes: GameRoutes, opts: { holdGame
   );
   await page.routeWebSocket(/127\.0\.0\.1:3499\/realtime/, (ws) => t.realtime.attach(ws));
 
-  const log = (kind: Call['kind'], route: Route, body: ActBody | null): Call => {
-    const call: Call = { kind, n: t.count(kind) + 1, body, route };
+  const log = (kind: Call['kind'], route: Route, body: ActBody | null, sent?: unknown): Call => {
+    const call: Call = { kind, n: t.count(kind) + 1, body, route, ...(sent === undefined ? {} : { sent }) };
     t.calls.push(call);
     return call;
   };
@@ -224,6 +230,17 @@ export async function openTable(page: Page, routes: GameRoutes, opts: { holdGame
   await page.route(`**/api/games/${GAME_ID}/end`, async (route) => {
     const call = log('end', route, null);
     const reply = t.routes.end ? t.routes.end(call.n) : { status: 500, body: { error: 'something went wrong' } };
+    if (reply !== 'hold') await answer(route, reply);
+  });
+  await page.route(`**/api/games/${GAME_ID}/back`, async (route) => {
+    const call = log('back', route, null);
+    const reply = t.routes.back ? t.routes.back(call.n) : { status: 500, body: { error: 'something went wrong' } };
+    if (reply !== 'hold') await answer(route, reply);
+  });
+  await page.route(`**/api/games/${GAME_ID}/away`, async (route) => {
+    const sent = JSON.parse(route.request().postData() ?? 'null') as unknown;
+    const call = log('away', route, null, sent);
+    const reply = t.routes.away ? t.routes.away(sent, call.n) : { status: 500, body: { error: 'something went wrong' } };
     if (reply !== 'hold') await answer(route, reply);
   });
 

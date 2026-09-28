@@ -1,6 +1,6 @@
 import { expect, test, type Locator } from '@playwright/test';
 import { signed } from '../lib/ledger';
-import { clockMoveNotice, tableNews } from '../lib/live/presence';
+import { IM_BACK, WELCOME_BACK, awaySummary, awayTitle, clockMoveNotice, letBotPlayLabel, letBotPlaySheet, tableNews } from '../lib/live/presence';
 import type { GameSnapshot } from '../lib/live/snapshot';
 import { POLL_MS } from '../lib/table-sync';
 import { fixtures } from './fixtures';
@@ -10,7 +10,9 @@ import { flush, ok, openTable, pauseClock } from './live';
  * Who's playing each seat: a bot's seat says so on its pill and in the
  * result sheet, and when someone gets up from the table the others are told,
  * by name, and see a bot in their seat. When a clock runs out on someone,
- * their own table says what the bot did for them, in plain words.
+ * their own table says what the bot did for them, in plain words. Twice in a
+ * row, and a bot plays their tiles until they tap "I'm back"; the host can
+ * hand someone's seat to a bot by tapping their name.
  */
 
 /** Amna's turn, its clock already run out when the page gets it: the page asks the table to resolve it straight away. */
@@ -23,11 +25,10 @@ const dueSoon = (s: GameSnapshot): GameSnapshot => ({ ...s, deadlines: { claim: 
 /** Late in a game: a four-digit total on every pill. */
 const SCORES = [2_000, 14_504, -8_000, -8_504];
 
-/** The line for the move the tick's stand-in made for Amna. */
+/** The line for the move the clock's stand-in made for Amna, as her own absence carries it. */
 function ownClockLine(s: GameSnapshot): string {
-  expect(s.standIns).toHaveLength(1);
-  const own = s.standIns![0]!;
-  return clockMoveNotice({ by: 'clock', seat: own.seat, a: own.action });
+  expect(s.mine?.clockMoves).toBe(1);
+  return clockMoveNotice(s.mine!.lastClockMove!);
 }
 
 /**
@@ -59,20 +60,14 @@ function drawn(pills: Locator) {
 }
 
 /**
- * The tick route, answering as a real table does: the bot's move comes back
- * once, to the tick that made it. A later tick (a look that lands while the
- * first is on its way sends one) finds nothing left to resolve, and gets the
- * same table without it.
+ * The tick route, answering as a real table does: the tick that ran the clock
+ * out saves the bot's move in Amna's absence. A later tick (a look that lands
+ * while the first is on its way sends one) finds nothing left to resolve, and
+ * gets the same table, the same move in it, which is no news the second time.
  */
 function tickAnswers(first: GameSnapshot): () => GameSnapshot {
-  const { standIns: made, ...after } = first;
-  expect(made).toHaveLength(1);
-  let ticked = false;
-  return () => {
-    const answer = ticked ? after : first;
-    ticked = true;
-    return answer;
-  };
+  expect(first.mine?.clockMoves).toBe(1);
+  return () => first;
 }
 
 test.describe('bots and people at the table', () => {
@@ -85,9 +80,9 @@ test.describe('bots and people at the table', () => {
     await pauseClock(page);
     await flush(page);
 
-    // Left of Amna, across and right: Omar and Sana are bots, Bilal is a person.
+    // Left of Amna, across and right: Omar and Sana are bots, Bilal is a person, whose name the host (Amna) can tap.
     const names = t.stage().locator('.seat .name');
-    await expect(names).toHaveText(['Omar · bot', 'Sana · bot', 'Bilal']);
+    await expect(names).toHaveText(['Omar · bot', 'Sana · bot', `Bilal${letBotPlayLabel('Bilal')}`]);
     await expect(t.toast()).toHaveCount(0);
 
     // Bilal gets up. It doesn't move the table, so nobody is poked: the slow poll is what brings it.
@@ -175,11 +170,101 @@ test.describe('bots and people at the table', () => {
 
     await page.clock.runFor(TURN_LEFT_MS + 1_000);
     const news = tableNews(dueSoon(fx.turn), both);
-    expect(news).toBe(tableNews(fx.turn, fx.bilalLeft));
-    await expect(t.toast()).toHaveText(`${ownClockLine(fx.timedOut)} ${news}`);
+    expect(news).toBe(`${ownClockLine(fx.timedOut)} ${tableNews(fx.turn, fx.bilalLeft)}`);
+    await expect(t.toast()).toHaveText(news!);
     await expect(t.stage().locator('.seat .name').last()).toHaveText('Bilal · bot');
     await flush(page);
     expect(t.count('tick')).toBe(1);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(b) when the slow poll brings Bilal away, the table says so and marks his pill', async ({ page }) => {
+    const fx = fixtures();
+    let away = false;
+    const t = await openTable(page, { view: () => ok(away ? fx.bilalAway : fx.turn) }, { clock: true });
+    await expect.poll(() => t.count('view')).toBe(2);
+    await pauseClock(page);
+    await flush(page);
+    const names = t.stage().locator('.seat .name');
+    await expect(names.last()).toHaveText(/^Bilal/);
+    away = true;
+    const line = tableNews(fx.turn, fx.bilalAway);
+    expect(line).toBe("⁨Bilal⁩'s away, so a bot's playing their tiles for now.");
+    await page.clock.runFor(POLL_MS);
+    await expect(t.toast()).toHaveText(line!);
+    // His name is still the host's to tap? No: a bot is playing for him already, so it's plain text again.
+    await expect(t.stage().locator('.seat .name').last()).toContainText('Bilal · away');
+    await expect(t.stage().getByRole('button', { name: /Let a bot play for/ })).toHaveCount(0);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(a) away, the table says why and what the bot has done; "I’m back" hands the seat back, with a welcome', async ({ page }) => {
+    const fx = fixtures();
+    let back = false;
+    const t = await openTable(page, { view: () => ok(back ? fx.awayBack : fx.awayTurn), back: () => ok(fx.awayBack) });
+    const mine = fx.awayTurn.mine!;
+    expect(mine.away).toBe('clock');
+    const note = page.getByRole('region', { name: awayTitle('clock') });
+    await expect(note).toBeVisible();
+    await expect(note).toContainText(awaySummary(mine.played));
+    await note.getByRole('button', { name: IM_BACK }).click();
+    await expect(note).toHaveCount(0);
+    back = true;
+    await expect(t.toast()).toHaveText(WELCOME_BACK);
+    expect(t.count('back')).toBe(1);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(h) away during a pass of tiles, the note shows alone: no pass sheet under it', async ({ page }) => {
+    const fx = fixtures();
+    expect(fx.awayWest.view.phase).toBe('preplay');
+    expect(fx.awayWest.mine?.away).toBe('host');
+    const t = await openTable(page, { view: () => ok(fx.awayWest) });
+    await expect(page.getByRole('region', { name: awayTitle('host') })).toBeVisible();
+    await expect(page.locator('.sheet')).toHaveCount(1);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(c) the host taps a name to let a bot play for them: asked first, then one request with the seat and the table they saw', async ({ page }) => {
+    const fx = fixtures();
+    const t = await openTable(page, { view: () => ok(fx.turn), away: () => ok(fx.bilalAway) });
+    const bilal = t.stage().getByRole('button', { name: /Let a bot play for .*Bilal/ });
+    const sheet = letBotPlaySheet('Bilal');
+
+    // Keep waiting sends nothing.
+    await bilal.click();
+    await expect(page.getByRole('dialog', { name: sheet.title })).toBeVisible();
+    await expect(page.getByRole('dialog')).toContainText(sheet.body);
+    await page.getByRole('button', { name: sheet.cancelLabel }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await flush(page);
+    expect(t.count('away')).toBe(0);
+
+    await bilal.click();
+    await page.getByRole('button', { name: sheet.confirmLabel, exact: true }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(t.stage().locator('.seat .name').last()).toContainText('Bilal · away');
+    expect(t.count('away')).toBe(1);
+    const sent = t.of('away')[0]!.sent as { seat: unknown; sawAt: unknown };
+    expect(sent.seat).toBe(1);
+    expect(typeof sent.sawAt).toBe('number');
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(d) nobody but the host has names to tap', async ({ page }) => {
+    const fx = fixtures();
+    const t = await openTable(page, { view: () => ok(fx.notHost) });
+    await expect(t.stage().locator('.seat .name')).toHaveText(['Omar · bot', 'Sana · bot', 'Bilal']);
+    await expect(page.getByRole('button', { name: /Let a bot play for/ })).toHaveCount(0);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(e) on a phone lying down, the away note’s button is on screen', async ({ page }) => {
+    await page.setViewportSize({ width: 852, height: 393 });
+    const fx = fixtures();
+    const t = await openTable(page, { view: () => ok(fx.awayTurn) });
+    const button = page.getByRole('region', { name: awayTitle('clock') }).getByRole('button', { name: IM_BACK });
+    await expect(button).toBeInViewport({ ratio: 1 });
     expect(t.pageErrors).toEqual([]);
   });
 });

@@ -49,13 +49,21 @@ function kinds(seats: Seats): { humans: number; bots: number } {
 /**
  * A deal, as the funnel counts it: who sat down to it (people and bots), how
  * far along the people were (stagesBySeat, one per seat, null for a bot), and
- * whether the room had dealt a game before.
+ * whether the room had dealt a game before. A person with no level yet counts
+ * as new. `levels` null means the levels couldn't be read (store.ts
+ * seatStages): the row then says so with `levels: null`, rather than counting
+ * everyone as new and tilting the funnel's mix of levels towards first-timers.
  */
-export function gameDealt(e: { roomId: string; gameId: string; userId: string; seats: Seats; levels: readonly (CoachStage | null)[]; again: boolean }): AppEvent {
-  const levels: Record<CoachStage, number> = { new: 0, first_hand: 0, learning: 0, solid: 0 };
-  e.seats.forEach((s, seat) => {
-    if (s?.kind === 'human') levels[e.levels[seat] ?? 'new'] += 1;
-  });
+export function gameDealt(e: { roomId: string; gameId: string; userId: string; seats: Seats; levels: readonly (CoachStage | null)[] | null; again: boolean }): AppEvent {
+  const known = e.levels;
+  let levels: Record<CoachStage, number> | null = null;
+  if (known !== null) {
+    const counts: Record<CoachStage, number> = { new: 0, first_hand: 0, learning: 0, solid: 0 };
+    e.seats.forEach((s, seat) => {
+      if (s?.kind === 'human') counts[known[seat] ?? 'new'] += 1;
+    });
+    levels = counts;
+  }
   return { type: 'game_dealt', roomId: e.roomId, gameId: e.gameId, userId: e.userId, data: { ...kinds(e.seats), again: e.again, levels } };
 }
 
