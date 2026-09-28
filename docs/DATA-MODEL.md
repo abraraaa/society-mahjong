@@ -154,27 +154,46 @@ What would still need a migration, and why each is fine to wait for:
 
 ## Setting up the pipeline (once, about five minutes)
 
+**What it holds, and why.** One credential that matters: the connection to
+this project's database as the `postgres` role. Migrations create and alter
+tables, functions, grants and RLS policies that `postgres` owns, so a narrower
+role would have to own them too, which comes to the same thing. It can't reach
+other projects, the management API, API keys, auth admin, billing or project
+settings. No Supabase access token is used. The Vercel deploy hook can only
+start a production build of `main`. Both live in a GitHub environment limited
+to `main`, so a workflow on any other branch can't read them, including one
+pushed by an agent.
+
 1. **Supabase**:
-   - Dashboard, then your avatar, then Account, then Access Tokens: create a
-     token named "GitHub Actions".
-   - Keep the database password handy (Project Settings, then Database; reset
-     it if lost).
-   - Note the project ref: the id in the project's URL.
+   - Open the project, then **Connect** (top bar), then **Session pooler**, and
+     copy the URI. Not the direct connection: GitHub's runners have no IPv6,
+     and the direct host is IPv6-only. Not the transaction pooler (port 6543),
+     which Supabase doesn't recommend for migrations.
+   - Put the database password in place of `[YOUR-PASSWORD]` (Project Settings,
+     then Database; reset it if lost). Letters and digits only, or
+     percent-encode anything else.
 2. **Vercel**:
    - Project Settings, then Git, then Deploy Hooks: create a hook for branch
      `main`.
 3. **GitHub**:
-   - Settings, then Secrets and variables, then Actions. Add these secrets:
-     `SUPABASE_ACCESS_TOKEN`, `SUPABASE_DB_PASSWORD` and `VERCEL_DEPLOY_HOOK`.
-   - Add one variable: `SUPABASE_PROJECT_REF`.
+   - Settings, then Environments, then New environment: `production`.
+   - Deployment branches and tags: **Selected branches**, add `main`.
+   - Optional: **Required reviewers**, add yourself, to approve each run before
+     it touches the database. Every merge then waits for that click.
+   - Add two **environment** secrets (not repository secrets):
+     `SUPABASE_DB_URL` and `VERCEL_DEPLOY_HOOK`.
 4. **Adopt what was run by hand**:
-   - Actions, then *Migrate and deploy*, then Run workflow, with "adopt" ticked.
+   - Actions, then *Migrate and deploy*, then Run workflow from `main`, with
+     "adopt" ticked.
    - This records 0001–0004 as applied and pushes anything newer.
    - It's safe to run more than once.
 5. **Turn off Vercel's own production deploy** (a one-line change to
    `vercel.json`: `"git": { "deploymentEnabled": { "main": false } }`).
    Production then deploys only after migrations are in. Previews still deploy
    from every branch.
+
+If the database password is ever reset, update `SUPABASE_DB_URL` to match.
+Nothing else expires.
 
 Previews use the production database, so a preview whose code needs a column
 that's only in an unmerged migration won't work until it merges. Supabase's
