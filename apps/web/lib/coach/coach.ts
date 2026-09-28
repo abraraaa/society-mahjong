@@ -2,6 +2,7 @@ import {
   analyseHand,
   countOf,
   handAfterClaim,
+  handAfterKong,
   isHonourTile,
   isSuitTile,
   matchPatterns,
@@ -22,6 +23,7 @@ import {
   type SuitTile,
   type TileKind,
 } from '@society/engine';
+import { exchangeStep } from './exchange';
 import { GLOSSARY } from './glossary';
 import { goalFor, roundNote } from './goal';
 import { exampleRef, handsThisRound, winnerRef, yoursRef } from './hand-card';
@@ -385,6 +387,29 @@ export function washoutLine(brief = false): CoachSegment[] {
   return line(`Washed out: the wall's run dry and nobody won.${brief ? '' : ' No points change hands.'}`);
 }
 
+/** The tile the Discard button offers when the player hasn't picked one: a discard tip's tile, or a kong tip's fallback. */
+export function suggestedDiscard(action: CoachAction): TileKind | null {
+  if (action.kind === 'discard') return action.tile;
+  if (action.kind === 'kong') return action.discard;
+  return null;
+}
+
+/**
+ * The first kong on offer that leaves the hand no further from its nearest hand than it is now, or null: the
+ * bots' own rule (bots/analysis.ts). Such a kong costs nothing and draws an extra tile. With no hand in reach,
+ * nothing a kong does can cost it one.
+ */
+function freeKong(input: CoachInput, spec: ReturnType<Ruleset['handSpec']>, target: CoachTarget | null): TileKind | null {
+  const { view, ruleset } = input;
+  const before = target?.away ?? Number.POSITIVE_INFINITY;
+  const awayAfter = (k: TileKind) =>
+    analyseHand(handAfterKong(handOf(view), k), spec.patterns, ctxOf(view), ruleset.guards, { claims: ruleset.claims }).candidates[0]?.away ?? Number.POSITIVE_INFINITY;
+  return view.legal.kong?.find((k) => awayAfter(k) <= before) ?? null;
+}
+
+/** K2, after a discard's reason on a turn whose only kongs would set the hand back: the Kong button is there, so say why not. */
+const KONG_SETS_BACK = " Don't press Kong: it would set your hand back.";
+
 /** The first of `attempts` that fits the bubble, or the last one: the action is never cut, only the words after it. */
 function fitting(attempts: readonly CoachSegment[][]): CoachSegment[] {
   return attempts.find((say) => visibleLength(textOf(say)) <= SAY_BUDGET) ?? attempts[attempts.length - 1]!;
@@ -491,7 +516,7 @@ function adviceFor(input: CoachInput): CoachState {
     const count = view.legal.exchange.count;
     const spare = analysis.spare.length >= count;
     const loose = spare ? analysis.spare.slice(0, count) : analysis.ratings.slice(0, count).map((r) => r.kind);
-    const action: CoachAction = { kind: 'exchange', tiles: loose };
+    const action: CoachAction = { kind: 'exchange', tiles: loose, step: exchangeStep(spec, view.preplayStep) };
     const n = countWord(count);
     const say = !target
       ? [seg(`I've lit up ${n} you can spare.`)]
@@ -499,6 +524,11 @@ function adviceFor(input: CoachInput): CoachState {
         ? line(`I've lit up ${n} you can spare: none of them helps `, named(target.hand), '.')
         : line(`I've lit up the ${n} doing the least for `, named(target.hand), '.');
     return { ...base, moment: 'exchange', action, say, reason: 'the exchange is a chance to shed dead tiles', highlight: loose };
+  }
+  // Passed, and waiting for the others: still the exchange, whose sheet stays up, so there's nothing to say under it.
+  // The round's aim comes on the first bubble of play, as it does after any deal.
+  if (view.phase === 'preplay') {
+    return { ...base, moment: 'exchange', action: { kind: 'wait' }, say: [], reason: null, highlight: [] };
   }
 
   // --- a claim window --------------------------------------------------------
@@ -599,8 +629,13 @@ function adviceFor(input: CoachInput): CoachState {
   }
 
   const discardTile = analysis.bestDiscard;
-  const action: CoachAction = myTurn && discardTile ? { kind: 'discard', tile: discardTile } : { kind: 'wait' };
-  const highlight = action.kind === 'discard' ? [action.tile] : [];
+  // A first look's bubble is the round's aim, and a lit Kong button with nothing said about it would only puzzle; the
+  // tile to let go is the tip there, as on any first look.
+  const aimFirst = firstLook && !quiet;
+  const kongs = myTurn && !aimFirst ? (view.legal.kong ?? []) : [];
+  const kong = kongs.length > 0 ? freeKong(input, spec, target) : null;
+  const action: CoachAction = kong ? { kind: 'kong', tile: kong, discard: discardTile } : myTurn && discardTile ? { kind: 'discard', tile: discardTile } : { kind: 'wait' };
+  const highlight = action.kind === 'discard' || action.kind === 'kong' ? [action.tile] : [];
 
   if (!myTurn) {
     if (beforeMyFirst && !quiet) {
@@ -612,17 +647,29 @@ function adviceFor(input: CoachInput): CoachState {
   }
 
   const moment = beforeMyFirst ? 'handStart' : 'turn';
-  if (firstLook && !quiet) {
+  if (aimFirst) {
     // Taken over on their own turn: the bubble is the round's aim, as it is on whichever view they see first, and the
     // tile to let go is still lit and offered on the Discard button. After that discard, the tutor says why as usual.
     const teach = [...roundTeach('said'), ...(target ? missedRun(view, target, goal, names) : [])];
     return { ...base, moment, action, say: aimLine(goal), reason: goal.watchOut, highlight, teach };
   }
-  if (quiet || !target) {
+  if (quiet) {
+    return { ...base, moment, action, say: [], reason: null, highlight, teach: firstTurn };
+  }
+  if (action.kind === 'kong') {
+    // K1: a kong that costs the hand nothing. Its button is lit, and the Discard button still offers a tile for
+    // someone who'd rather not. The round, then a run tile gone past, as on any turn.
+    const say = line(act(`Kong ${tileName(action.tile)}`), ': with four of a kind you draw an extra tile, and it costs your hand nothing.');
+    const teach = [...firstTurn, ...(target ? missedRun(view, target, goal, names) : [])];
+    return { ...base, moment, action, say, reason: 'a kong that costs the hand nothing draws an extra tile', highlight, teach };
+  }
+  if (!target) {
     return { ...base, moment, action, say: [], reason: null, highlight, teach: firstTurn };
   }
   // The round comes first, then a run tile that went past since the player last moved.
   const teach = [...firstTurn, ...missedRun(view, target, goal, names)];
+  // Every kong on offer would set the hand back (a free one would be the tip), and its button is there all the same.
+  const k2 = kongs.length > 0 ? [KONG_SETS_BACK] : [];
 
   if (action.kind !== 'discard') {
     return { ...base, moment, action, say: [seg("Every tile's pulling its weight. Pick the one you'd miss least.")], reason: null, highlight, teach };
@@ -647,7 +694,9 @@ function adviceFor(input: CoachInput): CoachState {
               ? [": it's as close as ", from, ', and easier']
               : null;
     const said = (...rest: Part[]) => line(lead, '. Switching to ', to, ...rest);
-    const say = fitting([...(why ? [said(...why, `.${progress}`), said(...why, '.')] : []), said(`.${progress}`), said('.')]);
+    const attempts = [...(why ? [said(...why, `.${progress}`), said(...why, '.')] : []), said(`.${progress}`), said('.')];
+    // K2 goes before anything else is dropped, as it does after a discard's reason.
+    const say = fitting(k2.length > 0 ? [...attempts.map((a) => line(...a, ...k2)), ...attempts] : attempts);
     return {
       ...base,
       moment,
@@ -659,7 +708,13 @@ function adviceFor(input: CoachInput): CoachState {
       planSwitch: { from: planSwitch.from, closerBy: planSwitch.closerBy },
     };
   }
-  const say = fitting([line(lead, ': ', ...reason.full, `.${progress}`), line(lead, ': ', ...reason.short, `.${progress}`), line(lead, ': ', ...reason.short, '.')]);
+  // With K2: the full reason and the one-tile-to-go clause, then the short reason, before K2 itself is dropped.
+  const say = fitting([
+    ...(k2.length > 0 ? [line(lead, ': ', ...reason.full, `.${progress}`, ...k2), line(lead, ': ', ...reason.short, `.${progress}`, ...k2)] : []),
+    line(lead, ': ', ...reason.full, `.${progress}`),
+    line(lead, ': ', ...reason.short, `.${progress}`),
+    line(lead, ': ', ...reason.short, '.'),
+  ]);
   return { ...base, moment, action, say, reason: textOf(line(...reason.full)), highlight, teach };
 }
 

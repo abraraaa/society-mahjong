@@ -395,8 +395,10 @@ h3 {
 }
 /* Discard names the tile, from "Discard 1 Dot" (about 140px) to "Discard Green
    Dragon" (209px). Sized for the longest, so flipping through the hand
-   changes the words on the button and never moves its edges. */
-.action-row > .btn-primary {
+   changes the words on the button and never moves its edges, whether it's
+   the lit button or stepping back for a kong the tutor advises (which
+   doesn't grow to its width when it's lit). */
+.action-row > .btn-discard {
   min-width: 13.25rem;
 }
 
@@ -1020,6 +1022,26 @@ b .term {
   .sheet-ask .answers {
     padding-bottom: calc(12px + var(--safe-bottom));
   }
+  }
+}
+/* The exchange sheet stays up from the first pass to the last. Its scrim keeps the tint without the blur, which cost
+   frames as its tiles lifted. */
+.scrim.scrim-plain {
+  backdrop-filter: none;
+}
+/* Once a wait after the player's pass has lasted, the scrim clears and lets taps through, so Tutor, ? and Leave work
+   above the sheet, and the sheet drops below every other sheet and scrim: a Leave confirmation, a card or the ? sheet
+   opened during the wait draws over it. */
+.scrim[data-waiting='true'] {
+  background: transparent;
+  pointer-events: none;
+}
+.sheet[data-sheet='exchange'][data-waiting='true'] {
+  z-index: 15;
+}
+.sheet[data-sheet='exchange'] .step {
+  font-weight: 400;
+  color: rgb(243 236 219 / 0.6);
 }
 .glossary {
   display: flex;

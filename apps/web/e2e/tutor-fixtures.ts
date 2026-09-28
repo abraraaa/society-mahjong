@@ -11,6 +11,7 @@ import {
   type HandState,
   type PrivatePlayerView,
   type Seat,
+  type TileKind,
 } from '@society/engine';
 import { analyseFor, coachFor, type CoachStage, type CoachState } from '../lib/coach';
 import { firstLookFor, joinedAtOf, type JoinedAt } from '../lib/coach/first-look';
@@ -54,8 +55,10 @@ const isBot = (seat: Seat) => SEATING[seat].kind === 'bot';
 /** The names the live page gives the seats: 'You' for Amna, as live-table.tsx does. */
 const LIVE_NAMES: Readonly<Record<Seat, string>> = { 0: 'You', 1: SEATING[1].name, 2: SEATING[2].name, 3: SEATING[3].name };
 
+const GOULASH: GameProgress = { roundWind: 'E', roundIndex: 0, handInRound: 0, handIndex: 0 };
 const EAST_HONOUR: GameProgress = { roundWind: 'E', roundIndex: 0, handInRound: 1, handIndex: 1 };
 const SOUTH: GameProgress = { roundWind: 'S', roundIndex: 1, handInRound: 0, handIndex: 4 };
+const WEST: GameProgress = { roundWind: 'W', roundIndex: 2, handInRound: 0, handIndex: 8 };
 
 /** One forced or bot move, or null when a person has a real decision. A copy of `settleOnce` (lib/live/table.ts), with the server's default sharp bots. */
 function settleOnce(s: HandState): HandState | null {
@@ -214,6 +217,12 @@ export function liveCoach(s: GameSnapshot): CoachState {
   return coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: liveStage(s.stage, view), names: LIVE_NAMES, firstLook });
 }
 
+/** A kind the tutor suggests passing fewer copies of than the hand holds, or null when there's none. */
+export function spareCopy(hand: readonly TileKind[], suggested: readonly TileKind[]): TileKind | null {
+  const count = (tiles: readonly TileKind[], k: TileKind) => tiles.filter((x) => x === k).length;
+  return suggested.find((k) => count(hand, k) > count(suggested, k)) ?? null;
+}
+
 /** The first seed of `tutor-{from}`, `tutor-{from + 1}`, ... for which `make` returns something. */
 function search<T>(what: string, make: (seed: string) => T | null, from = 0): T {
   for (let i = from; i < from + 200; i++) {
@@ -280,6 +289,17 @@ export interface TutorFixtures {
   readonly takeOver: { readonly theirs: GameSnapshot; readonly mine: GameSnapshot; readonly after: GameSnapshot; readonly later: GameSnapshot };
   /** The same, taken over on Amna's own turn, after the bot's first discard for the seat. */
   readonly takeOverOnTurn: GameSnapshot;
+  /** Amna's turn in the opening goulash, for a learner, with a kong on offer that costs her hand nothing: the tutor advises it. */
+  readonly kongTurn: GameSnapshot;
+  /** The West exchange's first pass, to the right, for a learner, with the bots' passes played: Amna and Bilal still to pass. */
+  readonly westSent: GameSnapshot;
+  /** The table's answer to Amna passing the tutor's three: Bilal still to pass. */
+  readonly westWaiting: GameSnapshot;
+  /**
+   * Then Bilal's pass, and the bots' second: the second pass, across, with Amna and Bilal to pass again. Amna holds more
+   * copies of one of the tutor's suggested kinds than it suggests (`spareCopy`), so lighting every copy would be wrong.
+   */
+  readonly westLanded: GameSnapshot;
 }
 
 /** Plays the people's moves, as the server's bot would make them, until Amna has a decision to make: null if the hand ends first. */
@@ -445,7 +465,42 @@ function build(): TutorFixtures {
     }
     return null;
   });
-  return { otherWin, claim, winClaim, claimAgain, flowerTurn, missedRun, handStartTwice, takeOver, takeOverOnTurn };
+  const kongTurn = search("Amna's goulash turn with a kong the tutor advises", (seed) => {
+    let s = settle(startHand(karachi, { seed, progress: GOULASH, dealer: 0 }));
+    for (let i = 0; i < 400 && s.phase !== 'finished'; i++) {
+      if (s.phase === 'turn' && s.turn === ME) {
+        const snap = snapshot(s, 9, 'learning');
+        if (liveCoach(snap).action.kind === 'kong') return snap;
+      }
+      const seat = pending(s)[0];
+      if (seat === undefined) return null;
+      s = settle(reduce(s, personMove(s, seat), karachi));
+    }
+    return null;
+  });
+  // The first pass never lights one copy of a kind held twice or more: a goulash wants its pairs and pungs, so the
+  // tutor offers only loose tiles there. A spare copy comes later, once four of a kind have come in on a pass, and only
+  // now and then: tutor-64 is the first seed whose second pass has one today, so the search starts there. An engine
+  // change that moves the deal still searches on from it.
+  const west = search(
+    'a West exchange whose second pass lights fewer copies of a kind than Amna holds',
+    (seed) => {
+      const sent = settle(startHand(karachi, { seed, progress: WEST, dealer: 0 }));
+      if (sent.phase !== 'preplay' || sent.preplayStep !== 0 || pending(sent).join() !== '0,1') return null;
+      const tip = liveCoach(snapshot(sent, 9, 'learning')).action;
+      if (tip.kind !== 'exchange') return null;
+      const waiting = settle(reduce(sent, { type: 'exchange', seat: ME, tiles: [...tip.tiles] }, karachi));
+      if (waiting.phase !== 'preplay' || pending(waiting).join() !== '1') return null;
+      const landed = settle(reduce(waiting, personMove(waiting, 1), karachi));
+      if (landed.phase !== 'preplay' || landed.preplayStep !== 1 || pending(landed).join() !== '0,1') return null;
+      const westLanded = snapshot(landed, 11, 'learning');
+      const next = liveCoach(westLanded).action;
+      if (next.kind !== 'exchange' || spareCopy(viewFor(landed, karachi, ME).concealed, next.tiles) === null) return null;
+      return { westSent: snapshot(sent, 9, 'learning'), westWaiting: snapshot(waiting, 10, 'learning'), westLanded };
+    },
+    64,
+  );
+  return { otherWin, claim, winClaim, claimAgain, flowerTurn, missedRun, handStartTwice, takeOver, takeOverOnTurn, kongTurn, ...west };
 }
 
 let built: TutorFixtures | null = null;
