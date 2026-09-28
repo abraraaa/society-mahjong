@@ -1,8 +1,8 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { karachi, tileName, type PrivatePlayerView } from '@society/engine';
 import { FIRST_LOOK_NOTE } from '../lib/coach';
 import { cardClockLine } from '../lib/coach/clock';
-import { exchangeGlow, exchangeHeading, exchangeProgress, exchangeStep, goesToLine, passedLine } from '../lib/coach/exchange';
+import { exchangeGlow, exchangeHeading, exchangeProgress, exchangeStep, goesToLine, passedLine, tileKeys } from '../lib/coach/exchange';
 import { cardCaption } from '../lib/coach/hand-card';
 import { TAUGHT_KEY, handNote, noteText } from '../lib/coach/teach';
 import { isolate, textOf } from '../lib/coach/words';
@@ -447,6 +447,8 @@ test.describe('the tutor at a live table', () => {
     await expect(tiles.nth(lit[2]!)).toHaveAttribute('data-coached', 'true');
     await tiles.nth(lit[1]!).click();
     await tiles.nth(lit[2]!).click();
+    // Where the heading and the Pass button sit on her pass: neither moves from here to the next pass.
+    const at = await placesOf(sheet);
 
     // She passes, and Bilal hasn't: the same sheet, which for a moment changes nothing but the tiles.
     const handle = await sheet.elementHandle();
@@ -464,6 +466,8 @@ test.describe('the tutor at a live table', () => {
     await page.clock.runFor(700);
     await expect(sheet).toHaveAttribute('data-waiting', 'true');
     await expect(sheet).toContainText(passedLine(isolate('Bilal')));
+    // The shorter line leaves the sheet as tall as it was.
+    expect(await placesOf(sheet)).toEqual(at);
     await t.stage().getByRole('button', { name: 'Glossary' }).click();
     const list = page.locator('[data-sheet="list"]');
     await expect(list).toBeVisible();
@@ -490,6 +494,7 @@ test.describe('the tutor at a live table', () => {
     await expect(sheet).not.toHaveAttribute('data-waiting');
     await expect(sheet.locator('button.tile[data-selected="true"]')).toHaveCount(0);
     await expect(coached).toHaveCount(3);
+    expect(await placesOf(sheet)).toEqual(at);
     // She holds more of one kind than the tutor suggests passing: exactly the suggested copies are lit, not every copy.
     const hand = (westLanded.view as PrivatePlayerView).concealed;
     const nextTip = liveCoach(westLanded).action;
@@ -503,4 +508,75 @@ test.describe('the tutor at a live table', () => {
     await expect(sheet.locator(`button.tile[aria-label="${name}"][data-coached="true"]`)).toHaveCount(suggested);
     expect(t.pageErrors).toEqual([]);
   });
+
+  test('(l-exchange-swept) a pass the table made for her lifts the tiles it passed, and the next pass starts with nothing picked', async ({ page }) => {
+    const { westSent, westWaiting, westLanded } = tutorFixtures();
+    let table = westSent;
+    const t = await openTable(page, { view: () => ok(table), act: () => 'hold' }, { clock: true });
+    const sheet = page.locator('.sheet[data-sheet="exchange"]');
+    const tiles = sheet.locator('button.tile');
+    const selected = sheet.locator('button.tile[data-selected="true"]');
+    await expect(sheet).toBeVisible();
+    await pauseClock(page);
+    await page.clock.runFor(500);
+
+    // She picks three tiles the tutor didn't light, and ones she'll still hold on the next pass, by kind and copy.
+    const view = westSent.view as PrivatePlayerView;
+    const tip = liveCoach(westSent).action;
+    if (tip.kind !== 'exchange') throw new Error('the fixture is an exchange');
+    const lit = exchangeGlow(view.concealed, tip.tiles);
+    const keys = tileKeys(view.concealed);
+    const later = tileKeys((westLanded.view as PrivatePlayerView).concealed);
+    const mine = keys.flatMap((k, i) => (!lit[i] && later.includes(k) ? [i] : [])).slice(0, 3);
+    expect(mine).toHaveLength(3);
+    await tapUntilLifted(tiles.nth(mine[0]!));
+    await tiles.nth(mine[1]!).click();
+    await tiles.nth(mine[2]!).click();
+    await expect(selected).toHaveCount(3);
+
+    // Before she taps Pass, the table's clock passes the tutor's three for her: what's lifted is what went, not her picks.
+    table = westWaiting;
+    let looks = t.count('view');
+    await page.clock.runFor(POLL_MS);
+    await expect.poll(() => t.count('view')).toBeGreaterThan(looks);
+    await expect(sheet.getByRole('button', { name: 'Pass tiles' })).toBeDisabled();
+    const passed = (westWaiting.view as PrivatePlayerView).myExchange;
+    expect([...(passed ?? [])].sort()).toEqual([...tip.tiles].sort());
+    await expect(selected).toHaveCount(3);
+    for (const [i, on] of lit.entries()) {
+      if (on) await expect(tiles.nth(i)).toHaveAttribute('data-selected', 'true');
+      else await expect(tiles.nth(i)).not.toHaveAttribute('data-selected');
+    }
+    await page.clock.runFor(700);
+    await expect(sheet).toHaveAttribute('data-waiting', 'true');
+    await expect(selected).toHaveCount(3);
+    for (const i of mine) await expect(tiles.nth(i)).not.toHaveAttribute('data-selected');
+    expect(t.of('act')).toEqual([]);
+
+    // The next pass: her old picks are still in her hand, and none of them is picked.
+    table = westLanded;
+    looks = t.count('view');
+    await page.clock.runFor(POLL_MS);
+    await expect.poll(() => t.count('view')).toBeGreaterThan(looks);
+    await expect(sheet.locator('h2')).toContainText('2 of 3');
+    await expect(sheet.getByRole('button', { name: 'Pass tiles' })).toBeDisabled();
+    await expect(selected).toHaveCount(0);
+    expect(t.pageErrors).toEqual([]);
+  });
 });
+
+/** Where the exchange sheet's heading and Pass button are on the screen, once the sheet has finished sliding in. */
+async function placesOf(sheet: Locator): Promise<{ heading: number; pass: number }> {
+  const place = async () => {
+    const heading = await sheet.locator('h2').boundingBox();
+    const pass = await sheet.getByRole('button', { name: 'Pass tiles' }).boundingBox();
+    return { heading: Math.round(heading!.y), pass: Math.round(pass!.y) };
+  };
+  let last = await place();
+  for (;;) {
+    await sheet.page().waitForTimeout(150);
+    const now = await place();
+    if (now.heading === last.heading && now.pass === last.pass) return now;
+    last = now;
+  }
+}

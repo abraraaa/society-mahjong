@@ -7,6 +7,7 @@ import { ClaimSheet } from '@/components/claim-sheet';
 import { Coach, CoachLine, CoachNotes, TermProvider, TutorSheet, useLesson, useOpenTerm, useSheetActions } from '@/components/coach';
 import { PlanStrip } from '@/components/plan-strip';
 import { River } from '@/components/river';
+import { useHeldHeight } from '@/components/use-held-height';
 import { riverOrder } from '@/lib/river';
 import { NO_SCORES, handDeltas, signed, standings, type Scores } from '@/lib/ledger';
 import { LIFT_SETTLE_MS, discardOffer, handBoundary, heldSelection, selectTile, settling, type Selection } from '@/lib/table-flow';
@@ -18,6 +19,7 @@ import {
   exchangeHeading,
   exchangeProgress,
   goesToLine,
+  passedKeys,
   passedLine,
   receiverOf,
   tileKeys,
@@ -453,6 +455,7 @@ function TableInner({
           step={exchange}
           to={exchange ? isolate(names[receiverOf(ME, exchange.direction)]) : null}
           waiting={!legal.exchange}
+          passed={view.myExchange}
           waitingLine={waitingFor(view, names)}
           coach={coach}
           lesson={lesson}
@@ -488,6 +491,7 @@ function ExchangeSheet({
   step,
   to,
   waiting,
+  passed,
   waitingLine,
   coach,
   lesson,
@@ -503,6 +507,8 @@ function ExchangeSheet({
   to: string | null;
   /** the player has passed and the others haven't */
   waiting: boolean;
+  /** what the table recorded as passed for her while she waits (`myExchange`), whoever passed it */
+  passed: readonly TileKind[] | undefined;
   /** who hasn't passed yet, or null when nobody's left */
   waitingLine: string | null;
   coach: CoachState;
@@ -535,6 +541,12 @@ function ExchangeSheet({
   }, [waiting]);
   if (!waiting && waited) setWaited(false);
   const waitingShown = waiting && waited;
+  // While she waits, the tiles lifted are the ones the table has going, which aren't hers if the clock or her other
+  // phone passed first. Her own picks, when they're those, stay as they were.
+  const lifted = waiting ? passedKeys(hand, picked, passed) : picked;
+  // The line under the heading keeps the height of its longest words, so the sheet's top and heading stay put as its
+  // line changes to the wait and on to the next pass.
+  const lineBox = useHeldHeight<HTMLDivElement>();
 
   // The coach has already worked out which tiles no candidate hand is using; the player can overrule it, but the
   // sheet opens on its answer rather than empty. Exactly the copies it suggests are lit: one of two held, if one.
@@ -559,7 +571,7 @@ function ExchangeSheet({
           {exchangeHeading(step, count)}
           {step && <span className="step"> · {exchangeProgress(step)}</span>}
         </h2>
-        <div className="mb-3">
+        <div ref={lineBox} className="mb-3">
           {waitingShown ? (
             <p className="text-ivory-200/70 text-sm">{passedLine(waitingLine)}</p>
           ) : (
@@ -580,7 +592,7 @@ function ExchangeSheet({
               kind={k}
               size="md"
               selectable={!waiting}
-              selected={picked.includes(keys[i]!)}
+              selected={lifted.includes(keys[i]!)}
               // The tips stay lit after the first pick; a picked tile's fades under its ring.
               coached={!waiting && glow[i]}
               onClick={taps[i]}

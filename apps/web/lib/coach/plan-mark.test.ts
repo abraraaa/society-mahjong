@@ -97,6 +97,16 @@ describe('the plan the tutor holds the player to', () => {
     expect(isTurnView(view(7))).toBe(false);
   });
 
+  it("leaves a switch untold on a turn view whose bubble can't say it (a kong tip), for the next turn view to tell", () => {
+    const [before] = play([[view(3, { turn: true }), A]]);
+    const onKong = nextPlanMark(before!, 'g1', view(7, { turn: true }), B, false);
+    expect(onKong!.switched).toEqual({ fromId: A.patternId, fromTitle: 'Apple Blossom', toldAt: null });
+    expect(nextPlanMark(onKong!, 'g1', view(8, { turn: true }), B, true)!.switched?.toldAt).toBe(8);
+    // Told already, a turn that can't say it changes nothing.
+    const told = nextPlanMark(before!, 'g1', view(7, { turn: true }), B);
+    expect(nextPlanMark(told!, 'g1', view(8, { turn: true }), B, false)).toBe(told);
+  });
+
   it('says a switch from A to B to C before a turn as from A, and nothing when it comes back to A', () => {
     const twice = play([
       [view(3, { turn: true }), A],

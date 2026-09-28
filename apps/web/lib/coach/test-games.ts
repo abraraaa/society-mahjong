@@ -13,7 +13,7 @@ import {
   type PrivatePlayerView,
   type Seat,
 } from '@society/engine';
-import { analyseFor, coachFor } from './coach';
+import { analyseFor, coachFor, tellsSwitch } from './coach';
 import { nextPlanMark, preferFor, samePlanMark, type PlanMark } from './plan-mark';
 import type { CoachStage, CoachState } from './types';
 
@@ -60,13 +60,14 @@ export function coachOf(
 export function stickyCoach(game: string | number): (view: PrivatePlayerView, stage?: CoachStage) => CoachState {
   let mark: PlanMark | null = null;
   return (view, stage = 'learning') => {
+    const tells = (analysis: HandAnalysis) => tellsSwitch({ view, ruleset: karachi, analysis, stage, firstLook: false });
     let analysis = analyseFor(view, karachi, preferFor(mark, game, view));
-    let next = nextPlanMark(mark, game, view, analysis.candidates[0]);
+    let next = nextPlanMark(mark, game, view, analysis.candidates[0], tells(analysis));
     for (let again = 0; !samePlanMark(next, mark); again++) {
       if (again === 2) throw new Error(`the plan didn't settle at seq ${view.seq}`);
       mark = next;
       analysis = analyseFor(view, karachi, preferFor(mark, game, view));
-      next = nextPlanMark(mark, game, view, analysis.candidates[0]);
+      next = nextPlanMark(mark, game, view, analysis.candidates[0], tells(analysis));
     }
     return coachOf(view, stage, analysis, false, mark);
   };

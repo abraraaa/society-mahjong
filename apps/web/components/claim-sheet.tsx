@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { tileName, type ClaimOption, type TileKind } from '@society/engine';
 import type { CoachState } from '@/lib/coach';
-import { claimBar, claimTimer, msLeft, pauseCountdown, resumeCountdown, startCountdown, type Countdown } from '@/lib/coach/clock';
+import { claimBar, claimTimer, msLeft, nextClaimWindow, pauseCountdown, resumeCountdown, startCountdown, type ClaimWindow, type Countdown } from '@/lib/coach/clock';
 import type { Lesson } from '@/lib/coach/teach';
 import { CoachLine, CoachNotes, useSheetOpen } from './coach';
 import { Tile } from './tile';
@@ -81,12 +81,14 @@ export function ClaimSheet({
   // clock can't be held, so a live sheet runs on, and the card shows that clock.
   const sheetOpen = useSheetOpen();
   const paused = clock === 'solo' && timed && sheetOpen;
-  // The window's whole length, for the bar: what it had when this discard's sheet first showed. A fresh table from a
-  // live table only says what's left, and the bar is drawn again from there, part-drained (`claimBar`), so it's
-  // empty when the table's clock runs out. Stored as seen, React's "store what you saw" pattern.
-  const [full, setFull] = useState({ discardCount, ms: claimMs });
-  if (full.discardCount !== discardCount) setFull({ discardCount, ms: claimMs });
-  const bar = claimBar(full.discardCount === discardCount ? full.ms : claimMs, claimMs);
+  // The window's whole length, for the bar: what it had when this discard's sheet first showed, or more if a fresh
+  // table brought more (`nextClaimWindow`). A fresh table from a live table only says what's left, and the bar is
+  // drawn again from there, part-drained (`claimBar`), so it's empty when the table's clock runs out. Stored as seen,
+  // React's "store what you saw" pattern.
+  const [full, setFull] = useState<ClaimWindow>({ discardCount, ms: claimMs });
+  const whole = nextClaimWindow(full, discardCount, claimMs);
+  if (whole !== full) setFull(whole);
+  const bar = claimBar(whole.ms, claimMs);
   // Kept on Date.now(), which is the clock Playwright drives.
   const countdown = useRef<Countdown | null>(null);
   // One countdown per discard, started again when the server sends a fresh

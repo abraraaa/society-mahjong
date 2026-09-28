@@ -96,6 +96,22 @@ export function tileKeys(hand: readonly TileKind[]): string[] {
   });
 }
 
+/**
+ * The tiles the sheet shows lifted while the player waits, as keys: the ones the table recorded as passed
+ * (`myExchange`), which aren't always the ones this phone picked. The table may have passed for her when the clock
+ * ran out, or her other phone may have passed first. Her own picks stay lifted when they're those very kinds, so a
+ * pass she made herself changes nothing on screen; otherwise the first copies of the passed kinds are lifted. Nothing
+ * is lifted when the table hasn't said what went.
+ */
+export function passedKeys(hand: readonly TileKind[], picked: readonly string[], passed: readonly TileKind[] | undefined): string[] {
+  if (!passed) return [];
+  const keys = tileKeys(hand);
+  const mine = picked.filter((k) => keys.includes(k));
+  const kinds = (tiles: readonly TileKind[]) => [...tiles].sort().join();
+  if (kinds(mine.map((k) => hand[keys.indexOf(k)]!)) === kinds(passed)) return mine;
+  return exchangeGlow(hand, passed).flatMap((on, i) => (on ? [keys[i]!] : []));
+}
+
 /** 'a', 'a and b', 'a, b and c'. */
 function andList(items: readonly string[]): string {
   if (items.length <= 1) return items[0] ?? '';
