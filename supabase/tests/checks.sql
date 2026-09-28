@@ -194,6 +194,16 @@ begin
     raise exception 'a seat was given a person with no profile';
   exception when foreign_key_violation then null;
   end;
+  -- The finish writes the game's row from how it ended, as store.ts finishGame sends it. Who ended it must have a profile
+  -- row too, or it's refused as 23503, which the finish answers by writing the row without them.
+  begin
+    update public.games set ended_by = gen_random_uuid() where id = g;
+    raise exception 'a game was ended by a person with no profile';
+  exception when foreign_key_violation then null;
+  end;
+  update public.games set status = 'finished', ended_at = now(), finished_at = now(), ended_how = 'complete', ended_by = null, hands_played = 16 where id = g;
+  update public.games set status = 'abandoned', ended_at = now(), ended_how = 'abandoned', ended_by = null, hands_played = 3 where id = g;
+  assert (select status = 'abandoned' and ended_how = 'abandoned' and hands_played = 3 and ended_by is null from public.games where id = g), 'the finish writes the game''s row';
 
   -- A person deleted: their game rows stay as history, without them.
   update public.game_players set user_id = w, kind = 'human', name = 'Zara' where game_id = g and seat = 1;

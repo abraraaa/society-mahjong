@@ -1,4 +1,5 @@
 import type { Action, HandState, Seat } from '@society/engine';
+// Type-only, and table-state.ts imports Seats back the same way: a cycle TypeScript erases.
 import type { TableState } from './table-state';
 
 /** Where a room is in its life: waiting for people, at the table, or between games. */
@@ -45,6 +46,17 @@ export type AwayReason = 'clock' | 'host' | 'self';
 
 /** How a game ended: its last hand was scored, the host ended it, nobody played it for hours, or everyone left. */
 export type GameEndHow = 'complete' | 'host' | 'idle' | 'abandoned';
+
+/**
+ * A request to end the game before its last hand is scored, built by the
+ * server only and never parsed from a body. For now the one kind is the last
+ * person leaving (`abandoned`, by nobody). A game whose last hand is scored
+ * ends by itself, in the step that scores it.
+ */
+export interface GameEnd {
+  readonly how: 'abandoned';
+  readonly by: { readonly userId: string; readonly name: string } | null;
+}
 
 /**
  * Who made a move, as the hand log records it: the seat's own person, by

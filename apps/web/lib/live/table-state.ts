@@ -1,4 +1,4 @@
-import type { Deadlines } from './types';
+import type { Deadlines, GameEndHow, SeatEntry, Seats } from './types';
 
 /**
  * live_state.table_state: the table's own bookkeeping, as one JSON document
@@ -6,7 +6,7 @@ import type { Deadlines } from './types';
  * as the hand, so the two can never disagree.
  *
  * Each part arrives with the code that first uses it. Today that's the
- * running scores; how the game ended, who's away and the next-hand ready
+ * running scores and how the game ended; who's away and the next-hand ready
  * check come later. Parsing is tolerant, and it keeps every top-level key it
  * doesn't know in `extra` and writes it back untouched, so an older deploy
  * never erases a newer one's bookkeeping. A row whose `v` is newer than this
@@ -19,19 +19,43 @@ export const TABLE_STATE_V = 1;
 /** One number per seat, in seat order. */
 export type Scores4 = readonly [number, number, number, number];
 
+/**
+ * How the game ended, saved by the request that ended it (R12). Once it's
+ * set the game is over, whatever games.status still says: step() refuses
+ * every move, and the rest of the bookkeeping (who finished where, the game's
+ * and the room's status) is written from this alone, again if need be.
+ */
+export interface GameOver {
+  readonly how: GameEndHow;
+  /** who ended it, when someone did; null for a last hand scored, or a game everyone left */
+  readonly by: { readonly userId: string; readonly name: string } | null;
+  /** when it ended, in epoch ms */
+  readonly at: number;
+  /** how many hands finished: an unfinished hand doesn't count */
+  readonly hands: number;
+  /** the final totals, as the table had them at the end */
+  readonly scores: Scores4;
+  /** who sat where at the end, so a finished game's page never reads another game's seats */
+  readonly seats: Seats;
+}
+
 export interface TableState {
   readonly v: number;
   /** the game's running totals, a finished hand's points already in; null only on a legacy row, whose totals are still in rooms.ledger */
   readonly scores: Scores4 | null;
+  /** how the game ended; null while it's in play */
+  readonly over: GameOver | null;
   /** top-level keys this code doesn't know, written back untouched */
   readonly extra: Readonly<Record<string, unknown>>;
 }
 
-/** A game that has just been dealt: nobody has any points yet. */
-export const NEW_TABLE: TableState = { v: TABLE_STATE_V, scores: [0, 0, 0, 0], extra: {} };
+/** A game that has just been dealt: nobody has any points yet, and it's in play. */
+export const NEW_TABLE: TableState = { v: TABLE_STATE_V, scores: [0, 0, 0, 0], over: null, extra: {} };
 
-/** The keys this code reads. Everything else goes in `extra`. */
-const KNOWN: readonly string[] = ['v', 'scores'];
+/** The keys this code reads. Everything else goes in `extra`, and so does an `over` it can't read (parseOver). */
+const KNOWN: readonly string[] = ['v', 'scores', 'over'];
+
+const END_HOWS: readonly GameEndHow[] = ['complete', 'host', 'idle', 'abandoned'];
 
 function isRecord(x: unknown): x is Readonly<Record<string, unknown>> {
   return typeof x === 'object' && x !== null && !Array.isArray(x);
@@ -47,6 +71,39 @@ function scores4(x: unknown): Scores4 | null {
   return isFiniteNumber(a) && isFiniteNumber(b) && isFiniteNumber(c) && isFiniteNumber(d) ? [a, b, c, d] : null;
 }
 
+/** A seat as rooms.seats keeps it, with any keys this code doesn't read left on; anything else is an empty seat. */
+function seatEntry(x: unknown): SeatEntry {
+  if (!isRecord(x) || typeof x['name'] !== 'string') return null;
+  if (x['kind'] === 'human' && typeof x['userId'] === 'string') return x as unknown as SeatEntry;
+  return x['kind'] === 'bot' ? (x as unknown as SeatEntry) : null;
+}
+
+function seats4(x: unknown): Seats {
+  if (!Array.isArray(x) || x.length !== 4) return [null, null, null, null];
+  const [a, b, c, d] = x as unknown[];
+  return [seatEntry(a), seatEntry(b), seatEntry(c), seatEntry(d)];
+}
+
+/**
+ * How the game ended, read tolerantly: anything missing gets its default
+ * (nobody, the epoch, no hands, the table's own totals, empty seats). One whose
+ * `how` this code doesn't know isn't read at all: it stays in `extra`, written
+ * back as it was, rather than being taken for an end this code can't describe.
+ */
+function parseOver(x: unknown, scores: Scores4): GameOver | null {
+  if (!isRecord(x) || !(END_HOWS as readonly unknown[]).includes(x['how'])) return null;
+  const by = x['by'];
+  const hands = x['hands'];
+  return {
+    how: x['how'] as GameEndHow,
+    by: isRecord(by) && typeof by['userId'] === 'string' && typeof by['name'] === 'string' ? { userId: by['userId'], name: by['name'] } : null,
+    at: isFiniteNumber(x['at']) ? x['at'] : 0,
+    hands: typeof hands === 'number' && Number.isInteger(hands) && hands >= 0 ? hands : 0,
+    scores: scores4(x['scores']) ?? scores,
+    seats: seats4(x['seats']),
+  };
+}
+
 /**
  * The document as stored, read tolerantly: it never throws, and whatever is
  * missing or unreadable gets its default. `legacy` means it has no `"v"`
@@ -57,15 +114,19 @@ function scores4(x: unknown): Scores4 | null {
  */
 export function parseTableState(x: unknown): { readonly table: TableState; readonly legacy: boolean } {
   const doc = isRecord(x) ? x : {};
-  const extra = Object.fromEntries(Object.entries(doc).filter(([key]) => !KNOWN.includes(key)));
   const v = doc['v'];
-  if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) return { table: { v: TABLE_STATE_V, scores: null, extra }, legacy: true };
-  return { table: { v, scores: scores4(doc['scores']) ?? [0, 0, 0, 0], extra }, legacy: false };
+  const legacy = typeof v !== 'number' || !Number.isInteger(v) || v < 1;
+  const scores = legacy ? null : (scores4(doc['scores']) ?? [0, 0, 0, 0]);
+  // A legacy row is a game in play, whatever else it holds.
+  const over = scores === null ? null : parseOver(doc['over'], scores);
+  const extra = Object.fromEntries(Object.entries(doc).filter(([key]) => !KNOWN.includes(key) || (key === 'over' && over === null)));
+  return { table: { v: legacy ? TABLE_STATE_V : (v as number), scores, over, extra }, legacy };
 }
 
-/** The document to store: written as this code's version, with the keys it doesn't know put back as they were. */
+/** The document to store: written as this code's version, with the keys it doesn't know put back as they were. `over` is written only once it's set. */
 export function tableStateJson(t: TableState): Record<string, unknown> {
-  return { ...t.extra, v: TABLE_STATE_V, scores: [...(t.scores ?? [0, 0, 0, 0])] };
+  const over = t.over && { ...t.over, by: t.over.by && { ...t.over.by }, scores: [...t.over.scores], seats: [...t.over.seats] };
+  return { ...t.extra, v: TABLE_STATE_V, scores: [...(t.scores ?? [0, 0, 0, 0])], ...(over ? { over } : {}) };
 }
 
 /** JSON values compared by what they hold, whatever order an object's keys are in. */
@@ -79,7 +140,7 @@ function sameJson(a: unknown, b: unknown): boolean {
 
 /** Whether two documents would store the same thing, so a step that changes neither the hand nor this writes nothing. */
 export function sameTableState(a: TableState, b: TableState): boolean {
-  return a.v === b.v && sameJson(a.scores, b.scores) && sameJson(a.extra, b.extra);
+  return a.v === b.v && sameJson(a.scores, b.scores) && sameJson(a.over, b.over) && sameJson(a.extra, b.extra);
 }
 
 /**
@@ -111,11 +172,12 @@ export function lastActed(row: { readonly legacy: boolean; readonly actedAt: num
 /**
  * live_state.wake_at, the one thing the sweep asks (R27): the next moment
  * the server has to act on this table unasked. For now that's the earlier of
- * its two clocks, or null when nothing is waiting on anyone. (`table` and
- * `actedAt` are for what's still to come here: no wake once the game is
- * over, and the hour a table nobody plays ends by itself.)
+ * its two clocks, or null when nothing is waiting on anyone, and always null
+ * once the game is over. (`actedAt` is for what's still to come here: the
+ * hour a table nobody plays ends by itself.)
  */
 export function wakeAt(x: { readonly deadlines: Deadlines; readonly table: TableState; readonly actedAt: number }): number | null {
+  if (x.table.over) return null;
   const clocks = [x.deadlines.claim, x.deadlines.turn].filter((t): t is number => t !== null);
   return clocks.length === 0 ? null : Math.min(...clocks);
 }

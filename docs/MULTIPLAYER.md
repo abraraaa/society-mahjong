@@ -101,8 +101,23 @@ creates it, and the server does everything else with the service role.
    a half-dealt game. Broadcasts `hand:started` with public info only.
 4. **Play.** Actions as below until the game's rounds are done or the host
    dissolves it.
-5. **End.** Final ledger written; replay JSON (seed + action logs) archived
-   to Blob; the seed becomes readable for replay and audit.
+5. **End.** The request that scores the last hand ends the game, with no
+   tap: a move, a clock running out or the bots, whichever finishes it. How
+   the game ended (when, how many hands, the final scores and who sat
+   where) is saved in `table_state` by the same `commit_table` call as the
+   hand, with the clocks stopped, so a game can never be both over and in
+   play, and from then on the table takes no more moves. Then the finish
+   records it: who finished where, with score and place (`game_players`),
+   the room back to "finished", and last the game's own row (`status`,
+   `ended_how`, `ended_by`, `ended_at`, `hands_played`). If the finish
+   fails part way, the game still reads finished everywhere, and the next
+   request that touches it (a look, a tick, the sweep, a leave, or a join
+   or Start in its room) writes it again. Everyone's result sheet becomes
+   the final table: "Final scores", ranked, and a line such as "That's the
+   game. Ayesha finishes top on +14,504." The last person leaving ends the
+   game the same way, as abandoned, with no final table. Still to do: the
+   seed becoming readable for replay and audit once the game is over, and
+   each game's replay (seed + move logs) archived to Blob.
 
 ### One action, end to end
 
@@ -116,16 +131,20 @@ server  session → seat
         settle: bots act inline until a human has a real decision; a human
           with nothing to claim is passed for, so windows only open when
           someone can use them
-        a hand won in this request adds its points to the running scores
+        a hand won in this request adds its points to the running scores;
+          the last hand scored also ends the game (no tap), and a game
+          that has ended takes no more moves (409)
         deadlines from the table's timer policy (longest level at the table)
         commit_table, one transaction, only if version is unchanged (else 409,
           with nothing written): live_state (version+1), table_state, both
           clocks, wake_at, acted_at when a person sent it, and every move the
           request made (the player's, the bots', the clock's, the table's
           passes) appended to the hand's log, with its result once it ends
-        then, when a hand ended, count it and tally the players; after the
-          last hand, finish the game. A failure here is logged, and the move
-          still counts
+        then, when a hand ended, count it (unless it ended the game) and
+          tally the players; when the game ended, finish it (who finished
+          where, the room, the game's row). A failure here is logged, and
+          the move still counts; a finish that failed is written again by
+          the next request that touches the game
         broadcast {version} on game:{id}; every client refetches its own view
         respond with the actor's private view and version
 ```
@@ -181,11 +200,12 @@ the sweep below reads.
   within one limit of 50 (`store.ts` `dueGames`): first the games in play
   whose wake time has passed, earliest first, which an index serves; then,
   with whatever room is left, the games in play with no wake time at all,
-  least recently saved first (a finished hand nobody has dealt on from, or
-  a table last saved by older code). Due tables come first, so parked ones
-  can never crowd out a table whose clock has run out. On the Hobby plan
-  crons run at most daily, which is why the tick above does the real work;
-  Pro makes the sweep per-minute.
+  least recently saved first (a finished hand nobody has dealt on from, a
+  game whose end is saved but whose finish didn't all land, which the visit
+  finishes, or a table last saved by older code). Due tables come first,
+  so parked ones can never crowd out a table whose clock has run out. On
+  the Hobby plan crons run at most daily, which is why the tick above does
+  the real work; Pro makes the sweep per-minute.
 
 **Claim windows are adaptive, and rarely open.** Three things keep the
 countdown from frightening anyone:
@@ -228,20 +248,26 @@ hand looks different.
 **Next hand.** Any seated human may deal the next hand, not only the host:
 the finished phase runs no clock, so a host who has wandered off would
 otherwise wedge the table for everyone. A second tap cannot skip a hand;
-it is rejected as stale (409) and the table shows a notice.
+it is rejected as stale (409) and the table shows a notice. After the last
+hand there is no next hand to deal: the game has already ended.
 
-**Playing again.** When the last hand is scored the game and room are
-marked finished, the host's result sheet says "Play again" and everyone
-else's "Back to the room": both lead to the lobby, where Start (now "Play
-again, same seats") deals a fresh game for the same seats with the scores
-back at nought. Anyone still on the old table follows the room channel's
-`started` message to the new one.
+**Playing again.** When the last hand is scored the game ends there and
+then, and every result sheet becomes the final table. The host's button
+says "Play again" (if they were still at the table at the end) and
+everyone else's "Back to the room": both lead to the lobby, where Start
+(now "Play again, same seats") deals a fresh game for the same seats with
+the scores back at nought. A finished game's page keeps showing its own
+final table, seats and scores, whatever the room does next. Anyone still
+on the old table follows the room channel's `started` message to the new
+one.
 
 **Leaving.** Any seat can stand up from a live table (Leave, top right,
 with a confirmation). A bot takes the seat for the rest of the game so the
-others carry on; when the last human leaves, the game is marked
-`abandoned` and the room `finished`, and anyone still on the page sees
-"The table has closed". In the lobby, leaving simply empties the seat.
+others carry on. When the last human leaves, the game ends as
+`abandoned`, saved with the table like any other end (a hand cut short
+doesn't count), and the room goes back to `finished`; anyone still on the
+page sees "The table has closed". In the lobby, leaving simply empties the
+seat.
 
 Turn limits nudge at 20 seconds remaining. After two expired turns the seat
 is handed to a bot stand-in and the human reclaims it on return. No
@@ -278,9 +304,10 @@ changing either are in `docs/DATA-MODEL.md`. What a live table keeps:
   versioning, both clocks, `wake_at` and `acted_at`, and `table_state`, the
   table's own bookkeeping as JSON (`lib/live/table-state.ts`). For now that
   document holds the game's running scores, all at nought when the game is
-  dealt. A table last saved before it existed reads its scores from
-  `rooms.ledger` until its next move saves them; nothing writes
-  `rooms.ledger` any more.
+  dealt, and, once the game has ended, how it ended (`over`: how, by whom,
+  when, how many hands, the final scores and who sat where). A table last
+  saved before it existed reads its scores from `rooms.ledger` until its
+  next move saves them; nothing writes `rooms.ledger` any more.
 - `hands`, one row per hand, made by the request that deals it, with its
   result and settlement once it ends (`hand_results` is no longer written).
   `actions` is the move log: every move in the hand, in order, each
@@ -288,8 +315,13 @@ changing either are in `docs/DATA-MODEL.md`. What a live table keeps:
   request produced; `by` says who made it (`player`, `bot`, `clock`, `away`,
   `table` or `host`); `a` is the engine move, or a table note.
 - `game_players`, one row per seat, written at the deal: who sat where, with
-  the person's id on a human's row and the name on every row. (If a seated
-  person has no profile row, that game's rows are written without ids.)
+  the person's id on a human's row and the name on every row. When the game
+  ends they're written again from `over`, with each seat's final score and
+  place (ties share a place; nobody is placed in an abandoned game). (If a
+  seated person has no profile row, that game's rows are written without
+  ids.)
+- `games.ended_how` (`complete`, or `abandoned`, for now), `ended_by`,
+  `ended_at` and `hands_played` say how the game ended, for the funnel.
 - Replaying a hand (`lib/live/hand-log.ts` `replayHand`): deal it from the
   game's seed with its progress, its dealer and its dealer streak (the run of
   hand rows just before it with the same dealer, which is why the streak

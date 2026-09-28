@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
-import type { GameRow, RoomRow } from '../../../../../lib/live/store';
+import type { GameRow, LiveMeta, RoomRow } from '../../../../../lib/live/store';
+import type { GameOver } from '../../../../../lib/live/table-state';
 
 /**
  * The host's "Play again". A room is startable unless its game is live: one
- * left "playing" by a game that has ended, and one whose finish closed the
- * room but not yet the game, can both be dealt again.
+ * left "playing" by a game that has ended, one whose finish closed the room
+ * but not yet the game, and one whose game's end is saved but whose finish
+ * never ran (it's finished first), can all be dealt again.
  */
-const db = vi.hoisted(() => ({ room: null as unknown, game: null as unknown }));
+const db = vi.hoisted(() => ({ room: null as unknown, game: null as unknown, meta: null as unknown, after: null as unknown }));
 
 vi.mock('server-only', () => ({}));
 vi.mock('../../../../../lib/live/auth', () => ({ currentUser: vi.fn(async () => ({ id: 'u-abrar', name: 'Abrar', isGuest: true })) }));
@@ -22,7 +24,10 @@ vi.mock('../../../../../lib/live/table', async (importOriginal) => {
 });
 vi.mock('../../../../../lib/live/store', () => ({
   roomByCode: vi.fn(async () => db.room),
+  roomById: vi.fn(async () => db.after ?? db.room),
   gameById: vi.fn(async () => db.game),
+  liveMeta: vi.fn(async () => db.meta),
+  finishGame: vi.fn(async () => {}),
   stagesBySeat: vi.fn(async (seats: readonly ({ kind: string } | null)[]) => seats.map((s) => (s?.kind === 'human' ? 'new' : null))),
   startGame: vi.fn(async () => ({ id: NEXT, room_id: 'r-1', seed: 'seed', status: 'active', hands_played: 0 })),
 }));
@@ -54,6 +59,8 @@ function start(): Promise<Response> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  db.meta = null;
+  db.after = null;
 });
 
 describe('POST /api/rooms/[code]/start', () => {
@@ -81,6 +88,21 @@ describe('POST /api/rooms/[code]/start', () => {
     const res = await start();
     expect(res.status).toBe(201);
     expect(store.startGame).toHaveBeenCalledTimes(1);
+  });
+
+  it('finishes a game whose end is saved but not recorded, then deals again', async () => {
+    const over: GameOver = { how: 'complete', by: null, at: 1, hands: 16, scores: [0, 0, 0, 0], seats: room.seats };
+    db.room = room;
+    db.game = game('active');
+    db.meta = { version: 40, table: { v: 1, scores: [0, 0, 0, 0], over, extra: {} }, legacy: false, actedAt: 0, updatedAt: 0, hand: 15, seq: 99 } satisfies LiveMeta;
+    // The finish closes the room, which moves its updated_at: the deal is guarded by the room as the finish left it.
+    db.after = { ...room, status: 'finished', updated_at: '2026-09-24T00:05:00Z' };
+    const res = await start();
+    expect(res.status).toBe(201);
+    expect(store.finishGame).toHaveBeenCalledWith(GAME, room, over);
+    const order = [store.finishGame, store.startGame].map((fn) => vi.mocked(fn).mock.invocationCallOrder[0]!);
+    expect(order[0]).toBeLessThan(order[1]!);
+    expect(vi.mocked(store.startGame).mock.calls[0]![0]).toMatchObject({ status: 'finished', updated_at: '2026-09-24T00:05:00Z' });
   });
 
   it('deals with gentle bots in the empty seats while the host is new', async () => {

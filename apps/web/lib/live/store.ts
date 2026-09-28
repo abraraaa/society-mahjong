@@ -4,9 +4,10 @@ import type { CoachStage } from '@/lib/coach';
 // Relative rather than '@/': vitest runs without the path alias, and the tests load this.
 import { createServiceClient } from '../supabase/service';
 import { HttpError, must, SupabaseError, type SupabaseFailure } from './errors';
+import { finalPlayers } from './final';
 import { commitArgs, type TableWrite } from './hand-log';
 import { stageFromStats, tallyHand, type ProfileStats } from './stage';
-import { NEW_TABLE, parseTableState, tableStateJson, wakeAt, type TableState } from './table-state';
+import { NEW_TABLE, parseTableState, tableStateJson, wakeAt, type GameOver, type TableState } from './table-state';
 import type { Deadlines, LiveGame, LoggedMove, RoomStatus, Seats } from './types';
 import { logError } from './log';
 import { cleanDisplayName, isUuid } from './validate';
@@ -196,6 +197,37 @@ async function dropGame(client: ReturnType<typeof db>, gameId: string): Promise<
   }
 }
 
+/** What the room routes read of a live table: its bookkeeping and stamps, and where the hand stands, but never the hand itself. */
+export interface LiveMeta {
+  readonly version: number;
+  readonly table: TableState;
+  readonly legacy: boolean;
+  readonly actedAt: number;
+  readonly updatedAt: number;
+  /** the hand being played (its index), and how far into it (the state's seq) */
+  readonly hand: number;
+  readonly seq: number;
+}
+
+/**
+ * A live table's bookkeeping, for a room route that needs to know whether its
+ * game is over (or, later, idle) without loading every seat's tiles: the
+ * state is the biggest column, so only two small paths into it are read.
+ * Null when the game has no live table.
+ */
+export async function liveMeta(gameId: string): Promise<LiveMeta | null> {
+  const data = must(
+    await db().from('live_state').select('version, table_state, acted_at, updated_at, hand:state->progress->handIndex, seq:state->seq').eq('game_id', gameId).maybeSingle(),
+    'read the table',
+  );
+  if (!data) return null;
+  const row = data as { version: number; table_state: unknown; acted_at: string; updated_at: string; hand: unknown; seq: unknown };
+  const { table, legacy } = parseTableState(row.table_state);
+  const updatedAt = fromIso(row.updated_at) ?? 0;
+  const whole = (n: unknown) => (typeof n === 'number' && Number.isInteger(n) ? n : 0);
+  return { version: row.version, table, legacy, actedAt: fromIso(row.acted_at) ?? updatedAt, updatedAt, hand: whole(row.hand), seq: whole(row.seq) };
+}
+
 /** The live table, with its bookkeeping parsed (table-state.ts), or null when the game has none. */
 export async function loadLive(gameId: string): Promise<LiveRow | null> {
   const data = must(
@@ -287,31 +319,53 @@ export async function recordHand(seats: Seats, state: HandState): Promise<void> 
 }
 
 /**
- * The last hand is over. Two writes, ordered so that either can fail and be
- * run again: the room first, so the lobby offers "Play again"; the game's own
- * status last. Until that last write lands the game is still active, so the
- * next "next hand" runs both again. The commit that ended the game has
- * already stopped its clocks, and the sweep only looks at active games.
+ * The bookkeeping around a game that has ended, written from how it ended
+ * (table_state.over), which the commit that ended it already saved. So the
+ * game is over whatever happens here, and this can run again, as often as it
+ * takes: every write sets values and never adds to them.
+ *   1. who finished where (game_players: every seat's final score and place),
+ *      one row per seat, overwriting the rows the deal wrote;
+ *   2. the room, back to the lobby's "finished", only while it still holds
+ *      this game and is playing it;
+ *   3. the game's own row: its status, when and how it ended, who ended it,
+ *      and how many hands were played.
+ * The game's status is last because it's what tells a later request the job
+ * is done: until it lands the game reads active, and the next request that
+ * looks at it finishes it again. Each write throws when it fails, so nothing
+ * after it runs until then. A person with no profile row can't stop it: the
+ * rows are written again without ids (profile_missing), as the deal does.
  */
-export async function finishGame(gameId: string, roomId: string): Promise<void> {
+export async function finishGame(gameId: string, room: Pick<RoomRow, 'id'>, over: GameOver): Promise<void> {
   const client = db();
-  const now = new Date().toISOString();
-  await closeRoom(client, gameId, roomId, now);
-  must(await client.from('games').update({ status: 'finished', finished_at: now, ended_at: now }).eq('id', gameId), 'finish the game');
-}
-
-/**
- * The last human stood up: the game ends without a result and the room
- * closes. The same order as finishGame, so a leave that fails part way
- * leaves the game active with the leaver still in their seat, and leaving
- * again finishes the job. Its clocks are left as they were: nothing reads a
- * game that isn't active.
- */
-export async function abandonGame(gameId: string, roomId: string): Promise<void> {
-  const client = db();
-  const now = new Date().toISOString();
-  await closeRoom(client, gameId, roomId, now);
-  must(await client.from('games').update({ status: 'abandoned', ended_at: now }).eq('id', gameId), 'abandon the game');
+  const endedAt = new Date(over.at).toISOString();
+  const rows = finalPlayers(over).map((p) => ({ game_id: gameId, ...p }));
+  if (rows.length > 0) {
+    const players = (r: typeof rows) => client.from('game_players').upsert(r, { onConflict: 'game_id,seat' });
+    const res = await players(rows);
+    if (res.error?.code === NO_SUCH_ROW) {
+      logError('profile_missing', new SupabaseError('record how everyone finished', res.error), { gameId });
+      must(await players(rows.map((r) => ({ ...r, user_id: null }))), 'record how everyone finished');
+    } else must(res, 'record how everyone finished');
+  }
+  await closeRoom(client, gameId, room.id, new Date().toISOString());
+  const finished = over.how !== 'abandoned';
+  const game = (endedBy: string | null) =>
+    client
+      .from('games')
+      .update({
+        status: finished ? 'finished' : 'abandoned',
+        ended_at: endedAt,
+        ...(finished ? { finished_at: endedAt } : {}),
+        ended_how: over.how,
+        ended_by: endedBy,
+        hands_played: over.hands,
+      })
+      .eq('id', gameId);
+  const res = await game(over.by?.userId ?? null);
+  if (res.error?.code === NO_SUCH_ROW && over.by !== null) {
+    logError('profile_missing', new SupabaseError('finish the game', res.error), { gameId });
+    must(await game(null), 'finish the game');
+  } else must(res, 'finish the game');
 }
 
 /**

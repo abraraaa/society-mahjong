@@ -1,12 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { NEW_TABLE, TABLE_STATE_V, lastActed, parseTableState, sameTableState, tableStateJson, wakeAt, withLegacyScores, type TableState } from './table-state';
+import { NEW_TABLE, TABLE_STATE_V, lastActed, parseTableState, sameTableState, tableStateJson, wakeAt, withLegacyScores, type GameOver, type TableState } from './table-state';
+import type { Seats } from './types';
 
 const T0 = 1_700_000_000_000;
+
+const SEATS: Seats = [
+  { kind: 'human', userId: 'u-amna', name: 'Amna' },
+  { kind: 'human', userId: 'u-bilal', name: 'Bilal' },
+  { kind: 'bot', name: 'Sana' },
+  { kind: 'bot', name: 'Omar' },
+];
+/** A game whose last hand was scored: Bilal top. */
+const OVER: GameOver = { how: 'complete', by: null, at: T0, hands: 16, scores: [2000, 14504, -8000, -8504], seats: SEATS };
 
 describe('parseTableState', () => {
   it('reads 0005’s default, and anything that isn’t a document, as a legacy table with no scores of its own', () => {
     for (const x of [{}, null, undefined, 0, 'v1', [], [1, 2, 3, 4], true]) {
-      expect(parseTableState(x), JSON.stringify(x)).toEqual({ table: { v: TABLE_STATE_V, scores: null, extra: {} }, legacy: true });
+      expect(parseTableState(x), JSON.stringify(x)).toEqual({ table: { v: TABLE_STATE_V, scores: null, over: null, extra: {} }, legacy: true });
     }
   });
 
@@ -15,7 +25,7 @@ describe('parseTableState', () => {
   });
 
   it('reads a v1 table’s scores', () => {
-    expect(parseTableState({ v: 1, scores: [0, 14504, -8000, -6504] })).toEqual({ table: { v: 1, scores: [0, 14504, -8000, -6504], extra: {} }, legacy: false });
+    expect(parseTableState({ v: 1, scores: [0, 14504, -8000, -6504] })).toEqual({ table: { v: 1, scores: [0, 14504, -8000, -6504], over: null, extra: {} }, legacy: false });
   });
 
   it('gives a table whose scores are missing or wrong nobody any points, rather than failing', () => {
@@ -27,18 +37,56 @@ describe('parseTableState', () => {
   it('reads a newer deploy’s table as given, parts and all, so the service can see it isn’t its own', () => {
     const { table, legacy } = parseTableState({ v: 2, scores: [5, -5, 0, 0], ready: { hand: 3 } });
     expect(legacy).toBe(false);
-    expect(table).toEqual({ v: 2, scores: [5, -5, 0, 0], extra: { ready: { hand: 3 } } });
+    expect(table).toEqual({ v: 2, scores: [5, -5, 0, 0], over: null, extra: { ready: { hand: 3 } } });
+  });
+
+  it('reads how the game ended', () => {
+    const { table, legacy } = parseTableState(JSON.parse(JSON.stringify({ v: 1, scores: OVER.scores, over: OVER })));
+    expect(legacy).toBe(false);
+    expect(table).toEqual({ v: 1, scores: OVER.scores, over: OVER, extra: {} });
+    const byHost = { ...OVER, how: 'host', by: { userId: 'u-amna', name: 'Amna' }, hands: 7 };
+    expect(parseTableState({ v: 1, scores: OVER.scores, over: byHost }).table.over).toEqual(byHost);
+  });
+
+  it('gives an end with parts missing or wrong their defaults, rather than failing', () => {
+    const over = parseTableState({ v: 1, scores: [1, -1, 0, 0], over: { how: 'abandoned', by: { userId: 7 }, at: 'noon', hands: -2, scores: [1, 2], seats: 'none' } }).table.over;
+    expect(over).toEqual({ how: 'abandoned', by: null, at: 0, hands: 0, scores: [1, -1, 0, 0], seats: [null, null, null, null] });
+    // A seat it can't read is an empty seat; one it can keeps whatever else it holds.
+    const seats = [{ kind: 'human', userId: 'u-a', name: 'A', since: 'then' }, { kind: 'bot', name: 'B', heldFor: 'u-c' }, { kind: 'human', name: 'no id' }, 'x'];
+    expect(parseTableState({ v: 1, scores: [0, 0, 0, 0], over: { how: 'complete', seats } }).table.over?.seats).toEqual([seats[0], seats[1], null, null]);
+  });
+
+  it('leaves an end it can’t read in `extra`, written back as it was, and reads the game as in play', () => {
+    for (const odd of [{ how: 'timeout', at: T0 }, 'over', 3, null]) {
+      const { table } = parseTableState({ v: 1, scores: [0, 0, 0, 0], over: odd });
+      expect(table.over, JSON.stringify(odd)).toBeNull();
+      expect(tableStateJson(table)).toEqual({ v: 1, scores: [0, 0, 0, 0], over: odd });
+    }
+  });
+
+  it('reads a legacy row as in play, whatever it holds', () => {
+    const { table, legacy } = parseTableState({ over: OVER });
+    expect(legacy).toBe(true);
+    expect(table.over).toBeNull();
+    expect(table.extra).toEqual({ over: OVER });
   });
 });
 
 describe('tableStateJson', () => {
-  it('writes v1 with the scores', () => {
+  it('writes v1 with the scores, and no end while the game is in play', () => {
     expect(tableStateJson(NEW_TABLE)).toEqual({ v: 1, scores: [0, 0, 0, 0] });
-    expect(tableStateJson({ v: 1, scores: [3, -3, 0, 0], extra: {} })).toEqual({ v: 1, scores: [3, -3, 0, 0] });
+    expect(tableStateJson({ v: 1, scores: [3, -3, 0, 0], over: null, extra: {} })).toEqual({ v: 1, scores: [3, -3, 0, 0] });
+  });
+
+  it('writes how the game ended once it has, and reads it back the same', () => {
+    const t: TableState = { v: 1, scores: OVER.scores, over: OVER, extra: {} };
+    const written = tableStateJson(t);
+    expect(written).toEqual({ v: 1, scores: OVER.scores, over: OVER });
+    expect(parseTableState(JSON.parse(JSON.stringify(written)))).toEqual({ table: t, legacy: false });
   });
 
   it('puts back the keys it doesn’t know, untouched, so an older deploy never erases a newer one’s bookkeeping', () => {
-    const stored = { v: 1, scores: [1, -1, 0, 0], over: { how: 'host', at: T0 }, absence: [{ userId: 'u-a', misses: 1 }], later: [1, { deep: true }] };
+    const stored = { v: 1, scores: [1, -1, 0, 0], ready: { hand: 3, dealAt: T0 }, absence: [{ userId: 'u-a', misses: 1 }], later: [1, { deep: true }] };
     const back = tableStateJson(parseTableState(stored).table);
     expect(back).toEqual(stored);
     // And it survives the database's round trip.
@@ -49,7 +97,7 @@ describe('tableStateJson', () => {
     const { table } = parseTableState({ note: 'kept' });
     const written = tableStateJson(withLegacyScores(table, [7, -7, 0, 0]));
     expect(written).toEqual({ note: 'kept', v: 1, scores: [7, -7, 0, 0] });
-    expect(parseTableState(written)).toEqual({ table: { v: 1, scores: [7, -7, 0, 0], extra: { note: 'kept' } }, legacy: false });
+    expect(parseTableState(written)).toEqual({ table: { v: 1, scores: [7, -7, 0, 0], over: null, extra: { note: 'kept' } }, legacy: false });
   });
 });
 
@@ -70,21 +118,28 @@ describe('withLegacyScores', () => {
   });
 
   it('leaves a table that has its own scores alone', () => {
-    const own: TableState = { v: 1, scores: [9, -9, 0, 0], extra: {} };
+    const own: TableState = { v: 1, scores: [9, -9, 0, 0], over: null, extra: {} };
     expect(withLegacyScores(own, [1, 1, 1, 1])).toBe(own);
   });
 });
 
 describe('sameTableState', () => {
   it('compares what the tables hold, not which objects they are', () => {
-    const a = parseTableState({ v: 1, scores: [1, -1, 0, 0], over: { how: 'host', by: null } }).table;
-    const b = parseTableState({ over: { by: null, how: 'host' }, scores: [1, -1, 0, 0], v: 1 }).table;
+    const a = parseTableState({ v: 1, scores: [1, -1, 0, 0], ready: { hand: 2, userIds: [] } }).table;
+    const b = parseTableState({ ready: { userIds: [], hand: 2 }, scores: [1, -1, 0, 0], v: 1 }).table;
     expect(sameTableState(a, b)).toBe(true);
     expect(sameTableState(a, { ...a, scores: [1, -1, 0, 1] })).toBe(false);
     expect(sameTableState(a, { ...a, v: 2 })).toBe(false);
-    expect(sameTableState(a, { ...a, extra: { over: { how: 'idle', by: null } } })).toBe(false);
+    expect(sameTableState(a, { ...a, extra: { ready: { hand: 3, userIds: [] } } })).toBe(false);
     expect(sameTableState(a, { ...a, extra: {} })).toBe(false);
     expect(sameTableState(NEW_TABLE, { ...NEW_TABLE, scores: null })).toBe(false);
+  });
+
+  it('tells an ended game from one in play, and one end from another', () => {
+    const ended: TableState = { ...NEW_TABLE, over: OVER };
+    expect(sameTableState(NEW_TABLE, ended)).toBe(false);
+    expect(sameTableState(ended, parseTableState(JSON.parse(JSON.stringify(tableStateJson(ended)))).table)).toBe(true);
+    expect(sameTableState(ended, { ...ended, over: { ...OVER, hands: 15 } })).toBe(false);
   });
 });
 
@@ -111,5 +166,9 @@ describe('wakeAt', () => {
 
   it('is null when nothing is waiting on anyone', () => {
     expect(at(null, null)).toBeNull();
+  });
+
+  it('is null once the game is over, whatever the clocks say', () => {
+    expect(wakeAt({ deadlines: { claim: T0 + 20_000, turn: T0 + 90_000 }, table: { ...NEW_TABLE, over: OVER }, actedAt: T0 })).toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 import { analysisBot, karachi, startHand, viewFor, type GameProgress, type HandState, type Seat, type TileKind } from '@society/engine';
+import { publicGameOver } from '../lib/live/lifecycle';
 import type { GameSnapshot } from '../lib/live/snapshot';
-import { deadlinesFor, settle, step } from '../lib/live/table';
+import { deadlinesFor, settle, step, type StepResult } from '../lib/live/table';
 import type { ClientAction, Deadlines, Seats, TimerPolicy } from '../lib/live/types';
 
 /**
@@ -34,8 +35,10 @@ const MADE_AT = 1_000_000;
 
 const EAST_HONOUR: GameProgress = { roundWind: 'E', roundIndex: 0, handInRound: 1, handIndex: 1 };
 const WEST_GOULASH: GameProgress = { roundWind: 'W', roundIndex: 2, handInRound: 0, handIndex: 8 };
+/** The game's sixteenth hand, its last. */
+const NORTH_LAST: GameProgress = { roundWind: 'N', roundIndex: 3, handInRound: 3, handIndex: 15 };
 
-function snapshot(state: HandState, version: number, deadlines: Deadlines, status: GameSnapshot['status'] = 'active'): GameSnapshot {
+function snapshot(state: HandState, version: number, deadlines: Deadlines, status: GameSnapshot['status'] = 'active', extra: Partial<GameSnapshot> = {}): GameSnapshot {
   return {
     gameId: GAME_ID,
     roomId: ROOM_ID,
@@ -50,6 +53,7 @@ function snapshot(state: HandState, version: number, deadlines: Deadlines, statu
     view: viewFor(state, karachi, ME),
     status,
     now: MADE_AT,
+    ...extra,
   };
 }
 
@@ -59,9 +63,24 @@ function act(state: HandState, deadlines: Deadlines, action: ClientAction, actor
 }
 
 /** A fresh hand with the bots played up to the first human decision, as dealing it does. */
-function deal(seed: string, progress: GameProgress) {
-  const state = settle(startHand(karachi, { seed, progress, dealer: 0 }), karachi, SEATS);
+function deal(seed: string, progress: GameProgress, dealer: Seat = 0) {
+  const state = settle(startHand(karachi, { seed, progress, dealer }), karachi, SEATS);
   return { state, deadlines: deadlinesFor(state, karachi, SEATS, POLICY, MADE_AT) };
+}
+
+/** Play a hand out, each human's move the one the server's bot would make for them: the step that finished it, or null if it never got there. */
+function playOut(start: { state: HandState; deadlines: Deadlines }): StepResult | null {
+  let s: { state: HandState; deadlines: Deadlines } = start;
+  let last: StepResult | null = null;
+  for (let i = 0; i < 400 && s.state.phase !== 'finished'; i++) {
+    const seat = s.state.phase === 'turn' ? s.state.turn : ([0, 1] as const).find((x) => viewFor(s.state, karachi, x).legal.claims !== undefined);
+    if (seat === undefined) return null;
+    const move = analysisBot(viewFor(s.state, karachi, seat), karachi) ?? ({ type: 'pass', seat } as const);
+    if (move.type === 'resolveClaims') return null;
+    last = act(s.state, s.deadlines, move, seat);
+    s = last;
+  }
+  return s.state.phase === 'finished' ? last : null;
 }
 
 /** The first seed of `e2e-0`, `e2e-1`, ... for which `make` returns something. */
@@ -84,6 +103,10 @@ export interface Fixtures {
   readonly turnAfter: GameSnapshot;
   /** The same hand, finished, with the game over. */
   readonly finished: GameSnapshot;
+  /** The last hand scored, so the game is over: the host's final table. Bilal finishes top. */
+  readonly lastHandOver: GameSnapshot;
+  /** The same final table for someone who isn't the host. */
+  readonly lastHandOverGuest: GameSnapshot;
   /** A West goulash: both humans still to pass three tiles. */
   readonly westSent: GameSnapshot;
   /** The same pass after Bilal's exchange: a newer version, nothing logged, Amna's exchange still open. */
@@ -102,17 +125,18 @@ function build(): Fixtures {
     if (t.state.phase !== 'turn' || t.state.turn !== ME || tile === undefined) return null;
     const after = act(t.state, t.deadlines, { type: 'discard', seat: ME, tile }, ME);
     if (after.state.phase !== 'turn' || after.state.turn !== 1) return null;
-    // Play the hand out, each human's move the one the server's bot would make for them.
-    let s: { state: HandState; deadlines: Deadlines } = after;
-    for (let i = 0; i < 400 && s.state.phase !== 'finished'; i++) {
-      const seat = s.state.phase === 'turn' ? s.state.turn : ([0, 1] as const).find((x) => viewFor(s.state, karachi, x).legal.claims !== undefined);
-      if (seat === undefined) return null;
-      const move = analysisBot(viewFor(s.state, karachi, seat), karachi) ?? ({ type: 'pass', seat } as const);
-      if (move.type === 'resolveClaims') return null;
-      s = act(s.state, s.deadlines, move, seat);
-    }
-    if (s.state.phase !== 'finished') return null;
-    return { t, after, end: s };
+    const end = playOut(after);
+    return end && { t, after, end };
+  });
+
+  // The step that scores the last hand ends the game by itself: that step's end is what the page is told.
+  const last = search('a last hand that plays out and ends the game', (seed) => {
+    const end = playOut(deal(seed, NORTH_LAST, 3));
+    return end?.tableState.over ? { end, over: end.tableState.over } : null;
+  });
+  const lastHandOver = snapshot(last.end.state, 31, { claim: null, turn: null }, 'finished', {
+    scores: [2000, 14504, -8000, -8504],
+    ended: publicGameOver(last.over, USER_ID),
   });
 
   const west = search('a West goulash with both humans still to pass', (seed) => {
@@ -136,6 +160,8 @@ function build(): Fixtures {
     solidTurn: { ...snapshot(live.t.state, 5, live.t.deadlines), stage: 'solid' },
     turnAfter: snapshot(live.after.state, 6, live.after.deadlines),
     finished: snapshot(live.end.state, 9, { claim: null, turn: null }, 'finished'),
+    lastHandOver,
+    lastHandOverGuest: { ...lastHandOver, isHost: false },
     westSent: snapshot(west.w.state, 1, west.w.deadlines),
     westConflict: snapshot(west.conflict.state, 2, west.conflict.deadlines),
     westLanded: snapshot(west.landed.state, 3, west.landed.deadlines),

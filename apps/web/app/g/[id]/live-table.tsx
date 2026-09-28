@@ -11,6 +11,8 @@ import { Trouble, Waiting } from '@/components/trouble';
 import { analyseFor, coachFor, type CoachState } from '@/lib/coach';
 import { retryCanHelp } from '@/lib/front-door';
 import { ApiError, api, listen } from '@/lib/live/client';
+import { finalStandings } from '@/lib/live/final';
+import { endLine } from '@/lib/live/lifecycle-copy';
 import { plainError } from '@/lib/live/plain';
 import { isPrivate, type GameSnapshot } from '@/lib/live/snapshot';
 import type { ClientAction } from '@/lib/live/types';
@@ -330,9 +332,25 @@ export function LiveTable({ gameId }: { gameId: string }) {
       : null;
 
   const gameOver = snap.status === 'finished';
-  // The server settles the room's ledger in the request that finishes the hand,
-  // so a snapshot of a finished hand already carries the settled totals.
+  // The running totals are saved with the move that finishes a hand, so a
+  // snapshot of a finished hand already carries them, and a finished game's
+  // are its final scores.
   const scores = scoresFrom(snap.scores);
+  const marks: Partial<Record<Seat, 'bot'>> = {};
+  snap.seats.forEach((s, i) => {
+    if (s?.kind === 'bot') marks[i as Seat] = 'bot';
+  });
+  // How the game ended, and who finished top, by their own names: the reader is "You" by seat.
+  const ending = gameOver
+    ? endLine(
+        snap.ended ?? null,
+        finalStandings(
+          snap.seats.map((s) => s && { name: s.name, bot: s.kind === 'bot' }),
+          snap.scores,
+        ),
+        snap.me,
+      )
+    : undefined;
 
   return (
     <>
@@ -353,7 +371,8 @@ export function LiveTable({ gameId }: { gameId: string }) {
         view={view}
         label={ruleset.handSpec(view.progress).label}
         subtitle={`Table ${snap.roomCode}`}
-        onLeave={() => setLeaving('asking')}
+        // Leaving is for a game in play: once it's over, the final table's button goes back to the room.
+        {...(snap.status === 'active' ? { onLeave: () => setLeaving('asking') } : {})}
         clock={clock}
         nextLabel={snap.isHost ? 'Play again' : 'Back to the room'}
         names={names}
@@ -374,6 +393,8 @@ export function LiveTable({ gameId }: { gameId: string }) {
         gameOver={gameOver}
         scores={scores}
         handsPerRound={ruleset.handsPerRound}
+        marks={marks}
+        {...(ending !== undefined ? { endLine: ending } : {})}
       />
     </>
   );

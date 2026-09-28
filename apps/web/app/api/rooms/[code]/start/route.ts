@@ -7,7 +7,7 @@ import { stamp } from '../../../../../lib/live/hand-log';
 import { errorResponse, json } from '../../../../../lib/live/http';
 import { emptySeatBots, humanLevels, policyFor } from '../../../../../lib/live/policy';
 import { requireRoom, withBots } from '../../../../../lib/live/rooms';
-import { HttpError } from '../../../../../lib/live/service';
+import { HttpError, settleRoomGame } from '../../../../../lib/live/service';
 import { stagesBySeat, startGame } from '../../../../../lib/live/store';
 import { dealFirstHand } from '../../../../../lib/live/table';
 import { newGameSeed } from '../../../../../lib/seed';
@@ -18,10 +18,11 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ code: str
     const user = await currentUser();
     if (!user) throw new HttpError(401, 'sign in first');
     const { code } = await ctx.params;
-    const room = await requireRoom(code);
+    // A game that has ended but isn't all recorded yet is finished first, so the room reads as between games and can be dealt again.
+    const room = await settleRoomGame(await requireRoom(code));
     if (room.host_id !== user.id) throw new HttpError(403, 'only the host can start');
-    // A finished room starts again with the same seats: the scores start from nought, the seed is fresh. The room is as requireRoom reads
-    // it, so it is "playing" only while its game is live: one left "playing" by a game that has ended can be dealt again.
+    // A finished room starts again with the same seats: the scores start from nought, the seed is fresh. The room is as requireRoom and
+    // settleRoomGame leave it, so it is "playing" only while its game is live: one left "playing" by a game that has ended can be dealt again.
     if (room.status === 'playing') throw new HttpError(409, 'a game is in progress');
     const seats = withBots(room.seats);
     const ruleset = getRuleset(room.ruleset_id);

@@ -39,10 +39,11 @@ export async function requireRoom(code: string): Promise<RoomRow> {
 
 /**
  * A room whose row says "playing" but whose game is over, or gone, reads as
- * finished. finishGame and abandonGame write the room before the game, so
- * they no longer leave one behind; but a room they left before they did
- * would otherwise send everyone from the lobby back to a final table, and
- * its host could never deal again.
+ * finished. finishGame writes the room before the game, so it no longer
+ * leaves one behind; but a room left before it did would otherwise send
+ * everyone from the lobby back to a final table, and its host could never
+ * deal again. (A game whose end is saved but whose finish never ran still
+ * reads active here: service.ts settleRoomGame finishes that one.)
  */
 async function withGameOver(room: RoomRow): Promise<RoomRow> {
   if (room.status !== 'playing') return room;
