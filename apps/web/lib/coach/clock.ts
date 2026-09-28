@@ -63,6 +63,22 @@ export function claimSheetClock(
 }
 
 /**
+ * The claim sheet's bar, as a CSS animation: it drains over the window's whole
+ * length, `fullMs`, the time it had when the sheet first showed it, and starts
+ * `fullMs - leftMs` in, so it's empty exactly when what's left runs out. A
+ * live table sends what's left with every fresh table (the slow poll, a poke
+ * from someone else's move, a reconnect), and the bar is drawn again from
+ * there, part-drained. Stretching what's left over the time already gone would
+ * empty it early: halfway through a win's ninety seconds, with forty left.
+ * Never more than full, if a fresh table brings more time than the first.
+ */
+export function claimBar(fullMs: number, leftMs: number): { readonly durationMs: number; readonly delayMs: number } {
+  const left = Math.max(0, leftMs);
+  const duration = Math.max(fullMs, left);
+  return { durationMs: duration, delayMs: left - duration };
+}
+
+/**
  * What a card or a word says about the clock under it: the claim held (on the
  * bots), a live clock still running and how long it has, or nothing.
  */

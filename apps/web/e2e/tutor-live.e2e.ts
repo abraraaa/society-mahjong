@@ -8,7 +8,6 @@ import { textOf } from '../lib/coach/words';
 import { CLAIM_PASS_MARGIN_MS } from '../lib/live/timing';
 import type { GameSnapshot } from '../lib/live/snapshot';
 import { riverOrder } from '../lib/river';
-import { standInNotice } from '../lib/table-flow';
 import { POLL_MS } from '../lib/table-sync';
 import { flush, ok, openTable, pauseClock, type LiveTable } from './live';
 import { liveCoach, tutorFixtures } from './tutor-fixtures';
@@ -240,9 +239,45 @@ test.describe('the tutor at a live table', () => {
     // The clock runs out. The page asks the table to settle it, and the table's stand-in calls Mahjong for her.
     await page.clock.runFor(1_000);
     await expect.poll(() => t.count('tick')).toBe(1);
-    await expect(t.toast()).toHaveText(standInNotice(won.standIns![0]!.action));
+    // The toast's words are the table's to choose (the server lane words a move made on the clock, with any table news
+    // beside it), so only what it's about is checked here.
+    await expect(t.toast()).toContainText('Mahjong');
     await expect(page.locator('.sheet h2', { hasText: 'Mahjong!' })).toBeVisible();
     expect(t.count('act')).toBe(0);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test("(l-win-bar) a live win's bar still runs to the table's deadline when a fresh table comes in part-way through", async ({ page }) => {
+    const { before, window } = tutorFixtures().winClaim;
+    // A win runs on the turn clock: ninety seconds for someone new. The page looks again every twelve, and each fresh
+    // table says only what's left.
+    const long: GameSnapshot = { ...window, deadlines: { ...window.deadlines, claim: window.now + 90_000 } };
+    const fresh: GameSnapshot = { ...long, now: long.now + POLL_MS };
+    const t = await openTable(page, { view: (n) => (n === 0 ? 'hold' : ok(n === 1 ? before : n === 2 ? long : fresh)), act: () => 'hold' }, { holdGameJoins: true, clock: true });
+    await expect.poll(() => t.count('view')).toBe(1);
+    await pauseClock(page);
+    t.realtime.gameJoins()[0]!.reply();
+    await expect.poll(() => t.count('view')).toBe(2);
+    const sheet = page.locator('[data-sheet="claim"]');
+    await expect(sheet.getByRole('button', { name: 'Mahjong!' })).toBeVisible();
+    // The bar's drain, as the browser runs it: how long it lasts, how far in it started, and how far through it is.
+    const drain = () =>
+      sheet.locator('.timer > i').evaluate((e) => {
+        const timing = e.getAnimations()[0]!.effect!.getComputedTiming();
+        return { duration: Number(timing.duration), delay: Number(timing.delay), through: (Number(timing.localTime) - Number(timing.delay)) / Number(timing.duration) };
+      });
+    expect(await drain()).toMatchObject({ duration: 90_000, delay: 0 });
+
+    // The slow poll brings a fresh table twelve seconds in. The bar is drawn again from where it stands, twelve seconds
+    // through the ninety, with seventy-eight to run: it empties as the table's clock runs out, not early.
+    await page.clock.runFor(POLL_MS);
+    await expect.poll(() => t.count('view')).toBe(3);
+    await expect.poll(async () => (await drain()).delay).toBe(-POLL_MS);
+    const now = await drain();
+    expect(now.duration + now.delay).toBe(90_000 - POLL_MS);
+    expect(now.through).toBeGreaterThanOrEqual(POLL_MS / 90_000);
+    expect(now.through).toBeLessThan((POLL_MS + 5_000) / 90_000);
+    expect(t.count('act'), 'no pass on a win').toBe(0);
     expect(t.pageErrors).toEqual([]);
   });
 
@@ -286,7 +321,11 @@ test.describe('the tutor at a live table', () => {
     await expect(say).toHaveText(textOf(first.say));
     await expect(note).toHaveText(noteText(FIRST_LOOK_NOTE));
     // "The row above them": the plan, laid out above her tiles.
-    await expect(t.stage().locator('.plan-strip')).toBeVisible();
+    const strip = t.stage().locator('.plan-strip');
+    await expect(strip).toBeVisible();
+    // The strip is drawn from the plan's hand whether or not the plan is kept, so check the plan itself: its line is in
+    // the bubble too, shown there on a short landscape screen, where the strip isn't drawn.
+    await expect(bubble.locator('.plan')).toHaveText((await strip.locator('.plan').textContent())!);
     await pauseClock(page);
     const lookAgain = async () => {
       const looks = t.count('view');

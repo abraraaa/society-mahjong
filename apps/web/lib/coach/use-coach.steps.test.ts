@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { karachi, type PrivatePlayerView } from '@society/engine';
+import { preferFor, type PlanMark } from './plan-mark';
 import { NAMES, ROUNDS, coachOf, playHand, stickyCoach } from './test-games';
+import type { CoachInput } from './coach';
 import type { CoachState } from './types';
 import { useCoach } from './use-coach';
 import { textOf } from './words';
@@ -12,7 +14,9 @@ import { textOf } from './words';
  * one slot per hook call, recomputes a memo only when a dependency changes
  * (Object.is), and, as React does, renders again at once when state is set
  * during render. A wrong dependency, or the wrong mark handed to the tutor,
- * shows up as a line that differs from the tutor held to a plan.
+ * shows up as a line that differs from the tutor held to a plan, or as words
+ * worked out from an analysis that kept some other plan in front than the one
+ * the tutor was told it holds.
  */
 
 const hooks = vi.hoisted(() => {
@@ -56,6 +60,26 @@ const hooks = vi.hoisted(() => {
   };
 });
 
+/** The plan each analysis was asked to keep in front, and what each of the tutor's answers was worked out from. */
+const made = vi.hoisted(() => ({ prefer: new WeakMap<object, string | undefined>(), from: new WeakMap<object, { readonly analysis: object; readonly mark: PlanMark | null }>() }));
+
+vi.mock('./coach', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./coach')>();
+  return {
+    ...real,
+    analyseFor: (...args: Parameters<typeof real.analyseFor>) => {
+      const analysis = real.analyseFor(...args);
+      made.prefer.set(analysis, args[2]);
+      return analysis;
+    },
+    coachFor: (input: CoachInput) => {
+      const coach = real.coachFor(input);
+      made.from.set(coach, { analysis: input.analysis, mark: input.mark ?? null });
+      return coach;
+    },
+  };
+});
+
 vi.mock('react', async (importOriginal) => ({ ...(await importOriginal<typeof import('react')>()), useState: hooks.useState, useMemo: hooks.useMemo }));
 
 const said = (coach: CoachState | null) =>
@@ -80,6 +104,10 @@ describe('useCoach, view after view', () => {
       for (const view of views) {
         const coach = hooks.render(() => useCoach({ view, ruleset: karachi, stage: 'learning', names: NAMES, game }));
         expect(said(coach), `${game} seq ${view.seq}`).toBe(said(held(view, 'learning')));
+        // The words come from an analysis that kept the very plan they're held to in front: after a switch, the
+        // analysis is made again with the new plan, not kept from the render that found it.
+        const from = made.from.get(coach!)!;
+        expect(made.prefer.get(from.analysis), `${game} seq ${view.seq}`).toBe(preferFor(from.mark, game, view));
         if (coach?.planSwitch) told.push(textOf(coach.say));
         if (coach?.target?.patternId !== coachOf(view).target?.patternId) steadied++;
       }

@@ -644,12 +644,42 @@ describe('someone who takes a seat over part-way through a hand', () => {
     expect(teachOf(coach)).toEqual(['round:honour:said']);
   });
 
-  it("doesn't hide a Mahjong", () => {
+  it("doesn't hide a Mahjong, or put a footnote about the hand to aim for under it", () => {
     const won: TileKind[] = ['m1', 'm1', 'm1', 'p7', 'p7', 'p7', 'm4', 'm4', 'm4', 's2', 's2', 's2', 's9', 's9'];
     const view = { ...turnView('E', 0, won), legal: { discard: won, win: true } } as unknown as PrivatePlayerView;
     const coach = coachAt(view, true);
     expect(coach.action.kind).toBe('win');
     expect(textOf(coach.say)).toBe("That's Goulash, complete. Call Mahjong!");
+    // The row above her tiles is a complete hand now, and the line doesn't give the round's aim: neither footnote, and
+    // the round isn't marked said by a line that never said it. The winning hand's own footnote can show.
+    expect(coach.target?.layout).not.toBeNull();
+    expect(teachOf(coach)).toEqual([]);
+    for (const stage of ['new', 'learning'] as const) {
+      const { notes, marks } = lessonFor(coachAt(view, true, stage), new Set());
+      const keys = notes.map((n) => n.key);
+      expect(keys, stage).toEqual(['hand:Goulash']);
+      expect(marks, stage).not.toContain('firstLook');
+    }
+  });
+
+  it("brings the take-over footnote with a new line, never under a bubble whose words haven't changed", () => {
+    // A first look whose plan has no lay-out yet: nothing for the footnote to point at, so it isn't offered.
+    const analysis = analyseFor(theirs, karachi);
+    const unlaid = { ...analysis, candidates: analysis.candidates.map((c) => ({ ...c, layout: null })) };
+    const store = createTaughtStore(null);
+    const lessons = createLessons(() => store);
+    const bare = coachAt({ ...theirs, seq: 10 }, true, 'learning', unlaid);
+    expect(teachOf(bare)).toEqual(['round:honour:said']);
+    expect(lessons.next(bare).notes).toEqual([]);
+    // The next view has one, under the same words: the same line, so it keeps the footnotes it came with.
+    const laid = coachAt({ ...theirs, seq: 11 }, true, 'learning', analysis);
+    expect(textOf(laid.say)).toBe(textOf(bare.say));
+    expect(teachOf(laid)[0]).toBe('firstLook:note');
+    expect(lessons.next(laid).notes).toEqual([]);
+    // Her own turn is a new line, still a first look: the footnote comes with it.
+    const turn = coachAt({ ...mine, seq: 12 }, true);
+    expect(lessons.next(turn).notes.map((n) => n.key)).toEqual(['firstLook']);
+    expect(store.all().has('firstLook')).toBe(true);
   });
 
   it('shows the take-over footnote under the first bubble, and teaches it for the visit', { timeout: 120_000 }, () => {

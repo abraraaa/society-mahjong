@@ -413,8 +413,9 @@ export const FIRST_LOOK_NOTE: CoachTeach = {
 export function coachFor(input: CoachInput): CoachState {
   const state = adviceFor(input);
   // Through a first look, every view offers the take-over footnote first, for the first bubble to show: while there's
-  // a plan, which is what the strip it points at shows.
-  const first = input.firstLook && state.target?.layout ? [FIRST_LOOK_NOTE] : [];
+  // a plan, which is what the strip it points at shows. Not under a Mahjong: that row is a hand already complete, not
+  // one to aim for.
+  const first = input.firstLook && state.action.kind !== 'win' && state.target?.layout ? [FIRST_LOOK_NOTE] : [];
   // Wherever the tutor has something to say, a flower drawn since the player's last move can be explained under it.
   const flowers = state.say.length > 0 && flowerSinceMyLastMove(input.view) ? [FLOWERS_NOTE] : [];
   if (first.length === 0 && flowers.length === 0) return state;
@@ -582,6 +583,10 @@ function adviceFor(input: CoachInput): CoachState {
 
   if (myTurn && view.legal.win) {
     const ref = myWinRef(input, handOf(view), 'yours');
+    // Someone who has just taken the seat over and can call Mahjong at once hears about the win, and nothing else: the
+    // round's footnote would come under a line that doesn't give the aim, and marking it said would claim a line that
+    // was never said, so it's left for a later hand.
+    const teach = firstLook ? [] : firstTurn;
     return {
       ...base,
       moment: 'turn',
@@ -589,7 +594,7 @@ function adviceFor(input: CoachInput): CoachState {
       say: ref ? line("That's ", named(ref), ', complete. Call ', act('Mahjong!')) : [seg("That's a complete hand. Call "), act('Mahjong!')],
       reason: 'the hand is complete',
       highlight: [],
-      teach: firstTurn,
+      teach,
     };
   }
 

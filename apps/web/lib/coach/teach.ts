@@ -46,9 +46,16 @@ export function lessonKey(coach: CoachState): string {
  * could teach. A non-dealer's hand-start bubble stays the same line through
  * the dealer's discard and every move after it, until their own turn. The same
  * words asking for a move are a new line.
+ *
+ * The take-over footnote doesn't count: it's offered on every view of a first
+ * look while there's a lay-out for it to point at, so it isn't news of the
+ * view. A lay-out that comes under the same words would otherwise make a new
+ * line of them, and the footnote would pop in under a bubble that hasn't
+ * changed. It comes with the next line instead.
  */
 export function lineKey(coach: CoachState): string {
-  return `${coach.at.hand}|${coach.moment}|${coach.action.kind}|${textOf(coach.say)}|${coach.teach.map((t) => `${t.key}:${t.place}`).join(',')}`;
+  const teach = coach.teach.filter((t) => t.key !== 'firstLook');
+  return `${coach.at.hand}|${coach.moment}|${coach.action.kind}|${textOf(coach.say)}|${teach.map((t) => `${t.key}:${t.place}`).join(',')}`;
 }
 
 /** A note as the reader sees it, which is what the budget counts: "label: text", or the text alone. */
