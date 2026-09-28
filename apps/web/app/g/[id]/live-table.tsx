@@ -15,7 +15,7 @@ import { retryCanHelp } from '@/lib/front-door';
 import { ApiError, api, listen } from '@/lib/live/client';
 import { finalStandings } from '@/lib/live/final';
 import { handsPlayed } from '@/lib/live/lifecycle';
-import { HOST_LEAVE, endLine, endSheet } from '@/lib/live/lifecycle-copy';
+import { HOST_LEAVE, endLine, endSheet, waitCopy } from '@/lib/live/lifecycle-copy';
 import { plainError } from '@/lib/live/plain';
 import { IM_BACK, awaySummary, awayTitle, canLetBotPlay, letBotPlayLabel, letBotPlaySheet, seatMarks, tableNews } from '@/lib/live/presence';
 import { isPrivate, type GameSnapshot } from '@/lib/live/snapshot';
@@ -400,6 +400,12 @@ export function LiveTable({ gameId }: { gameId: string }) {
       ? { kind: snap.deadlines.turn !== null ? ('turn' as const) : ('claim' as const), ms: Math.max(0, deadline - sync.serverNow - (now - sync.at)) }
       : null;
 
+  // The wait for the next hand: who the reader's waiting for once they've tapped, or who's ready and when it starts regardless,
+  // counted down on the server's clock, as the table's clocks are.
+  const startsAt = snap.nextHand?.startsAt ?? null;
+  const msLeft = startsAt !== null && sync && now !== null ? Math.max(0, startsAt - sync.serverNow - (now - sync.at)) : null;
+  const wait = snap.status === 'active' && snap.nextHand && snap.me !== null ? waitCopy(snap.nextHand, snap.me, names, msLeft) : null;
+
   const gameOver = snap.status === 'finished';
   // The running totals are saved with the move that finishes a hand, so a
   // snapshot of a finished hand already carries them, and a finished game's
@@ -454,7 +460,9 @@ export function LiveTable({ gameId }: { gameId: string }) {
             return;
           }
           if (sendingRef.current) return;
-          void send({ type: 'nextHand' });
+          // Named by its hand, so the tap counts as a vote whatever else lands first, and one that arrives after the next hand has
+          // started is let go.
+          void send({ type: 'nextHand', hand: view.progress.handIndex });
         }}
         claimMs={claimMs}
         gameOver={gameOver}
@@ -463,6 +471,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
         marks={seatMarks(snap)}
         seatActions={seatActions}
         awayNote={awayNote}
+        wait={wait}
         {...(ending !== undefined ? { endLine: ending } : {})}
       />
       {/* Each question opens on the top layer (ConfirmSheet), over the result sheet or whatever other sheet the table has up. */}

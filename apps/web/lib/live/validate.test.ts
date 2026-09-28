@@ -20,10 +20,24 @@ describe('parseClientAction', () => {
       { type: 'claim', seat: 0, claim: { type: 'win' } },
       { type: 'pass', seat: 2 },
       { type: 'nextHand' },
+      { type: 'nextHand', hand: 7 },
     ];
     for (const a of legit) expect(parseClientAction(wire(a)), JSON.stringify(a)).toEqual(a);
     // Every type a client may send is covered above.
     expect(new Set(legit.map((a) => a.type))).toEqual(new Set(CLIENT_ACTION_TYPES));
+  });
+
+  it('keeps the hand a Next hand tap names, a whole number from 0 to 999, and refuses the lot for anything else there', () => {
+    expect(parseClientAction(wire({ type: 'nextHand', hand: 0 }))).toStrictEqual({ type: 'nextHand', hand: 0 });
+    expect(parseClientAction(wire({ type: 'nextHand', hand: 15 }))).toStrictEqual({ type: 'nextHand', hand: 15 });
+    expect(parseClientAction({ type: 'nextHand', hand: 999 })).toStrictEqual({ type: 'nextHand', hand: 999 });
+    // A page loaded before votes existed names none, and its tap is still one.
+    expect(parseClientAction({ type: 'nextHand' })).toStrictEqual({ type: 'nextHand' });
+    for (const hand of [-1, 1.5, '3', 1000, null, Number.NaN, Infinity, [3], { hand: 3 }, true]) {
+      expect(parseClientAction({ type: 'nextHand', hand }), String(hand)).toBeNull();
+    }
+    // Extra keys go, the hand stays.
+    expect(parseClientAction({ type: 'nextHand', hand: 4, seat: 2, dealAt: 0, userIds: ['me'] })).toStrictEqual({ type: 'nextHand', hand: 4 });
   });
 
   it('refuses resolveClaims, even carrying the caller’s own seat', () => {

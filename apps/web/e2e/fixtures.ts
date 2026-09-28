@@ -1,9 +1,9 @@
 import { analysisBot, karachi, startHand, viewFor, type GameProgress, type HandState, type Seat, type TileKind } from '@society/engine';
-import { EVERYONE_HERE, noteClockMove } from '../lib/live/absence';
-import { publicGameOver } from '../lib/live/lifecycle';
+import { EVERYONE_HERE, noteClockMove, presentHumans } from '../lib/live/absence';
+import { nextHandWait, publicGameOver } from '../lib/live/lifecycle';
 import { ownAbsence, publicSeats, type GameSnapshot } from '../lib/live/snapshot';
 import { deadlinesFor, settle, step, type StepResult } from '../lib/live/table';
-import { NEW_TABLE, type Absence } from '../lib/live/table-state';
+import { NEW_TABLE, type Absence, type TableState } from '../lib/live/table-state';
 import type { ClientAction, Deadlines, Seats, TimerPolicy } from '../lib/live/types';
 
 /**
@@ -65,9 +65,23 @@ function snapshot(state: HandState, version: number, deadlines: Deadlines, statu
   };
 }
 
-/** One request against the table, as the act route makes it. */
-function act(state: HandState, deadlines: Deadlines, action: ClientAction, actor: Seat) {
-  return step({ game: { state, deadlines }, ruleset: karachi, seats: SEATS, policy: POLICY, now: MADE_AT, action, actor });
+/** One request against the table, as the act route makes it: with the game's seed when it may start a hand, and the table's bookkeeping when it has some. */
+function act(state: HandState, deadlines: Deadlines, action: ClientAction, actor: Seat, opts: { readonly seed?: string; readonly tableState?: TableState } = {}) {
+  return step({
+    game: { state, deadlines, ...(opts.tableState ? { tableState: opts.tableState } : {}) },
+    ruleset: karachi,
+    seats: SEATS,
+    policy: POLICY,
+    now: MADE_AT,
+    action,
+    actor,
+    ...(opts.seed ? { seed: opts.seed } : {}),
+  });
+}
+
+/** The wait for the next hand as the server tells Amna: the people here, who has tapped Next hand and when it starts regardless. */
+function waitOf(r: StepResult): Pick<GameSnapshot, 'nextHand'> {
+  return { nextHand: nextHandWait(r.state, SEATS, presentHumans(SEATS, r.tableState.absence), r.tableState) };
 }
 
 /** A fresh hand with the bots played up to the first human decision, as dealing it does. */
@@ -129,6 +143,12 @@ export interface Fixtures {
   readonly handDone: GameSnapshot;
   /** That result sheet, the game ended there by the host, Amna: her final table. */
   readonly endedByHost: GameSnapshot;
+  /** That result sheet after Amna's tap of Next hand: waiting for Bilal, twenty seconds on the clock. */
+  readonly readyWaiting: GameSnapshot;
+  /** That result sheet after Bilal's tap of Next hand, Amna still to tap: twenty seconds on the clock. */
+  readonly bilalReady: GameSnapshot;
+  /** The next hand, started when Amna's wait for Bilal ran out: the tick's answer. */
+  readonly nextDealt: GameSnapshot;
   /** The last hand scored, so the game is over: the host's final table. Bilal finishes top. */
   readonly lastHandOver: GameSnapshot;
   /** The same final table for someone who isn't the host. */
@@ -152,7 +172,7 @@ function build(): Fixtures {
     const after = act(t.state, t.deadlines, { type: 'discard', seat: ME, tile }, ME);
     if (after.state.phase !== 'turn' || after.state.turn !== 1) return null;
     const end = playOut(after);
-    return end && { t, after, end };
+    return end && { t, after, end, seed };
   });
 
   // Her clock runs out on that turn, and a tick finds it: the stand-in's move is kept in her own absence, which only she is sent.
@@ -189,6 +209,14 @@ function build(): Fixtures {
     scores: [2000, 14504, -8000, -8504],
     ended: publicGameOver(last.over, USER_ID),
   });
+
+  // Next hand on that finished hand: Amna taps first, and the table waits for Bilal; or Bilal does, and it waits for her. When the wait
+  // runs out, the tick that finds it starts the next hand.
+  const hand = live.end.state.progress.handIndex;
+  const amnaVoted = act(live.end.state, live.end.deadlines, { type: 'nextHand', hand }, ME, { seed: live.seed, tableState: live.end.tableState });
+  const bilalVoted = act(live.end.state, live.end.deadlines, { type: 'nextHand', hand }, 1, { seed: live.seed, tableState: live.end.tableState });
+  const dealt = step({ game: amnaVoted, ruleset: karachi, seats: SEATS, policy: POLICY, now: amnaVoted.tableState.ready!.dealAt + 1, seed: live.seed });
+  const doneScores = [...(live.end.tableState.scores ?? [0, 0, 0, 0])];
 
   // The host ends the game on the finished hand, as the end route's step does: that step's end is what the page is told.
   const byHost = step({ game: live.end, ruleset: karachi, seats: SEATS, policy: POLICY, now: MADE_AT, end: { how: 'host', by: { userId: USER_ID, name: USER_NAME } } });
@@ -234,7 +262,10 @@ function build(): Fixtures {
     notHost: { ...snapshot(live.t.state, 5, live.t.deadlines), isHost: false },
     turnAfter: snapshot(live.after.state, 6, live.after.deadlines),
     finished: snapshot(live.end.state, 9, { claim: null, turn: null }, 'finished'),
-    handDone: snapshot(live.end.state, 9, { claim: null, turn: null }, 'active', { scores: [...(live.end.tableState.scores ?? [0, 0, 0, 0])] }),
+    handDone: snapshot(live.end.state, 9, { claim: null, turn: null }, 'active', { scores: doneScores, ...waitOf(live.end) }),
+    readyWaiting: snapshot(amnaVoted.state, 10, amnaVoted.deadlines, 'active', { scores: doneScores, ...waitOf(amnaVoted) }),
+    bilalReady: snapshot(bilalVoted.state, 10, bilalVoted.deadlines, 'active', { scores: doneScores, ...waitOf(bilalVoted) }),
+    nextDealt: snapshot(dealt.state, 11, dealt.deadlines, 'active', { scores: [...(dealt.tableState.scores ?? [0, 0, 0, 0])], ...waitOf(dealt) }),
     endedByHost: snapshot(byHost.state, 10, byHost.deadlines, 'finished', { scores: [...hostOver.scores], ended: publicGameOver(hostOver, USER_ID) }),
     lastHandOver,
     lastHandOverGuest: { ...lastHandOver, isHost: false },
@@ -253,9 +284,10 @@ export function fixtures(): Fixtures {
   return built;
 }
 
-/** A snapshot as the server would send it now: its clock and deadlines moved to the moment of sending. */
+/** A snapshot as the server would send it now: its clock, its deadlines and when the next hand starts moved to the moment of sending. */
 export function serve(s: GameSnapshot): GameSnapshot {
   const now = Date.now();
   const shift = (d: number | null) => (d === null ? null : d - s.now + now);
-  return { ...s, now, deadlines: { claim: shift(s.deadlines.claim), turn: shift(s.deadlines.turn) } };
+  const nextHand = s.nextHand && { ...s.nextHand, startsAt: shift(s.nextHand.startsAt) };
+  return { ...s, now, deadlines: { claim: shift(s.deadlines.claim), turn: shift(s.deadlines.turn) }, ...(nextHand ? { nextHand } : {}) };
 }

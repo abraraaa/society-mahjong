@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { finalStandings } from './final';
-import { HOST_LEAVE, endLine, endSheet, topLine } from './lifecycle-copy';
+import { HOST_LEAVE, countdown, endLine, endSheet, topLine, waitCopy } from './lifecycle-copy';
 import type { PublicGameOver } from './lifecycle';
 
 /**
@@ -132,5 +132,62 @@ describe('HOST_LEAVE', () => {
       end: 'End the game for everyone',
       stay: 'Stay',
     });
+  });
+});
+
+describe('countdown', () => {
+  it('shows minutes and seconds, whole seconds rounded up, never below nought', () => {
+    expect(countdown(14_000)).toBe('0:14');
+    expect(countdown(13_200)).toBe('0:14');
+    expect(countdown(20_000)).toBe('0:20');
+    expect(countdown(65_000)).toBe('1:05');
+    expect(countdown(1)).toBe('0:01');
+    expect(countdown(0)).toBe('0:00');
+    expect(countdown(-5_000)).toBe('0:00');
+    expect(countdown(Number.NaN)).toBe('0:00');
+  });
+});
+
+describe('waitCopy', () => {
+  /** Amna (me, seat 0), Bilal, Sana (a bot) and Zara. */
+  const names = { 0: 'You', 1: 'Bilal', 2: 'Sana', 3: 'Zara' } as const;
+  const at = (ready: readonly (0 | 1 | 2 | 3)[], waiting: readonly (0 | 1 | 2 | 3)[], startsAt: number | null = 1) => ({ ready, waiting, startsAt });
+
+  it('is a plain Next hand before anyone has tapped, with no line', () => {
+    expect(waitCopy(at([], [0, 1, 3], null), 0, names, null)).toEqual({ button: 'Next hand', line: null, ready: false });
+  });
+
+  it('says who I’m waiting for once I’ve tapped, and can’t be tapped again', () => {
+    expect(waitCopy(at([0], [1]), 0, names, 14_000)).toEqual({
+      button: `Waiting for ${I('Bilal')}`,
+      line: "The next hand starts in 0:14, or as soon as everyone's ready.",
+      ready: true,
+    });
+    expect(waitCopy(at([0], [1, 3]), 0, names, 19_100).button).toBe(`Waiting for ${I('Bilal')} and ${I('Zara')}`);
+  });
+
+  it('tells me when I’m the only one left, naming who’s ready: one name, then more', () => {
+    expect(waitCopy(at([1], [0]), 0, names, 9_000)).toEqual({
+      button: 'Next hand',
+      line: `${I('Bilal')}'s ready. The next hand starts in 0:09, or as soon as you tap.`,
+      ready: false,
+    });
+    expect(waitCopy(at([1, 3], [0]), 0, names, 9_000).line).toBe(`${I('Bilal')} and ${I('Zara')} are ready. The next hand starts in 0:09, or as soon as you tap.`);
+  });
+
+  it('tells me who’s ready when others are still to tap too', () => {
+    expect(waitCopy(at([1], [0, 3]), 0, names, 20_000).line).toBe(`${I('Bilal')}'s ready. The next hand starts in 0:20, or as soon as everyone's ready.`);
+    const four = { 0: 'You', 1: 'Bilal', 2: 'Hana', 3: 'Zara' } as const;
+    expect(waitCopy(at([1, 2], [0, 3]), 0, four, 20_000).line).toBe(`${I('Bilal')} and ${I('Hana')} are ready. The next hand starts in 0:20, or as soon as everyone's ready.`);
+  });
+
+  it('has no line until a start time is set, and none without the time left', () => {
+    expect(waitCopy(at([1], [0]), 0, names, null).line).toBeNull();
+    expect(waitCopy(at([1], [0], null), 0, names, 5_000).line).toBeNull();
+  });
+
+  it('keeps to the plain line when whoever tapped first is no longer here, and to Next hand with nobody left to wait for', () => {
+    expect(waitCopy(at([], [0, 1]), 0, names, 5_000)).toEqual({ button: 'Next hand', line: "The next hand starts in 0:05, or as soon as everyone's ready.", ready: false });
+    expect(waitCopy(at([0], []), 0, names, 5_000)).toMatchObject({ button: 'Next hand', ready: true });
   });
 });

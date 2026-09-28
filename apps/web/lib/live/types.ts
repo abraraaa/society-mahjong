@@ -44,8 +44,12 @@ export interface LiveGame {
  */
 export const PLAYER_ACTION_TYPES = ['exchange', 'discard', 'declareKong', 'declareWin', 'claim', 'pass'] as const satisfies readonly Action['type'][];
 
-/** What a client may send: an engine action for its own seat, or a request to deal the next hand. */
-export type ClientAction = Extract<Action, { type: (typeof PLAYER_ACTION_TYPES)[number] }> | { readonly type: 'nextHand' };
+/**
+ * What a client may send: an engine action for its own seat, or a tap of Next hand on a finished hand. The tap names the
+ * hand it was made on (`hand`, its index), so the table can count it as a vote whatever else has saved since; a page
+ * loaded before votes existed sends none, and its tap is judged against the version it saw, as any move is.
+ */
+export type ClientAction = Extract<Action, { type: (typeof PLAYER_ACTION_TYPES)[number] }> | { readonly type: 'nextHand'; readonly hand?: number };
 
 export const CLIENT_ACTION_TYPES: readonly ClientAction['type'][] = [...PLAYER_ACTION_TYPES, 'nextHand'];
 

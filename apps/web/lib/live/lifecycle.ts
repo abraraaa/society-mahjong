@@ -1,6 +1,6 @@
-import { SEATS, nextHand, type HandState, type PublicGameView, type Ruleset } from '@society/engine';
+import { SEATS, nextHand, type HandState, type PublicGameView, type Ruleset, type Seat } from '@society/engine';
 import { isAway } from './absence';
-import type { Absence, GameOver, Scores4, TableState } from './table-state';
+import type { Absence, GameOver, NextHandVotes, Scores4, TableState } from './table-state';
 import type { GameEndHow, Seats } from './types';
 
 /**
@@ -21,6 +21,22 @@ export const STALE_GAME_MS = 6 * 60 * 60 * 1000;
 export function isStale(actedAt: number, now: number): boolean {
   return now - actedAt > STALE_GAME_MS;
 }
+
+/**
+ * How long the table waits after the first Next hand tap before it starts the
+ * next hand without the rest (R15). It starts sooner, at once, when everyone
+ * here has tapped.
+ */
+export const NEXT_HAND_WAIT_MS = 20_000;
+
+/**
+ * How many times a Next hand tap that names its hand is tried against a fresh
+ * read when someone else's request saves first (R16): a vote needs no
+ * particular version, so the server tries again itself rather than send the
+ * tap back. Four phones tapping while each ticks at the start time is the
+ * busiest it gets.
+ */
+export const VOTE_ATTEMPTS = 5;
 
 /** How many hands of the game have finished: every hand before this one, and this one too once it's over. */
 export function handsPlayed(v: Pick<PublicGameView, 'phase' | 'progress'>): number {
@@ -66,6 +82,48 @@ export function presentAtEnd(over: GameOver, absence: Absence | undefined): stri
     const s = over.seats[seat];
     return s?.kind === 'human' && !isAway(absence, over.seats, seat) ? [s.userId] : [];
   });
+}
+
+/**
+ * A Next hand tap on finished hand `hand`, as a vote (R15). The first vote
+ * sets when the next hand starts regardless, NEXT_HAND_WAIT_MS from now, and
+ * later ones never move it. The same person twice (a second phone, or a
+ * second tap) counts once, and gives back `t` itself. Votes left over from
+ * another hand don't count: this hand's wait starts afresh.
+ */
+export function voteNextHand(t: TableState, hand: number, userId: string, now: number): TableState {
+  const votes = t.ready?.hand === hand ? t.ready : null;
+  if (votes?.userIds.includes(userId)) return t;
+  return { ...t, ready: { hand, userIds: [...(votes?.userIds ?? []), userId], dealAt: votes?.dealAt ?? now + NEXT_HAND_WAIT_MS } };
+}
+
+/** Whether everyone here (`present`, by id) has tapped Next hand on `hand`. Never with nobody here: somebody has to be ready. */
+export function everyoneReady(votes: NextHandVotes | null, hand: number, present: readonly string[]): boolean {
+  return votes !== null && votes.hand === hand && present.length > 0 && present.every((id) => votes.userIds.includes(id));
+}
+
+/**
+ * Where the wait for the next hand stands, as the table shows it: the people
+ * here who have tapped Next hand (`ready`) and who haven't (`waiting`), by
+ * seat, and when it starts regardless (`startsAt`, set by the first tap).
+ * Only the people here count: a bot, or a person a bot is playing for, is
+ * never waited on. Null while a hand is being played.
+ */
+export interface NextHandWait {
+  readonly ready: readonly Seat[];
+  readonly waiting: readonly Seat[];
+  readonly startsAt: number | null;
+}
+
+export function nextHandWait(state: Pick<HandState, 'phase' | 'progress'>, seats: Seats, present: readonly Seat[], t: TableState): NextHandWait | null {
+  if (state.phase !== 'finished') return null;
+  const votes = t.ready?.hand === state.progress.handIndex ? t.ready : null;
+  const voted = (seat: Seat) => {
+    const s = seats[seat];
+    return s?.kind === 'human' && !!votes?.userIds.includes(s.userId);
+  };
+  const here = SEATS.filter((seat) => present.includes(seat) && seats[seat]?.kind === 'human');
+  return { ready: here.filter(voted), waiting: here.filter((seat) => !voted(seat)), startsAt: votes?.dealAt ?? null };
 }
 
 /** How the game ended, as a player may see it: no ids, only whether it was them who ended it. */

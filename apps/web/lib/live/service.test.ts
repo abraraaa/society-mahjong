@@ -123,7 +123,7 @@ const seats: Seats = [
 ];
 
 /** A v1 table with nobody on any points yet, last moved by a person at T0. */
-const FRESH: TableState = { v: 1, scores: [0, 0, 0, 0], over: null, absence: EVERYONE_HERE, extra: {} };
+const FRESH: TableState = { v: 1, scores: [0, 0, 0, 0], over: null, absence: EVERYONE_HERE, ready: null, extra: {} };
 
 /** The live row for a table at `state`, as loadLive reads it. */
 function liveRow(state: HandState, deadlines: Deadlines, extra: Partial<LiveRow> = {}): LiveRow {
@@ -478,7 +478,7 @@ describe('one request, one commit', () => {
 
   it('saves a hand that finishes with its result, its end and the new totals, then counts and tallies it before the poke', async () => {
     const live = setTable();
-    const { ended, late } = lastDecision(live, { table: { v: 1, scores: [3, -3, 0, 0], over: null, absence: EVERYONE_HERE, extra: {} } });
+    const { ended, late } = lastDecision(live, { table: { v: 1, scores: [3, -3, 0, 0], over: null, absence: EVERYONE_HERE, ready: null, extra: {} } });
     expect(ended.result?.type).toBe('win');
     const snap = await actOnGame(GAME, 'u-abrar', null, null, late);
     const { w, hand } = theCommit();
@@ -518,11 +518,104 @@ describe('one request, one commit', () => {
   });
 });
 
+/**
+ * Next hand at a table of two (R15, R16): a tap that names its hand is a
+ * vote, saved whatever version the page saw and tried again on a fresh read
+ * when someone else saves first. The next hand starts when everyone here has
+ * voted, or on the first request after the wait runs out, a tick included.
+ */
+describe('voting for the next hand', () => {
+  /** Abrar and Bilal at the table. */
+  const pair: Seats = [seats[0], { kind: 'human', userId: 'u-bilal', name: 'Bilal' }, seats[2], seats[3]];
+  const WAIT = 20_000;
+
+  /** The first hand finished, nobody has tapped Next hand yet, and the table is at version 5. */
+  function finishedPair(table: TableState = FRESH, deadlines: Deadlines = { claim: null, turn: null }): LiveRow {
+    const live = setTable();
+    db.room = { ...(db.room as RoomRow), seats: pair };
+    db.live = liveRow(playOut(live.state), deadlines, { version: 5, table });
+    return db.live as LiveRow;
+  }
+
+  it('saves a vote whatever version the page saw, with the start as the turn clock and wake time, and says who it’s waiting on', async () => {
+    finishedPair();
+    const snap = await actOnGame(GAME, 'u-abrar', { type: 'nextHand', hand: 0 }, 2, T0 + 1000);
+    const [c] = commits();
+    expect(commits()).toHaveLength(1);
+    expect(c!.expected).toBe(5);
+    expect(c!.w).toMatchObject({ acted: true, hands: [], deadlines: { claim: null, turn: T0 + 1000 + WAIT }, wakeAt: T0 + 1000 + WAIT });
+    expect(c!.w.table.ready).toEqual({ hand: 0, userIds: ['u-abrar'], dealAt: T0 + 1000 + WAIT });
+    expect(snap).toMatchObject({ version: 6, nextHand: { ready: [0], waiting: [1], startsAt: T0 + 1000 + WAIT } });
+    expect(snap.view.phase).toBe('finished');
+    expect(afterSteps()).toEqual([[]]);
+
+    // Bilal's tap, on a table already moved on from the one he saw: everyone's ready, so it deals, in the same commit.
+    const dealt = await actOnGame(GAME, 'u-bilal', { type: 'nextHand', hand: 0 }, 5, T0 + 4000);
+    const last = commits().at(-1)!;
+    expect(last.expected).toBe(6);
+    expect(last.w.table.ready).toBeNull();
+    expect(last.w.hands).toHaveLength(1);
+    expect(last.w.hands[0]).toMatchObject({ hand: 1, ended: false });
+    expect(dealt.view.progress.handIndex).toBe(1);
+    expect(dealt.nextHand).toBeNull();
+  });
+
+  it('tries a vote that loses to someone else’s save again on a fresh read, five times at most', async () => {
+    finishedPair();
+    db.lose = 4;
+    const snap = await actOnGame(GAME, 'u-abrar', { type: 'nextHand', hand: 0 }, 5, T0 + 1000);
+    expect(store.commitTable).toHaveBeenCalledTimes(5);
+    expect(snap.version).toBe(10);
+    expect((db.live as LiveRow).table.ready).toMatchObject({ hand: 0, userIds: ['u-abrar'] });
+
+    finishedPair();
+    vi.clearAllMocks();
+    db.lose = 5;
+    const err = await rejection(actOnGame(GAME, 'u-abrar', { type: 'nextHand', hand: 0 }, 5, T0 + 1000));
+    expect(err).toMatchObject({ status: 409, message: 'the table changed under you; try again' });
+    expect(store.commitTable).toHaveBeenCalledTimes(5);
+    expect(broadcaster.broadcast).not.toHaveBeenCalled();
+  });
+
+  it('keeps the version check for a tap that names no hand, from a page loaded before votes, and counts it as a vote', async () => {
+    finishedPair();
+    const err = await rejection(actOnGame(GAME, 'u-abrar', { type: 'nextHand' }, 4, T0 + 1000));
+    expect(err).toMatchObject({ status: 409, message: 'stale version' });
+    expect(store.commitTable).not.toHaveBeenCalled();
+    const snap = await actOnGame(GAME, 'u-abrar', { type: 'nextHand' }, 5, T0 + 1000);
+    expect(snap.nextHand).toEqual({ ready: [0], waiting: [1], startsAt: T0 + 1000 + WAIT });
+  });
+
+  it('starts the next hand on the tick that finds the wait over, as nobody’s move, and then takes a late tap as nothing', async () => {
+    const waiting: TableState = { ...FRESH, ready: { hand: 0, userIds: ['u-abrar'], dealAt: T0 + WAIT } };
+    finishedPair(waiting, { claim: null, turn: T0 + WAIT });
+    // Too soon: nothing to do, nothing written.
+    const early = await actOnGame(GAME, 'u-abrar', null, null, T0 + WAIT - 1);
+    expect(store.commitTable).not.toHaveBeenCalled();
+    expect(early.nextHand).toEqual({ ready: [0], waiting: [1], startsAt: T0 + WAIT });
+
+    const snap = await actOnGame(GAME, 'u-abrar', null, null, T0 + WAIT + 750);
+    const { w, hand } = theCommit();
+    expect(w.acted).toBe(false);
+    expect(w.table.ready).toBeNull();
+    expect(hand).toMatchObject({ hand: 1, ended: false });
+    expect(hand.moves.every((m) => m.v === 6 && m.by !== 'player')).toBe(true);
+    expect(snap.view.progress.handIndex).toBe(1);
+    expect(snap.nextHand).toBeNull();
+
+    // Bilal's tap arrives after the start: nothing to save, and he gets the new hand.
+    const late = await actOnGame(GAME, 'u-bilal', { type: 'nextHand', hand: 0 }, 5, T0 + WAIT + 900);
+    expect(store.commitTable).toHaveBeenCalledTimes(1);
+    expect(late.version).toBe(6);
+    expect(late.view.progress.handIndex).toBe(1);
+  });
+});
+
 describe('the running totals', () => {
   it('seeds a legacy table’s totals from rooms.ledger, in the snapshot and in the commit that saves them', async () => {
     const live = setTable();
     db.room = { ...(db.room as RoomRow), ledger: [3, -3, 0, 0] };
-    db.live = { ...live, table: { v: 1, scores: null, over: null, absence: EVERYONE_HERE, extra: {} }, legacy: true };
+    db.live = { ...live, table: { v: 1, scores: null, over: null, absence: EVERYONE_HERE, ready: null, extra: {} }, legacy: true };
     expect((await viewGame(GAME, 'u-abrar', T0)).scores).toEqual([3, -3, 0, 0]);
     const snap = await actOnGame(GAME, 'u-abrar', null, null, expired(live));
     expect(snap.scores).toEqual([3, -3, 0, 0]);
@@ -536,7 +629,7 @@ describe('the running totals', () => {
   it('reads the totals from the table once it has a "v", never from rooms.ledger', async () => {
     const live = setTable();
     db.room = { ...(db.room as RoomRow), ledger: [9, 9, 9, 9] };
-    db.live = { ...live, table: { v: 1, scores: [5, -5, 0, 0], over: null, absence: EVERYONE_HERE, extra: {} } };
+    db.live = { ...live, table: { v: 1, scores: [5, -5, 0, 0], over: null, absence: EVERYONE_HERE, ready: null, extra: {} } };
     expect((await viewGame(GAME, 'u-abrar', T0)).scores).toEqual([5, -5, 0, 0]);
     const snap = await actOnGame(GAME, 'u-abrar', null, null, expired(live));
     expect(snap.scores).toEqual([5, -5, 0, 0]);
@@ -545,7 +638,7 @@ describe('the running totals', () => {
 
   it('never saves over a table a newer deploy wrote: 503, logged as table_state_newer, and nothing committed', async () => {
     const live = setTable();
-    db.live = { ...live, table: { v: 2, scores: [5, -5, 0, 0], over: null, absence: EVERYONE_HERE, extra: { absence: [] } } };
+    db.live = { ...live, table: { v: 2, scores: [5, -5, 0, 0], over: null, absence: EVERYONE_HERE, ready: null, extra: { absence: [] } } };
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     const err = await rejection(actOnGame(GAME, 'u-abrar', null, null, expired(live)));
     expect(err.status).toBe(503);
@@ -566,7 +659,7 @@ describe('when a person last moved the table', () => {
     // Older code never wrote acted_at (the migration gave it its own time), but it stamped updated_at on every save.
     db.live = {
       ...live,
-      table: { v: 1, scores: null, over: null, absence: EVERYONE_HERE, extra: {} },
+      table: { v: 1, scores: null, over: null, absence: EVERYONE_HERE, ready: null, extra: {} },
       legacy: true,
       actedAt: now - 30 * 24 * 3600_000,
       updatedAt: now - 10 * 60_000,
@@ -581,7 +674,7 @@ describe('when a person last moved the table', () => {
     const now = expired(live);
     db.live = {
       ...live,
-      table: { v: 1, scores: null, over: null, absence: EVERYONE_HERE, extra: {} },
+      table: { v: 1, scores: null, over: null, absence: EVERYONE_HERE, ready: null, extra: {} },
       legacy: true,
       actedAt: now - 30 * 24 * 3600_000,
       updatedAt: now - 7 * 3600_000,
@@ -629,7 +722,7 @@ describe('when the database fails after the table has moved', () => {
 
   it.each(['count the hand', 'tally the players'])('when "%s" fails, still runs the other and shows the committed totals', async (what) => {
     const live = setTable();
-    const { ended, late } = lastDecision(live, { table: { v: 1, scores: [3, -3, 0, 0], over: null, absence: EVERYONE_HERE, extra: {} } });
+    const { ended, late } = lastDecision(live, { table: { v: 1, scores: [3, -3, 0, 0], over: null, absence: EVERYONE_HERE, ready: null, extra: {} } });
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.mocked(what === 'count the hand' ? store.countHand : store.recordHand).mockRejectedValueOnce(DOWN());
     const snap = await actOnGame(GAME, 'u-abrar', null, null, late);
@@ -749,7 +842,7 @@ describe('standing up from a live table', () => {
     db.room = { ...(db.room as RoomRow), seats: two };
     // The last hand's end is committed; the game still reads active, and Bea is still seated beside Abrar.
     const over: GameOver = { how: 'complete', by: null, at: T0, hands: 16, scores: [2000, 14504, -8000, -8504], seats: two };
-    db.live = { ...live, version: 30, table: { v: 1, scores: over.scores, over, absence: EVERYONE_HERE, extra: {} } };
+    db.live = { ...live, version: 30, table: { v: 1, scores: over.scores, over, absence: EVERYONE_HERE, ready: null, extra: {} } };
     // Were the seat given up, this write would land.
     vi.mocked(store.saveSeats).mockResolvedValueOnce('2026-09-24T00:00:01Z');
     await expect(leaveGame(GAME, 'u-abrar', T0)).resolves.toEqual({ abandoned: false });
@@ -770,7 +863,7 @@ describe('standing up from a live table', () => {
     // itself: store.test.ts, "someone leaving as the last hand is scored".) The reset drops a write an earlier test queued and never used.
     vi.mocked(store.saveSeats).mockReset();
     vi.mocked(store.saveSeats).mockImplementationOnce(async () => {
-      db.live = { ...live, version: 30, table: { v: 1, scores: over.scores, over, absence: EVERYONE_HERE, extra: {} } };
+      db.live = { ...live, version: 30, table: { v: 1, scores: over.scores, over, absence: EVERYONE_HERE, ready: null, extra: {} } };
       db.room = { ...(db.room as RoomRow), status: 'finished', updated_at: '2026-09-24T00:00:01Z' };
       return null;
     });
@@ -852,7 +945,7 @@ describe('the end of the game', () => {
   function lastHandDecision(scores: TableState['scores'] = [3, -3, 0, 0]): { live: LiveRow; ended: HandState; late: number } {
     setTable();
     const dealt = settle(startHand(karachi, { seed: 'svc-1', progress: NORTH_3, dealer: 3 }), karachi, seats);
-    return lastDecision(liveRow(dealt, { claim: null, turn: null }), { table: { v: 1, scores, over: null, absence: EVERYONE_HERE, extra: {} } });
+    return lastDecision(liveRow(dealt, { claim: null, turn: null }), { table: { v: 1, scores, over: null, absence: EVERYONE_HERE, ready: null, extra: {} } });
   }
 
   /** A game over and fully recorded, as its live row keeps it. */
@@ -860,7 +953,11 @@ describe('the end of the game', () => {
     const live = setTable();
     db.game = { ...(db.game as GameRow), status: 'finished' };
     db.room = { ...(db.room as RoomRow), status: 'finished' };
-    db.live = liveRow(lastHand(live.state), { claim: null, turn: null }, { version: 30, table: { v: 1, scores: over.scores, over, absence: EVERYONE_HERE, extra: {} }, ...extra });
+    db.live = liveRow(
+      lastHand(live.state),
+      { claim: null, turn: null },
+      { version: 30, table: { v: 1, scores: over.scores, over, absence: EVERYONE_HERE, ready: null, extra: {} }, ...extra },
+    );
     return db.live as LiveRow;
   }
 
@@ -1118,7 +1215,13 @@ describe('ending a game early', () => {
 
     it('reads a legacy table’s last save as its last move, as older code kept no other', async () => {
       setTable();
-      db.live = { ...(db.live as LiveRow), legacy: true, table: { v: 1, scores: null, over: null, absence: EVERYONE_HERE, extra: {} }, actedAt: T0 - STALE_GAME_MS, updatedAt: T0 };
+      db.live = {
+        ...(db.live as LiveRow),
+        legacy: true,
+        table: { v: 1, scores: null, over: null, absence: EVERYONE_HERE, ready: null, extra: {} },
+        actedAt: T0 - STALE_GAME_MS,
+        updatedAt: T0,
+      };
       expect(await endIfStale(GAME, T0 + 60_000)).toBe(false);
       expect(store.commitTable).not.toHaveBeenCalled();
     });
