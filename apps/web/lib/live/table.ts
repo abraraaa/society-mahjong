@@ -14,7 +14,7 @@ import {
   type Ruleset,
   type Seat,
 } from '@society/engine';
-import { isBot, isClientActionType, isHuman, type ClientAction, type Deadlines, type LiveGame, type Seats, type TimerPolicy } from './types';
+import { isBot, isClientActionType, isHuman, type ClientAction, type Deadlines, type LiveGame, type Move, type PlayerMove, type Seats, type TimerPolicy } from './types';
 
 /**
  * The authoritative table, as pure functions over the engine's HandState.
@@ -57,29 +57,45 @@ function botOptions(s: HandState, seat: Seat, setup: TableSetup | undefined): Bo
   return setup?.bots === 'gentle' ? { strength: 'gentle', random: decisionRandom(s, seat) } : {};
 }
 
+/** A move the table makes on the engine: always an engine move, never a table note. */
+type EngineMove = Move & { readonly a: PlayerMove };
+
+/** An engine move the table is about to make. The table never closes a claim window by hand: it closes itself once everyone has answered. */
+function engineMove(a: Action): PlayerMove {
+  if (a.type === 'resolveClaims') throw new Error('the table never sends resolveClaims');
+  return a;
+}
+
 /**
  * Play every bot decision and every forced human response until a human has a
  * real decision to make or the hand is over.
  */
 export function settle(state: HandState, ruleset: Ruleset, seats: Seats, setup?: TableSetup): HandState {
+  return settleLogged(state, ruleset, seats, setup).state;
+}
+
+/** `settle`, with the moves it made in the order it made them. Nothing to play gives back `state` itself and no moves. */
+function settleLogged(state: HandState, ruleset: Ruleset, seats: Seats, setup: TableSetup | undefined): { readonly state: HandState; readonly moves: readonly EngineMove[] } {
   let s = state;
+  const moves: EngineMove[] = [];
   for (let i = 0; i < MAX_BOT_STEPS; i++) {
-    const next = settleOnce(s, ruleset, seats, setup);
-    if (next === null) return s;
-    s = next;
+    const m = forcedMove(s, ruleset, seats, setup);
+    if (m === null) return { state: s, moves };
+    s = reduce(s, m.a, ruleset);
+    moves.push(m);
   }
   throw new Error('settle: bots did not reach a human decision');
 }
 
-/** One forced or bot move, or null when the table is waiting on a human. */
-function settleOnce(s: HandState, ruleset: Ruleset, seats: Seats, setup: TableSetup | undefined): HandState | null {
+/** The next forced or bot move, or null when the table is waiting on a human. */
+function forcedMove(s: HandState, ruleset: Ruleset, seats: Seats, setup: TableSetup | undefined): EngineMove | null {
   if (s.phase === 'finished') return null;
 
   if (s.phase === 'preplay') {
     for (const seat of SEATS) {
       if (!isBot(seats, seat)) continue;
       const a = analysisBot(viewFor(s, ruleset, seat), ruleset, botOptions(s, seat, setup));
-      if (a && a.type === 'exchange') return reduce(s, a, ruleset);
+      if (a && a.type === 'exchange') return { by: 'bot', seat, a };
     }
     return null;
   }
@@ -88,12 +104,9 @@ function settleOnce(s: HandState, ruleset: Ruleset, seats: Seats, setup: TableSe
     for (const seat of SEATS) {
       const legal = legalActions(s, ruleset, seat);
       if (!legal.claims) continue; // discarder, or already responded
-      if (isBot(seats, seat)) {
-        const a = analysisBot(viewFor(s, ruleset, seat), ruleset, botOptions(s, seat, setup)) ?? { type: 'pass', seat };
-        return reduce(s, a, ruleset);
-      }
+      if (isBot(seats, seat)) return { by: 'bot', seat, a: engineMove(analysisBot(viewFor(s, ruleset, seat), ruleset, botOptions(s, seat, setup)) ?? { type: 'pass', seat }) };
       // A human with nothing to claim is not asked; the engine still wants the pass.
-      if (legal.claims.length === 0) return reduce(s, { type: 'pass', seat }, ruleset);
+      if (legal.claims.length === 0) return { by: 'table', seat, a: { type: 'pass', seat } };
     }
     return null;
   }
@@ -102,7 +115,7 @@ function settleOnce(s: HandState, ruleset: Ruleset, seats: Seats, setup: TableSe
   if (isBot(seats, s.turn)) {
     const a = analysisBot(viewFor(s, ruleset, s.turn), ruleset, botOptions(s, s.turn, setup));
     if (!a) throw new Error(`bot at seat ${s.turn} has no move`);
-    return reduce(s, a, ruleset);
+    return { by: 'bot', seat: s.turn, a: engineMove(a) };
   }
   return null;
 }
@@ -152,28 +165,32 @@ export interface StandIn {
   readonly action: Action;
 }
 
-function resolveExpiredWith(game: LiveGame, ruleset: Ruleset, seats: Seats, now: number): { state: HandState; standIns: StandIn[] } | null {
+function resolveExpiredWith(game: LiveGame, ruleset: Ruleset, seats: Seats, now: number): { state: HandState; standIns: StandIn[]; moves: EngineMove[] } | null {
   const { state, deadlines } = game;
   const standIns: StandIn[] = [];
+  const moves: EngineMove[] = [];
   if (deadlines.claim !== null && now >= deadlines.claim && state.phase === 'claim') {
     let s = state;
     for (const seat of humansPending(s, ruleset, seats)) {
       if (s.phase !== 'claim') break;
-      const a = analysisBot(viewFor(s, ruleset, seat), ruleset) ?? { type: 'pass' as const, seat };
+      const a = engineMove(analysisBot(viewFor(s, ruleset, seat), ruleset) ?? { type: 'pass' as const, seat });
       s = reduce(s, a, ruleset);
       standIns.push({ seat, action: a });
+      moves.push({ by: 'clock', seat, a });
     }
-    return { state: s, standIns };
+    return { state: s, standIns, moves };
   }
   if (deadlines.turn !== null && now >= deadlines.turn && (state.phase === 'turn' || state.phase === 'preplay')) {
     let s = state;
     for (const seat of humansPending(s, ruleset, seats)) {
-      const a = analysisBot(viewFor(s, ruleset, seat), ruleset);
-      if (!a) continue;
+      const found = analysisBot(viewFor(s, ruleset, seat), ruleset);
+      if (!found) continue;
+      const a = engineMove(found);
       s = reduce(s, a, ruleset);
       standIns.push({ seat, action: a });
+      moves.push({ by: 'clock', seat, a });
     }
-    return { state: s, standIns };
+    return { state: s, standIns, moves };
   }
   return null;
 }
@@ -198,6 +215,12 @@ export interface StepResult extends LiveGame {
   readonly changed: boolean;
   /** the hand ended and no next hand exists: the game is over */
   readonly gameOver: boolean;
+  /** every move this step made, in the order it made them, for the hand log (hand-log.ts stamps them). Every one belongs to `state`'s hand. */
+  readonly moves: readonly Move[];
+  /** this step dealt a new hand: the hand index went up */
+  readonly dealt: boolean;
+  /** a hand went from live to finished in this step, so its result is new */
+  readonly finishedHand: boolean;
   /** moves made for absent humans by expired clocks in this step */
   readonly standIns: readonly StandIn[];
 }
@@ -207,6 +230,11 @@ export interface StepResult extends LiveGame {
  * first, so an action sent after a window closed is judged against the table
  * as it now stands (and may be rejected as not the caller's move). The one
  * exception is "next hand", which needs the hand the sender saw to be over.
+ *
+ * Every move the step makes is logged in `moves`, by whoever made it, so the
+ * hand's seed and its log replay to the same table (hand-log.ts replayHand).
+ * A deal happens before any move in its step, and a finished hand has no
+ * clock, so all of one step's moves belong to the hand it returns.
  */
 export function step(input: StepInput): StepResult {
   const { ruleset, seats, policy, now } = input;
@@ -214,12 +242,16 @@ export function step(input: StepInput): StepResult {
   // A hand that ends inside this step, its clock run out, must be recorded as it closes, never dealt over. A finished
   // hand has no clock to resolve, so this refuses nothing the client offers.
   if (input.action?.type === 'nextHand' && input.game.state.phase !== 'finished') throw new IllegalAction('hand not finished');
-  let s = input.game.state;
+  const before = input.game.state;
+  let s = before;
   let changed = false;
+  const moves: Move[] = [];
 
   const expired = resolveExpiredWith(input.game, ruleset, seats, now);
   if (expired) {
-    s = settle(expired.state, ruleset, seats, setup);
+    const settled = settleLogged(expired.state, ruleset, seats, setup);
+    s = settled.state;
+    moves.push(...expired.moves, ...settled.moves);
     changed = true;
   }
 
@@ -234,30 +266,41 @@ export function step(input: StepInput): StepResult {
       if (input.seed === undefined) throw new Error('nextHand needs the seed');
       const n = nextHand(s, ruleset);
       if (n === null) gameOver = true;
-      else s = settle(startHand(ruleset, { seed: input.seed, ...n }), ruleset, seats, setup);
+      else {
+        const dealt = settleLogged(startHand(ruleset, { seed: input.seed, ...n }), ruleset, seats, setup);
+        s = dealt.state;
+        moves.push(...dealt.moves);
+      }
     } else {
       if (input.actor === undefined || input.action.seat !== input.actor) throw new NotYourMove('action is not for your seat');
-      if (!isHuman(seats, input.actor)) throw new NotYourMove('that seat is a bot');
-      s = settle(reduce(s, input.action, ruleset), ruleset, seats, setup);
+      const entry = seats[input.actor];
+      if (entry?.kind !== 'human') throw new NotYourMove('that seat is a bot');
+      const settled = settleLogged(reduce(s, input.action, ruleset), ruleset, seats, setup);
+      s = settled.state;
+      moves.push({ by: 'player', seat: input.actor, userId: entry.userId, a: input.action }, ...settled.moves);
     }
     changed = true;
   } else if (!expired) {
     // A sweep or a first load: still make sure nothing is waiting on a bot.
-    const settled = settle(s, ruleset, seats, setup);
-    if (settled !== s) {
-      s = settled;
+    const settled = settleLogged(s, ruleset, seats, setup);
+    if (settled.state !== s) {
+      s = settled.state;
+      moves.push(...settled.moves);
       changed = true;
     }
   }
 
   const deadlines = changed || gameOver ? deadlinesFor(s, ruleset, seats, policy, now) : input.game.deadlines;
-  return { state: s, deadlines, changed, gameOver, standIns: expired?.standIns ?? [] };
+  const dealt = s.progress.handIndex > before.progress.handIndex;
+  // A dealt hand starts live, so a hand finished in the step that dealt it is newly finished too.
+  const finishedHand = s.phase === 'finished' && (dealt || before.phase !== 'finished');
+  return { state: s, deadlines, changed, gameOver, moves, dealt, finishedHand, standIns: expired?.standIns ?? [] };
 }
 
-/** A fresh hand for a game, with bots already played up to the first human decision. */
-export function dealFirstHand(ruleset: Ruleset, seats: Seats, seed: string, policy: TimerPolicy, now: number, setup?: TableSetup): LiveGame {
-  const state = settle(startHand(ruleset, { seed, progress: { roundWind: 'E', roundIndex: 0, handInRound: 0, handIndex: 0 }, dealer: 0 }), ruleset, seats, setup);
-  return { state, deadlines: deadlinesFor(state, ruleset, seats, policy, now) };
+/** A fresh hand for a game, with bots already played up to the first human decision, and the moves they made. */
+export function dealFirstHand(ruleset: Ruleset, seats: Seats, seed: string, policy: TimerPolicy, now: number, setup?: TableSetup): LiveGame & { readonly moves: readonly Move[] } {
+  const { state, moves } = settleLogged(startHand(ruleset, { seed, progress: { roundWind: 'E', roundIndex: 0, handInRound: 0, handIndex: 0 }, dealer: 0 }), ruleset, seats, setup);
+  return { state, deadlines: deadlinesFor(state, ruleset, seats, policy, now), moves };
 }
 
 /** Whether `action` is one this seat may send at all (shape check; the engine judges legality). */

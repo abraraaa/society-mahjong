@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { SEATS, analysisBot, karachi, legalActions, viewFor, type Action, type Seat } from '@society/engine';
 import { NotYourMove, dealFirstHand, resolveExpired, step } from './table';
-import { isHuman, type ClientAction, type LiveGame, type Seats } from './types';
+import { isHuman, isPlayerMove, type ClientAction, type LiveGame, type LoggedMove, type Seats } from './types';
+import { replayHand, stamp } from './hand-log';
 import { policyFor } from './policy';
 
 /**
@@ -43,9 +44,12 @@ function humanMove(game: LiveGame, seat: Seat): Action {
   return analysisBot(viewFor(game.state, karachi, seat), karachi) ?? (legal.claims ? { type: 'pass', seat } : ({ type: 'pass', seat } as Action));
 }
 
-function playHand(seats: Seats, seed: string, onState?: (g: LiveGame) => void): { game: LiveGame; moves: Record<number, number> } {
-  let game: LiveGame = dealFirstHand(karachi, seats, seed, policy, T0);
+function playHand(seats: Seats, seed: string, onState?: (g: LiveGame) => void): { game: LiveGame; moves: Record<number, number>; log: LoggedMove[] } {
+  const first = dealFirstHand(karachi, seats, seed, policy, T0);
+  let game: LiveGame = first;
   const moves: Record<number, number> = {};
+  // The hand's log as the requests would write it: the deal at version 1, then each step's moves at the next version.
+  const log = stamp(first.moves, 1);
   for (let i = 0; i < 600 && game.state.phase !== 'finished'; i++) {
     onState?.(game);
     const who = pending(game, seats);
@@ -56,11 +60,25 @@ function playHand(seats: Seats, seed: string, onState?: (g: LiveGame) => void): 
     const r = step({ game, ruleset: karachi, seats, policy, now: T0 + i * 1000, action: humanMove(game, seat) as never, actor: seat, seed });
     expect(r.changed).toBe(true);
     moves[seat] = (moves[seat] ?? 0) + 1;
+    log.push(...stamp(r.moves, i + 2));
     game = { state: r.state, deadlines: r.deadlines };
   }
   expect(game.state.phase).toBe('finished');
   expect(game.deadlines).toEqual({ claim: null, turn: null });
-  return { game, moves };
+  return { game, moves, log };
+}
+
+/** Each entry is its maker's: a person's own move under their own id, a bot's in a bot seat, the table's pass for a person with nothing to claim. */
+function expectTagged(seats: Seats, log: readonly LoggedMove[]): void {
+  for (const m of log) {
+    expect(m.seat, JSON.stringify(m)).toBeDefined();
+    const entry = seats[m.seat!];
+    expect(isPlayerMove(m.a) && m.a.seat === m.seat, JSON.stringify(m)).toBe(true);
+    if (m.by === 'player') expect(entry?.kind === 'human' && m.userId === entry.userId, JSON.stringify(m)).toBe(true);
+    else if (m.by === 'bot') expect(entry?.kind === 'bot' && m.userId === undefined, JSON.stringify(m)).toBe(true);
+    else if (m.by === 'table') expect(entry?.kind === 'human' && m.userId === undefined && m.a.type === 'pass', JSON.stringify(m)).toBe(true);
+    else throw new Error(`nobody's clock ran out, so nothing is ${m.by}'s: ${JSON.stringify(m)}`);
+  }
 }
 
 describe('two humans and two bots', () => {
@@ -126,6 +144,20 @@ describe('two humans and two bots', () => {
     expect(s!.phase).not.toBe('claim');
   });
 
+  it('logs a claim window both people answer, one move each, in the order they came', { timeout: 120_000 }, () => {
+    const g = windowForBoth();
+    const r1 = step({ game: g, ruleset: karachi, seats: two, policy, now: T0, action: { type: 'pass', seat: 0 }, actor: 0 });
+    expect(r1.moves).toEqual([{ by: 'player', seat: 0, userId: 'u-a', a: { type: 'pass', seat: 0 } }]);
+    const g1 = { state: r1.state, deadlines: r1.deadlines };
+    const second = humanMove(g1, 1);
+    const r2 = step({ game: g1, ruleset: karachi, seats: two, policy, now: T0 + 1000, action: second as never, actor: 1 });
+    expect(r2.moves[0]).toEqual({ by: 'player', seat: 1, userId: 'u-b', a: second });
+    expectTagged(two, stamp(r2.moves, 3));
+    // Left to the clock instead, both answers are the clock's, in seat order.
+    const late = step({ game: g, ruleset: karachi, seats: two, policy, now: g.deadlines.claim! });
+    expect(late.moves.filter((m) => m.by === 'clock').map((m) => m.seat)).toEqual([0, 1]);
+  });
+
   /**
    * The review's attack: while one human is deciding on a discard, the other
    * sends the server's own move for their own seat. It used to close the
@@ -174,5 +206,35 @@ describe('three humans and one bot', () => {
   it('plays whole hands and every human gets to move', { timeout: 120_000 }, () => {
     const { moves } = playHand(three, 'trio-1');
     for (const seat of [0, 2, 3]) expect(moves[seat] ?? 0, `seat ${seat} never moved`).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The hand log at a friends' table: whose move each one was, and that the
+ * seed plus the log is the hand, however many people sat at it.
+ */
+describe('the hand log with several people', () => {
+  it('logs each person’s moves under their own id and replays the hand from its seed', { timeout: 120_000 }, () => {
+    let tablePasses = 0;
+    for (const [seats, seed] of [
+      [two, 'pair-1'],
+      [two, 'pair-2'],
+      [three, 'trio-1'],
+    ] as const) {
+      const { game, log } = playHand(seats, seed);
+      expectTagged(seats, log);
+      for (const [seat, entry] of seats.entries()) {
+        if (entry?.kind === 'human')
+          expect(
+            log.some((m) => m.by === 'player' && m.seat === seat),
+            `${seed}: seat ${seat} has no moves of its own`,
+          ).toBe(true);
+      }
+      tablePasses += log.filter((m) => m.by === 'table').length;
+      const vs = log.map((m) => m.v);
+      expect(vs).toEqual([...vs].sort((a, b) => a - b));
+      expect(replayHand(karachi, seed, { progress: { roundWind: 'E', roundIndex: 0, handInRound: 0, handIndex: 0 }, dealer: 0 }, log)).toEqual(game.state);
+    }
+    expect(tablePasses, 'no person was ever passed for by the table').toBeGreaterThan(0);
   });
 });

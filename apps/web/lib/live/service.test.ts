@@ -124,7 +124,18 @@ function playOut(state: HandState): HandState {
 
 /** The next call to step hands back `state` as the table after the move. */
 function nextStepGives(state: HandState, gameOver = false): void {
-  vi.mocked(table.step).mockImplementationOnce((): StepResult => ({ state, deadlines: { claim: null, turn: null }, changed: true, gameOver, standIns: [] }));
+  vi.mocked(table.step).mockImplementationOnce(
+    (): StepResult => ({
+      state,
+      deadlines: { claim: null, turn: null },
+      changed: true,
+      gameOver,
+      moves: [],
+      dealt: false,
+      finishedHand: state.phase === 'finished' && !gameOver,
+      standIns: [],
+    }),
+  );
 }
 
 const DOWN = () => new SupabaseError('write', { message: 'TypeError: fetch failed' });
