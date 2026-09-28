@@ -18,7 +18,7 @@ import { flowerSinceMyLastMove, myDiscardCount, textOf } from '../lib/coach/word
 import { liveStage } from '../lib/live/level';
 import type { GameSnapshot } from '../lib/live/snapshot';
 import type { StandIn } from '../lib/live/table';
-import type { Deadlines } from '../lib/live/types';
+import type { Deadlines, PlayerMove } from '../lib/live/types';
 import { riverOrder } from '../lib/river';
 import { GAME_ID, USER_NAME } from './fixtures';
 
@@ -139,7 +139,9 @@ function runOut(s: HandState): { readonly state: HandState; readonly standIns: r
   const standIns: StandIn[] = [];
   for (const seat of pending(s)) {
     if (out.phase !== 'claim') break;
-    const action = analysisBot(viewFor(out, karachi, seat), karachi) ?? { type: 'pass' as const, seat };
+    const bot = analysisBot(viewFor(out, karachi, seat), karachi);
+    // The table never sends resolveClaims; `engineMove` in table.ts throws on it, so a stand-in's move is a player's move.
+    const action: PlayerMove = bot && bot.type !== 'resolveClaims' ? bot : { type: 'pass', seat };
     out = reduce(out, action, karachi);
     standIns.push({ seat, action });
   }
