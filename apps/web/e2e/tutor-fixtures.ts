@@ -13,6 +13,8 @@ import {
   type Seat,
 } from '@society/engine';
 import { analyseFor, coachFor, type CoachStage, type CoachState } from '../lib/coach';
+import { flowerSinceMyLastMove, myDiscardCount } from '../lib/coach/words';
+import { liveStage } from '../lib/live/level';
 import type { GameSnapshot } from '../lib/live/snapshot';
 import type { Deadlines } from '../lib/live/types';
 import { GAME_ID, USER_NAME } from './fixtures';
@@ -158,7 +160,7 @@ function snapshot(state: HandState, version: number, stage: CoachStage, status: 
 /** What the live page's tutor says on this snapshot, for comparing through the helpers rather than retyping copy. */
 export function liveCoach(s: GameSnapshot): CoachState {
   const view = s.view as PrivatePlayerView;
-  return coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: s.stage ?? 'new', names: LIVE_NAMES });
+  return coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: liveStage(s.stage, view), names: LIVE_NAMES });
 }
 
 /** The first seed of `tutor-{from}`, `tutor-{from + 1}`, ... for which `make` returns something. */
@@ -192,6 +194,11 @@ export interface TutorFixtures {
    * say): the claim sheet stays up between them. Both clocks are an hour, so nothing runs out under an open card.
    */
   readonly claimAgain: { readonly first: GameSnapshot; readonly next: GameSnapshot };
+  /**
+   * Amna's turn, with a flower drawn since her last move, for a first-timer. After her first discard of the hand:
+   * on her first turn the round's footnote comes first, and there's no room beside it for the flowers'.
+   */
+  readonly flowerTurn: GameSnapshot;
 }
 
 function build(): TutorFixtures {
@@ -237,7 +244,22 @@ function build(): TutorFixtures {
     },
     51,
   );
-  return { otherWin, claim, claimAgain };
+  const flowerTurn = search("Amna's turn after a flower, once she's discarded, where the tutor explains it", (seed) => {
+    let s = settle(startHand(karachi, { seed, progress: EAST_HONOUR, dealer: 0 }));
+    for (let i = 0; i < 400 && s.phase !== 'finished'; i++) {
+      const view = viewFor(s, karachi, ME);
+      if (s.phase === 'turn' && s.turn === ME && myDiscardCount(view) > 0 && flowerSinceMyLastMove(view)) {
+        const snap = snapshot(s, 9, 'new');
+        const coach = liveCoach(snap);
+        if (coach.say.length > 0 && coach.teach.some((t) => t.key === 'rule:flowers')) return snap;
+      }
+      const seat = pending(s)[0];
+      if (seat === undefined) return null;
+      s = settle(reduce(s, personMove(s, seat), karachi));
+    }
+    return null;
+  });
+  return { otherWin, claim, claimAgain, flowerTurn };
 }
 
 let built: TutorFixtures | null = null;

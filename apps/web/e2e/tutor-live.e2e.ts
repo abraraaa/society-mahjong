@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { cardClockLine } from '../lib/coach/clock';
 import { cardCaption } from '../lib/coach/hand-card';
+import { TAUGHT_KEY, handNote, noteText } from '../lib/coach/teach';
 import { POLL_MS } from '../lib/table-sync';
 import { ok, openTable, pauseClock } from './live';
 import { liveCoach, tutorFixtures } from './tutor-fixtures';
@@ -8,22 +9,35 @@ import { liveCoach, tutorFixtures } from './tutor-fixtures';
 /**
  * The tutor at a live table, on scenes made by the engine alone
  * (tutor-fixtures.ts): hand names that open the hand's card, wherever the
- * tutor says them, and a card over a claim that shows the table's clock.
+ * tutor says them, a card over a claim that shows the table's clock, and the
+ * footnotes a first-timer gets the first time a hand or a flower comes up.
  */
 test.describe('the tutor at a live table', () => {
-  test("(l-winner) the result line names the winner's hand, and a tap shows the tiles they won with", async ({ page }) => {
+  test("(l-winner) the result line names the winner's hand, explains it the first time, and a tap shows the tiles they won with", async ({ page }) => {
     const fx = tutorFixtures();
-    const ref = liveCoach(fx.otherWin).outcome!.hand!.ref;
+    const coach = liveCoach(fx.otherWin);
+    const ref = coach.outcome!.hand!.ref;
+    // Every test has a fresh context, so this is the visit's first sight of the hand: its footnote goes under the line.
     const t = await openTable(page, { view: () => ok(fx.otherWin) });
 
-    const name = page.locator('.sheet .term.hand', { hasText: ref.title });
+    const name = page.locator('.sheet .term.hand', { hasText: ref.title }).first();
     await expect(name).toBeVisible();
+    const note = page.locator(`.sheet [data-note="hand:${ref.title}"]`);
+    await expect(note).toHaveText(noteText(handNote(ref, coach.goal)));
+    // The footnote's label is the hand's name too, and opens the same card.
+    await expect(note.locator('.term.hand')).toHaveText(ref.title);
     const card = page.locator('[data-sheet="card"]');
     await expect(async () => {
-      if (!(await card.isVisible())) await name.click();
+      if (!(await card.isVisible())) await note.locator('.term.hand').click();
       await expect(card).toBeVisible({ timeout: 500 });
     }).toPass({ timeout: 15_000 });
+    await expect(card).toHaveAttribute('data-whose', 'winner');
+    await card.getByRole('button', { name: 'Got it' }).click();
+    await expect(card).toBeHidden();
 
+    // And the name in the line itself.
+    await name.click();
+    await expect(card).toBeVisible();
     await expect(card).toHaveAttribute('data-whose', 'winner');
     await expect(card).toHaveAttribute('aria-label', ref.title);
     const caption = cardCaption(ref)!;
@@ -34,6 +48,19 @@ test.describe('the tutor at a live table', () => {
 
     await card.getByRole('button', { name: 'Got it' }).click();
     await expect(card).toBeHidden();
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(l-flower) a flower drawn since her last move is explained under the bubble, the first time', async ({ page }) => {
+    const fx = tutorFixtures();
+    const flowers = liveCoach(fx.flowerTurn).teach.find((x) => x.key === 'rule:flowers')!;
+    const t = await openTable(page, { view: () => ok(fx.flowerTurn) });
+    const note = t.stage().locator('.coach [data-note="rule:flowers"]');
+    await expect(note).toBeVisible();
+    await expect(note).toHaveText(noteText(flowers));
+    // Taught for the visit, and the glossary's footnote for "flowers" with it: the same words.
+    const taught = await page.evaluate((key) => JSON.parse(sessionStorage.getItem(key) ?? '[]') as string[], TAUGHT_KEY);
+    expect(taught).toEqual(expect.arrayContaining(['rule:flowers', 'term:bonus']));
     expect(t.pageErrors).toEqual([]);
   });
 

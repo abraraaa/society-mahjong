@@ -6,16 +6,20 @@ import {
   isDragonTile,
   isWindTile,
   karachi,
+  startHand,
   tileName,
+  viewFor,
   type GameProgress,
   type PrivatePlayerView,
   type TileKind,
   type Wind,
 } from '@society/engine';
 import { analyseFor, coachFor, runNoteApplies, shortOfLine, washoutLine } from './coach';
+import { GLOSSARY } from './glossary';
 import { goalFor } from './goal';
 import { hasWrittenShape, titleOf } from './shape';
 import { stripGroups } from './strip';
+import { NOTE_BUDGET, lessonFor, noteText } from './teach';
 import { NAMES as LONG_NAMES, ROUNDS, coachOf, playHand } from './test-games';
 import type { CoachSegment, CoachState } from './types';
 import { SAY_BUDGET, textOf, visibleLength } from './words';
@@ -215,6 +219,9 @@ describe('hand names, wherever the tutor says them', () => {
               const coach: CoachState = coachOf(view, stage, analysis);
               const where = `${round} ${h} seq ${view.seq} ${coach.moment} ${stage}: ${textOf(coach.say)}`;
               expect(visibleLength(textOf(coach.say)), where).toBeLessThanOrEqual(SAY_BUDGET);
+              // A first visit's footnotes, the most any line gets, keep to their two lines.
+              const notes = lessonFor(coach, new Set()).notes.map(noteText).join(' · ');
+              expect(visibleLength(notes), `${where} | ${notes}`).toBeLessThanOrEqual(NOTE_BUDGET);
               for (const re of BANNED) {
                 expect(textOf(coach.say), where).not.toMatch(re);
                 expect(coach.plan ?? '', where).not.toMatch(re);
@@ -323,5 +330,77 @@ describe('hand names, wherever the tutor says them', () => {
     const analysis = { ...analyseFor(finished, karachi), candidates: [] };
     const coach = coachFor({ view: finished, ruleset: karachi, analysis, stage: 'new', names: NAMES });
     expect(textOf(coach.say)).toBe("Washed out: the wall's run dry and nobody won. No points change hands.");
+  });
+});
+
+describe('what the tutor could teach a first-timer', () => {
+  const dealt = (progress: GameProgress, dealer: 0 | 1, seed = 'teach') => viewFor(startHand(karachi, { seed, progress, dealer }), karachi, 0);
+
+  it("gives the round's footnote on the player's first turn, and marks it said while someone else deals, whose bubble gives the aim", () => {
+    const mine = coachOf(dealt(ROUNDS.E0, 0), 'new');
+    expect(mine.moment).toBe('handStart');
+    expect(mine.teach[0]).toEqual({ key: 'round:goulash', place: 'note', label: 'this hand', text: "four pungs and a pair, and runs don't count", also: ['hand:Goulash'] });
+    const theirs = coachOf(dealt(ROUNDS.E0, 1), 'new');
+    expect(theirs.moment).toBe('handStart');
+    expect(theirs.teach[0]).toMatchObject({ key: 'round:goulash', place: 'said', also: ['hand:Goulash'] });
+    expect(coachOf(dealt(ROUNDS.E1, 1), 'new').teach[0]).toMatchObject({ key: 'round:honour', place: 'said', also: ['hand:Chow + 5 Honours', 'hand:Pung + 5 Honours'] });
+    expect(coachOf(dealt(ROUNDS.N, 0), 'new').teach[0]).toMatchObject({ key: 'round:big', place: 'note', also: [] });
+  });
+
+  it("gives it only before the player's own first discard", () => {
+    expect(coachOf(turnView('E', 0, ['m1', 'm1', 'm1', 'p7', 'p7', 'p7', 'DR', 'DR', 'WW', 'WW', 's4', 's5', 's9', 's9']), 'new').teach).toEqual([]);
+  });
+
+  it('explains a flower drawn since the player last moved, and marks the word for it taught', () => {
+    const tiles: TileKind[] = ['m1', 'm1', 'm1', 'p7', 'p7', 'p7', 'DR', 'DR', 'WW', 'WW', 's4', 's5', 's9', 's9'];
+    const withEvents = (events: readonly object[]) => ({ ...turnView('E', 0, tiles), events }) as unknown as PrivatePlayerView;
+    const flower = coachOf(
+      withEvents([
+        { seq: 1, type: 'discarded', seat: 0, tile: 'p9' },
+        { seq: 2, type: 'bonus', seat: 0, tile: 'F1' },
+      ]),
+      'new',
+    );
+    expect(flower.teach).toContainEqual({ key: 'rule:flowers', place: 'note', label: 'flowers', text: GLOSSARY.bonus.short, also: ['term:bonus'] });
+    const old = coachOf(
+      withEvents([
+        { seq: 1, type: 'bonus', seat: 0, tile: 'F1' },
+        { seq: 2, type: 'discarded', seat: 0, tile: 'p9' },
+      ]),
+      'new',
+    );
+    expect(old.teach.map((t) => t.key)).not.toContain('rule:flowers');
+    // A regular hears nothing, so there's nothing to put a footnote under.
+    const solid = coachOf(
+      withEvents([
+        { seq: 1, type: 'discarded', seat: 0, tile: 'p9' },
+        { seq: 2, type: 'bonus', seat: 0, tile: 'F1' },
+      ]),
+      'solid',
+    );
+    expect(solid.teach).toEqual([]);
+  });
+
+  it("marks the player's own winning hand said: the line gives its shape already", () => {
+    const won: TileKind[] = ['m1', 'm1', 'm1', 'p7', 'p7', 'p7', 'm4', 'm4', 'm4', 's2', 's2', 's2', 's9', 's9'];
+    const view = {
+      ...turnView('E', 0, won),
+      phase: 'finished',
+      revealed: { 0: won },
+      result: { type: 'win', winner: 0, patternId: 'karachi.goulash', selfDrawn: true, settlement: {} },
+    } as unknown as PrivatePlayerView;
+    const coach = coachOf(view, 'new');
+    expect(coach.say.find((x) => x.hand)?.text).toBe('Goulash');
+    expect(coach.teach).toEqual([{ key: 'hand:Goulash', place: 'said', hand: coach.outcome?.hand?.ref, text: coach.outcome?.hand?.ref.note }]);
+  });
+
+  it("knows each round's everyday hands, and which view it is", () => {
+    const titles = (progress: GameProgress) => coachOf(dealt(progress, 0)).goal.generalTitles;
+    expect(titles(ROUNDS.E0)).toEqual(['Goulash']);
+    expect(titles(ROUNDS.E1)).toEqual(['Chow + 5 Honours', 'Pung + 5 Honours']);
+    expect(titles(ROUNDS.S)).toEqual(['Any Damn Hand']);
+    expect(titles(ROUNDS.N)).toEqual([]);
+    const view = dealt(ROUNDS.S, 0);
+    expect(coachOf(view).at).toEqual({ hand: ROUNDS.S.handIndex, seq: view.seq });
   });
 });

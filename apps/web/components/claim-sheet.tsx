@@ -3,7 +3,8 @@ import { useEffect, useRef } from 'react';
 import { tileName, type ClaimOption, type TileKind } from '@society/engine';
 import type { CoachState } from '@/lib/coach';
 import { msLeft, pauseCountdown, resumeCountdown, startCountdown, type Countdown } from '@/lib/coach/clock';
-import { CoachLine, useSheetOpen } from './coach';
+import type { Lesson } from '@/lib/coach/teach';
+import { CoachLine, CoachNotes, useSheetOpen } from './coach';
 import { Tile } from './tile';
 
 /** Solo default; a live table passes the server's deadline instead. Mirrors --claim-seconds in globals.css. */
@@ -32,6 +33,7 @@ export function ClaimSheet({
   discarderName,
   discardCount,
   coach,
+  lesson = null,
   options,
   onClaim,
   onPass,
@@ -49,6 +51,8 @@ export function ClaimSheet({
    */
   discardCount: number;
   coach: CoachState;
+  /** the first-sight footnotes for the line, from `useLesson`: they go full width under it, the first time a hand is named here */
+  lesson?: Lesson | null;
   options: readonly ClaimOption[];
   onClaim: (option: ClaimOption) => void;
   onPass: () => void;
@@ -118,6 +122,7 @@ export function ClaimSheet({
             </p>
           </div>
         </div>
+        <CoachNotes coach={coach} lesson={lesson} where="sheet" />
         {(coach.stage === 'new' || coach.stage === 'first_hand') && (
           <p className="text-ivory-200/60 mb-3 text-xs leading-snug">
             Pung takes it to make three of a kind, Kong four; either lays the set face up. Pass lets it go and the turn moves on.

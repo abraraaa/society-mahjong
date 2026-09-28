@@ -27,6 +27,8 @@ export interface CoachGoal {
   readonly watchOut: string | null;
   readonly honours: 'required' | 'forbidden' | 'gated' | 'optional';
   readonly chowsClaimable: boolean;
+  /** the round's everyday hands: its general-tagged titles in spec order, or its one title when it deals only one hand (the goulash); none in North */
+  readonly generalTitles: readonly string[];
   /** "Hands this round": one per title the round allows, the player's own lay-out where it's among their nearest, else an example */
   readonly hands: readonly CoachHandRef[];
 }
@@ -48,6 +50,28 @@ export interface CoachHandRef {
    * examples, and the card then shows the title and shape alone.
    */
   readonly layout: readonly LayoutGroup[];
+  /** its footnote the first time it's named this visit: the shape every hand of this title shares (`noteShapeOf`) */
+  readonly note: string;
+}
+
+/**
+ * Something the tutor teaches once a visit: a round, a rule, a hand or a word,
+ * explained in a footnote the first time it comes up. The coach says what this
+ * view could teach; `lessonFor` (teach.ts) decides which of it to show, given
+ * what this visit has already been taught.
+ */
+export interface CoachTeach {
+  /** 'round:goulash' | 'round:honour' | 'round:noHonour' | 'round:big' | 'rule:runs' | 'rule:flowers' | 'firstLook' | `hand:${title}` | `term:${Term}` */
+  readonly key: string;
+  /** note: draw it as a footnote; said: the bubble or a sheet already says it, so mark it taught and draw nothing */
+  readonly place: 'note' | 'said';
+  /** bold before the text; none for a lesson sentence */
+  readonly label?: string;
+  /** the label is this hand's name, tappable */
+  readonly hand?: CoachHandRef;
+  readonly text: string;
+  /** keys taught with it, because it says the same thing */
+  readonly also?: readonly string[];
 }
 
 /** One pattern the hand could still become, dressed for a human. */
@@ -123,4 +147,8 @@ export interface CoachState {
   /** concealed tile kinds the table should light up */
   readonly highlight: readonly TileKind[];
   readonly outcome: CoachOutcome | null;
+  /** what this view could teach a first-timer, in order: the round, then rules; the names in `say` are added by `lessonFor` */
+  readonly teach: readonly CoachTeach[];
+  /** which view this is: `view.progress.handIndex` and `view.seq`, so a note is decided once per view */
+  readonly at: { readonly hand: number; readonly seq: number };
 }

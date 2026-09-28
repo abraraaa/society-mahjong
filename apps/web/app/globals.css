@@ -874,12 +874,27 @@ b .term {
 .sheet .term {
   text-decoration-color: rgb(243 236 219 / 0.45);
 }
-/* The footnote a first-timer gets the first time a word appears. */
+/* The footnote a first-timer gets the first time a round, a hand, a rule or a word comes up. */
 .coach .gloss {
   margin: 4px 0 0;
   font-size: 12.5px;
   line-height: 1.35;
   color: var(--color-ink-700);
+}
+/* The same under a sheet's line (a claim, the exchange, the result), full width, where the sheet covers the bubble. */
+.sheet .gloss {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: rgb(243 236 219 / 0.6);
+}
+.sheet .gloss b {
+  font-weight: 500;
+  color: rgb(243 236 219 / 0.85);
+}
+/* Full width under the claim's tile and line, whose row keeps a margin of its own: nearer the line than the buttons. */
+.sheet[data-sheet='claim'] > .gloss {
+  margin: -8px 0 12px;
 }
 .coach .more {
   font: 500 12px/1 var(--font-sans);

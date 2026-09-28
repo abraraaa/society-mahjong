@@ -1,9 +1,10 @@
 'use client';
-import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import type { CoachHandRef, CoachSegment, CoachStage, CoachState, CoachTarget } from '@/lib/coach';
+import { Fragment, createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import type { CoachHandRef, CoachMoment, CoachSegment, CoachState, CoachTarget } from '@/lib/coach';
 import { stepsAside, type CardClock } from '@/lib/coach/clock';
-import { GLOSSARY, TERMS, annotate, termsIn, type Term } from '@/lib/coach/glossary';
+import { GLOSSARY, TERMS, annotate, type Term } from '@/lib/coach/glossary';
 import { resolveHandRef } from '@/lib/coach/hand-card';
+import { lessonFor, lessonKey, taughtStore, type Lesson } from '@/lib/coach/teach';
 import { planCount } from '@/lib/coach/words';
 import { ClockLine, HandCard } from './hand-card';
 import { Tile } from './tile';
@@ -144,12 +145,96 @@ function Segments({ say, origin }: { say: readonly CoachSegment[]; origin: Sheet
   );
 }
 
-/** The words of the bubble a glossary footnote can be about: never inside a hand's name, which is a word of its own. */
-function plainText(say: readonly CoachSegment[]): string {
-  return say
-    .filter((s) => !s.hand)
-    .map((s) => s.text)
-    .join('');
+/** Subscribes to nothing: `useHydrating` only needs to know which render it's in. */
+const subscribeToNothing = () => () => {};
+
+/** True on the server and in the render that hydrates its HTML; false in every render after, and in a table first drawn after hydration. */
+function useHydrating(): boolean {
+  return useSyncExternalStore(
+    subscribeToNothing,
+    () => false,
+    () => true,
+  );
+}
+
+const NOTHING_TAUGHT: ReadonlySet<string> = new Set();
+/** Where the stylesheet hides the bubble's footnotes: a phone lying down has no room for them. */
+const SHORT_LANDSCAPE = '(orientation: landscape) and (height < 32rem)';
+/** Lessons remembered, so a view seen again (StrictMode, a poll, a retry) gets the notes it got the first time. */
+const LESSONS_KEPT = 50;
+
+/**
+ * The footnotes for the tutor's state now: worked out once per view, before
+ * it's painted, so a note comes with a new turn and never pops in after it,
+ * and marked taught for the rest of the visit. Called once, at the table, so
+ * the bubble and a sheet can't disagree. Null while the tutor is off.
+ *
+ * The first render after a page load can't read this visit's store (the
+ * server rendered it), so it shows the notes a first visit would get, and
+ * keeps them: the bubble never changes on hydration. A reload in the same tab
+ * shows that one bubble's notes again, once.
+ */
+export function useLesson(coach: CoachState, enabled: boolean): Lesson | null {
+  const hydrating = useHydrating();
+  const key = lessonKey(coach);
+  const cache = useRef(new Map<string, Lesson>());
+  const [lesson, setLesson] = useState<Lesson | null>(null);
+  useLayoutEffect(() => {
+    // Notes the stylesheet would hide aren't spent.
+    if (!enabled || window.matchMedia?.(SHORT_LANDSCAPE).matches) return;
+    const lessons = cache.current;
+    if (!lessons.has(key)) {
+      const next = lessonFor(coach, hydrating ? NOTHING_TAUGHT : taughtStore().all());
+      if (lessons.size >= LESSONS_KEPT) lessons.delete(lessons.keys().next().value!);
+      lessons.set(key, next);
+      taughtStore().add(next.marks);
+    }
+    setLesson(lessons.get(key)!);
+  }, [coach, key, enabled, hydrating]);
+  if (!enabled) return null;
+  if (lesson?.key === key) return lesson;
+  return hydrating ? lessonFor(coach, NOTHING_TAUGHT) : null;
+}
+
+/** Where a card opened from a footnote belongs: it goes when that place does. */
+function originOf(moment: CoachMoment, where: Lesson['where']): SheetOrigin {
+  if (where === 'bubble') return 'table';
+  return moment === 'claim' ? 'claim' : moment === 'exchange' ? 'exchange' : 'result';
+}
+
+/**
+ * The footnotes under a line, for the place they were worked out for: the
+ * bubble, or a sheet's line. A hand's name in a note opens its card, like the
+ * name in the line above.
+ */
+export function CoachNotes({ coach, lesson, where }: { coach: CoachState; lesson: Lesson | null; where: Lesson['where'] }) {
+  const { open } = useContext(ActionsContext);
+  if (!lesson || lesson.where !== where || lesson.notes.length === 0 || lesson.key !== lessonKey(coach)) return null;
+  const origin = originOf(coach.moment, where);
+  return (
+    <p className="gloss">
+      {lesson.notes.map((n, i) => {
+        const hand = n.hand;
+        return (
+          <Fragment key={n.key}>
+            {i > 0 && ' · '}
+            <span data-note={n.key}>
+              {hand ? (
+                <b>
+                  <TapWord className="term hand" onTap={() => open({ kind: 'hand', ref: hand, origin })}>
+                    {n.label}
+                  </TapWord>
+                </b>
+              ) : (
+                n.label && <b>{n.label}</b>
+              )}
+              {n.label ? `: ${n.text}` : n.text}
+            </span>
+          </Fragment>
+        );
+      })}
+    </p>
+  );
 }
 
 /**
@@ -159,59 +244,41 @@ function plainText(say: readonly CoachSegment[]): string {
  *
  * `plan` is the one-line status ("Windy Chows · 3 tiles to go"), a button that
  * opens the plan's card; `say` is one or two sentences with a single bold
- * action, mirrored by the primary button below. For a new player, the first
- * time a word like "pung" appears it gets a footnote; after that it is only
- * underlined, and a tap explains it.
+ * action, mirrored by the primary button below. Under it, the first time this
+ * visit a round, a hand, a rule or a word comes up, a footnote explains it
+ * (`useLesson`); after that a word is only underlined, and a tap explains it.
  */
 export const Coach = memo(function Coach({
   plan,
   target = null,
   say,
-  stage = 'solid',
+  coach = null,
+  lesson = null,
   planInStrip = false,
 }: {
   plan?: string | null;
   /** the plan's hand, for the plan line's card */
   target?: CoachTarget | null;
   say: readonly CoachSegment[];
-  stage?: CoachStage;
+  /** the tutor's state the footnotes were worked out for */
+  coach?: CoachState | null;
+  /** the footnotes, from `useLesson` */
+  lesson?: Lesson | null;
   /** the plan strip shows the plan line, so the bubble keeps it only where the strip isn't drawn */
   planInStrip?: boolean;
 }) {
   const { open } = useContext(ActionsContext);
   const text = say.map((s) => s.text).join('');
-  const plain = plainText(say);
   const [expanded, setExpanded] = useState(false);
   const [clipped, setClipped] = useState(false);
   const bodyRef = useRef<HTMLParagraphElement>(null);
-
-  // Footnotes: the first two words in this text that this player has not been
-  // told about yet. Computed when the text changes, then those words count as told.
-  const teach = stage === 'new' || stage === 'first_hand';
-  const seen = useRef<Set<Term>>(new Set());
-  // Remembered per text, so re-running the effect (StrictMode, a re-render) gives
-  // the same footnotes rather than moving on to the next unseen words.
-  const decided = useRef<Map<string, Term[]>>(new Map());
-  const [notes, setNotes] = useState<Term[]>([]);
-  useEffect(() => {
-    if (!teach) return;
-    let fresh = decided.current.get(plain);
-    if (!fresh) {
-      fresh = termsIn(plain)
-        .filter((t) => !seen.current.has(t))
-        .slice(0, 2);
-      for (const t of fresh) seen.current.add(t);
-      decided.current.set(plain, fresh);
-    }
-    setNotes(fresh);
-  }, [plain, teach]);
 
   // Is the clamp actually hiding anything? Only then show the "more" affordance.
   useEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
     setClipped(!expanded && el.scrollHeight > el.clientHeight + 1);
-  }, [text, expanded, notes]);
+  }, [text, expanded, lesson]);
 
   if ((!plan || planInStrip) && say.length === 0) return null;
   return (
@@ -243,16 +310,7 @@ export const Coach = memo(function Coach({
             <Segments say={say} origin="table" />
           </p>
         )}
-        {teach && notes.length > 0 && (
-          <p className="gloss">
-            {notes.map((t, i) => (
-              <span key={t}>
-                {i > 0 && ' · '}
-                <b>{GLOSSARY[t].label.toLowerCase()}</b>: {GLOSSARY[t].short}
-              </span>
-            ))}
-          </p>
-        )}
+        {coach && <CoachNotes coach={coach} lesson={lesson} where="bubble" />}
         {clipped && (
           <button type="button" className="more" onClick={() => setExpanded(true)}>
             more

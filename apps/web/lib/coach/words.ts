@@ -79,6 +79,20 @@ export function myDiscardCount(view: Pick<PrivatePlayerView, 'me' | 'events'>): 
   return view.events.filter((e) => e.type === 'discarded' && e.seat === view.me).length;
 }
 
+/** The player's own moves: after one of these, what went before is old news. */
+const MY_MOVES = new Set(['discarded', 'claimed', 'kong']);
+
+/** Whether the player has drawn a flower since their last discard, claim or kong (or since the deal, before their first). */
+export function flowerSinceMyLastMove(view: Pick<PrivatePlayerView, 'me' | 'events'>): boolean {
+  for (let i = view.events.length - 1; i >= 0; i--) {
+    const e = view.events[i]!;
+    if (e.seat !== view.me) continue;
+    if (e.type === 'bonus') return true;
+    if (MY_MOVES.has(e.type)) return false;
+  }
+  return false;
+}
+
 /** One copy, and for a suit tile nothing within two of it in its suit: a tile with no friends. */
 export function isLoner(concealed: readonly TileKind[], kind: TileKind): boolean {
   if (concealed.filter((k) => k === kind).length !== 1) return false;

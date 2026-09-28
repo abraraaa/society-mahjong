@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { countWord, isLoner, isolate, myDiscardCount, orList, planCount, tilesWord, visibleLength, waitList } from './words';
+import { countWord, flowerSinceMyLastMove, isLoner, isolate, myDiscardCount, orList, planCount, tilesWord, visibleLength, waitList } from './words';
 
 describe('the words the tutor counts in', () => {
   it('spells out small numbers and counts tiles, never "away"', () => {
@@ -48,5 +48,28 @@ describe('visible length', () => {
     expect(visibleLength(`${isolate('Sana')} wins`)).toBe(9);
     expect(`${isolate('Sana')} wins`.length).toBe(11);
     expect(visibleLength('')).toBe(0);
+  });
+});
+
+describe('a flower since the player last moved', () => {
+  const ev = (seq: number, type: string, seat: 0 | 1, tile = 'm1' as const) => ({ seq, type, seat, tile });
+  const flower = (...events: ReturnType<typeof ev>[]) => flowerSinceMyLastMove({ me: 0, events });
+
+  it('counts a flower drawn after the last discard, claim or kong', () => {
+    expect(flower(ev(1, 'discarded', 0), ev(2, 'bonus', 0))).toBe(true);
+    expect(flower(ev(1, 'claimed', 0), ev(2, 'bonus', 0), ev(3, 'replacement', 0))).toBe(true);
+    expect(flower(ev(1, 'kong', 0), ev(2, 'bonus', 0))).toBe(true);
+  });
+
+  it('counts a flower from the deal until the first move', () => {
+    expect(flower(ev(1, 'handStarted', 0), ev(2, 'bonus', 0), ev(3, 'discarded', 1))).toBe(true);
+    expect(flower(ev(1, 'bonus', 0), ev(2, 'discarded', 0))).toBe(false);
+  });
+
+  it("doesn't count one that's old news, or someone else's", () => {
+    expect(flower(ev(1, 'bonus', 0), ev(2, 'claimed', 0))).toBe(false);
+    expect(flower(ev(1, 'bonus', 0), ev(2, 'kong', 0))).toBe(false);
+    expect(flower(ev(1, 'discarded', 0), ev(2, 'bonus', 1))).toBe(false);
+    expect(flower()).toBe(false);
   });
 });

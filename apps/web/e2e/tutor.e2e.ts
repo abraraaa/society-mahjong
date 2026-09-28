@@ -2,7 +2,10 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { ALL_TILE_KINDS, isBonusTile, karachi, tileName, type GameProgress } from '@society/engine';
 import { cardClockLine } from '../lib/coach/clock';
 import { howWon, shortOfLine, washoutLine, winnerLine } from '../lib/coach/coach';
-import { titleOf } from '../lib/coach/shape';
+import { GLOSSARY, TERMS } from '../lib/coach/glossary';
+import { roundNote } from '../lib/coach/goal';
+import { noteShapeOf, titleOf } from '../lib/coach/shape';
+import { NOTE_BUDGET, TAUGHT_KEY, noteText, termNote } from '../lib/coach/teach';
 import { LONG_NAME } from '../lib/coach/test-games';
 import type { CoachHandRef, CoachSegment } from '../lib/coach/types';
 import { SAY_BUDGET, textOf, visibleLength } from '../lib/coach/words';
@@ -20,11 +23,18 @@ async function strip(page: Page) {
     const s = document.querySelector('.table-stage .plan-strip') as HTMLElement | null;
     const stage = document.querySelector('.table-stage') as HTMLElement;
     const caption = s?.querySelector('.plan-count')?.textContent ?? '';
+    /** How many lines an element takes, by its own line height: null when it isn't there. */
+    const lines = (selector: string) => {
+      const el = document.querySelector(selector) as HTMLElement | null;
+      return el ? { height: el.getBoundingClientRect().height, lineHeight: parseFloat(getComputedStyle(el).lineHeight), text: el.textContent ?? '' } : null;
+    };
     return {
       height: s ? s.getBoundingClientRect().height : null,
       scrolls: stage.scrollHeight - stage.clientHeight,
       toGo: /(\d+) tiles? to go/.exec(caption)?.[1] ?? (caption.includes('complete') ? '0' : null),
       faded: s ? s.querySelectorAll('.tile[data-dim="true"]').length : 0,
+      say: lines('.table-stage .coach .say'),
+      gloss: lines('.table-stage .coach .gloss'),
     };
   });
 }
@@ -32,8 +42,9 @@ async function strip(page: Page) {
 for (const [width, height] of [
   [390, 844],
   [393, 660],
+  [375, 812],
 ] as const) {
-  test(`(t) the plan strip keeps its height and its count at ${width}x${height}`, async ({ page }) => {
+  test(`(t) the plan strip keeps its height and its count, and the bubble its lines, at ${width}x${height}`, async ({ page }) => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(String(e)));
     await page.setViewportSize({ width, height });
@@ -48,6 +59,9 @@ for (const [width, height] of [
       expect(s.scrolls).toBeLessThanOrEqual(0);
       if (s.height !== null) heights.add(Math.round(s.height));
       if (s.toGo !== null) expect(s.faded).toBe(Number(s.toGo));
+      // The tip keeps to three lines, and its footnotes to two.
+      if (s.say) expect(s.say.height, `"${s.say.text}" at ${width}px`).toBeLessThanOrEqual(3 * s.say.lineHeight + 1);
+      if (s.gloss) expect(s.gloss.height, `"${s.gloss.text}" at ${width}px`).toBeLessThanOrEqual(2 * s.gloss.lineHeight + 1);
       const discard = page.locator('.table-stage .action-row .btn-primary:not([disabled])').first();
       const pass = page.getByRole('button', { name: 'Pass', exact: true });
       if (await pass.isVisible()) await pass.click();
@@ -148,7 +162,76 @@ async function measure(page: Page, parts: readonly Part[]): Promise<{ height: nu
   }, parts);
 }
 
-const named = (title: string): CoachSegment => ({ text: title, hand: { patternId: '', title, shape: '', whose: 'example', layout: [] } satisfies CoachHandRef });
+/** A footnote as `CoachNotes` (components/coach.tsx) renders it: a bold label, a hand's name in it tappable, then its text. */
+interface NotePart {
+  readonly label?: string;
+  readonly hand?: boolean;
+  readonly text: string;
+}
+
+/** Puts `notes` under the bubble in place of its footnotes (or where they'd go), measures them, and puts the bubble back. */
+async function measureNotes(page: Page, notes: readonly NotePart[]): Promise<{ height: number; lineHeight: number; text: string }> {
+  return page.evaluate((notes) => {
+    const body = document.querySelector('.table-stage .coach .body') as HTMLElement;
+    let gloss = body.querySelector('.gloss') as HTMLElement | null;
+    const made = !gloss;
+    if (!gloss) {
+      gloss = document.createElement('p');
+      gloss.className = 'gloss';
+      body.querySelector('.say')!.after(gloss);
+    }
+    const before = [...gloss.childNodes];
+    const nodes: Node[] = [];
+    notes.forEach((n, i) => {
+      if (i > 0) nodes.push(document.createTextNode(' · '));
+      const span = document.createElement('span');
+      if (n.label) {
+        const b = document.createElement('b');
+        if (n.hand) {
+          const name = document.createElement('span');
+          name.className = 'term hand';
+          name.setAttribute('role', 'button');
+          name.tabIndex = 0;
+          name.textContent = n.label;
+          b.append(name);
+        } else b.textContent = n.label;
+        span.append(b, `: ${n.text}`);
+      } else span.append(n.text);
+      nodes.push(span);
+    });
+    gloss.replaceChildren(...nodes);
+    const out = { height: gloss.getBoundingClientRect().height, lineHeight: parseFloat(getComputedStyle(gloss).lineHeight), text: gloss.textContent ?? '' };
+    if (made) gloss.remove();
+    else gloss.replaceChildren(...before);
+    return out;
+  }, notes);
+}
+
+/** Every footnote the tutor can give: the rounds', the flowers', every dealt hand's, and every word's. */
+function everyNote(): NotePart[] {
+  const hands = rounds.flatMap((progress) => {
+    const spec = karachi.handSpec(progress);
+    return [...new Set(spec.patterns.map(titleOf))].map((title) => ({ label: title, hand: true, text: noteShapeOf(title, spec.patterns) }));
+  });
+  const kinds = ['goulash', 'honour', 'noHonour', 'big'].map((k) => roundNote(k)!);
+  const words = TERMS.map(termNote).map((n) => ({ label: n.label!, text: n.text }));
+  return [...kinds, { label: 'flowers', text: GLOSSARY.bonus.short }, ...hands, ...words];
+}
+
+/** The longest two footnotes that fit the budget together. */
+function longestPair(): NotePart[] {
+  const all = everyNote();
+  let best: NotePart[] = [];
+  let bestLength = 0;
+  for (const a of all)
+    for (const b of all) {
+      const length = visibleLength(`${noteText(a)} · ${noteText(b)}`);
+      if (a !== b && length <= NOTE_BUDGET && length > bestLength) [best, bestLength] = [[a, b], length];
+    }
+  return best;
+}
+
+const named = (title: string): CoachSegment => ({ text: title, hand: { patternId: '', title, shape: '', whose: 'example', layout: [], note: '' } satisfies CoachHandRef });
 const shortOf = (away: number, title: string): CoachSegment[] => shortOfLine(away, named(title)).map((p) => (typeof p === 'string' ? { text: p } : p));
 const rounds: GameProgress[] = ['E', 'S', 'W', 'N'].flatMap((w, i) => [0, 1].map((h) => ({ roundWind: w as 'E', roundIndex: i, handInRound: h, handIndex: 0 })));
 
@@ -213,6 +296,15 @@ for (const [width, height] of [
     for (const parts of cases) {
       const m = await measure(page, parts);
       expect(m.height, `"${m.text}" (${visibleLength(m.text)}) at ${width}px`).toBeLessThanOrEqual(3 * m.lineHeight + 1);
+    }
+
+    // The footnotes under it keep to two lines: the longest hand's footnote, and the longest two that fit together.
+    const east = karachi.handSpec(rounds[1]!);
+    const longest: NotePart = { label: 'Pung + 5 Honours', hand: true, text: noteShapeOf('Pung + 5 Honours', east.patterns) };
+    expect(visibleLength(noteText(longest))).toBe(NOTE_BUDGET);
+    for (const notes of [[longest], longestPair()]) {
+      const m = await measureNotes(page, notes);
+      expect(m.height, `"${m.text}" (${visibleLength(m.text)}) at ${width}px`).toBeLessThanOrEqual(2 * m.lineHeight + 1);
     }
 
     // And the page's own tappable words are those spans: a button can't wrap, and drawn as buttons the fourth case above takes four lines.
@@ -414,5 +506,127 @@ test('(t-claim) on the bots, a card or a word opened over a claim holds its coun
     todo.map((t) => t.has),
     'a timed claim whose line had a hand name, and then one with a word',
   ).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+/** Whether React has hydrated the element: it tags the nodes it owns. */
+const hydrated = (selector: string) => (page: Page) => page.evaluate((s) => Object.keys(document.querySelector(s) ?? {}).some((k) => k.startsWith('__react')), selector);
+
+test("(t-first) the first bubble's footnotes come in the page's HTML, and hydration leaves them where they are", async ({ page }) => {
+  await stayLocal(page);
+  // A first visit: nothing taught, so the server's notes are the notes.
+  const html = await (await page.request.get('/play/solo')).text();
+  expect(html).toContain('data-note="round:goulash"');
+
+  // Hold the scripts back until the page has been seen as the server sent it, before React takes it over. Only the
+  // scripts: the stylesheet has to be there for the bubble's height to mean anything.
+  // (Routing a request turns the page's cache off, so a reload fetches them again.)
+  let holding = true;
+  const held: (() => void)[] = [];
+  await page.route('**/_next/static/chunks/*.js', async (route) => {
+    if (holding) await new Promise<void>((go) => held.push(go));
+    await route.continue();
+  });
+  const coach = '.table-stage .coach';
+  const note = page.locator(`${coach} [data-note="round:goulash"]`);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  /** The bubble's height as the server sent it, and a second after React has taken it over. */
+  const heights = async () => {
+    await page.waitForFunction(() => [...document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')].every((l) => l.sheet !== null));
+    expect(await hydrated(coach)(page), 'measured before hydration').toBe(false);
+    await expect(note).toBeVisible();
+    const before = await page.locator(coach).evaluate((e) => e.getBoundingClientRect().height);
+    holding = false;
+    for (const go of held.splice(0)) go();
+    await expect.poll(() => hydrated(coach)(page), { timeout: 20_000 }).toBe(true);
+    await page.waitForTimeout(1_000);
+    return { before, after: await page.locator(coach).evaluate((e) => e.getBoundingClientRect().height) };
+  };
+  await page.goto('/play/solo', { waitUntil: 'domcontentloaded' });
+  const first = await heights();
+  expect(first.after).toBe(first.before);
+  await expect(note).toBeVisible();
+
+  // And the page remembers it taught them, the goulash's own footnote with the round's.
+  const taught = await page.evaluate((key) => JSON.parse(sessionStorage.getItem(key) ?? '[]') as string[], TAUGHT_KEY);
+  expect(taught).toEqual(expect.arrayContaining(['round:goulash', 'hand:Goulash']));
+
+  // A reload in the same tab: the server can't know what this tab was taught, so the first bubble has its notes
+  // again, and hydration keeps them rather than taking them away under the player's eyes.
+  holding = true;
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const again = await heights();
+  expect(again.after).toBe(again.before);
+  await expect(note).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+/** The bubble on the player's turn: the words its tip makes tappable, and the footnotes under it. */
+function bubbleWords(page: Page) {
+  return page.evaluate(() => ({
+    terms: [...document.querySelectorAll('.table-stage .coach .say .term[data-term]')].map((e) => e.getAttribute('data-term')!),
+    notes: [...document.querySelectorAll('.table-stage .coach .gloss [data-note]')].map((e) => e.getAttribute('data-note')!),
+  }));
+}
+
+test('(t-first) a word is explained once a page, even where the page can’t keep what it taught', async ({ page }) => {
+  test.setTimeout(240_000);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await stayLocal(page);
+  // A private window, or blocked site data: the tutor's store throws, and nothing else's does.
+  await page.addInitScript((key) => {
+    const { getItem, setItem } = Storage.prototype;
+    Storage.prototype.getItem = function (k: string) {
+      if (k === key) throw new Error('blocked');
+      return getItem.call(this, k);
+    };
+    Storage.prototype.setItem = function (k: string, v: string) {
+      if (k === key) throw new Error('blocked');
+      return setItem.call(this, k, v);
+    };
+  }, TAUGHT_KEY);
+  await page.clock.install();
+  const stage = page.locator('.table-stage');
+
+  // The deal is random per visit: up to three visits, until a word explained on one turn comes up again on a later one.
+  let recurred = 0;
+  for (let visit = 0; visit < 3 && recurred === 0; visit++) {
+    await page.clock.resume();
+    await page.goto('/play/solo');
+    await expect(stage.locator('.coach [data-note="round:goulash"]')).toBeVisible();
+    const first = stage.locator('.hand-tray button.tile').first();
+    await tapUntilLifted(first);
+    await first.click();
+    await pauseClock(page);
+    await page.clock.runFor(SETTLE_MS + 100);
+
+    // Each page teaches afresh: what it has explained so far, by the turn it explained it on.
+    const explained = new Map<string, number>();
+    for (let turn = 0, i = 0; turn < 12; i++) {
+      expect(i, 'the turns come').toBeLessThan(800);
+      const s = await scene(page);
+      if (s.over) break;
+      if (s.discard) {
+        const b = await bubbleWords(page);
+        // The first bubble's round note taught the goulash with it, so the plan's own footnote never follows.
+        expect(b.notes, `turn ${turn}`).not.toContain('hand:Goulash');
+        for (const key of b.notes) {
+          expect(explained.has(key), `${key} explained twice on one page`).toBe(false);
+          explained.set(key, turn);
+        }
+        recurred += b.terms.filter((t) => (explained.get(`term:${t}`) ?? turn) < turn).length;
+        turn++;
+        await stage
+          .locator('.action-row')
+          .getByRole('button', { name: /^Discard / })
+          .click();
+      } else if (s.pass) await page.locator('.sheet').getByRole('button', { name: 'Pass', exact: true }).click();
+      else if (s.win) await stage.locator('.action-row').getByRole('button', { name: 'Mahjong!' }).click();
+      await page.clock.runFor(500);
+    }
+  }
+  expect(recurred, 'a word explained on one turn came up again on a later one, unexplained').toBeGreaterThan(0);
   expect(errors).toEqual([]);
 });

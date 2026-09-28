@@ -17,6 +17,7 @@ import {
 } from '@society/engine';
 import { analyseFor, coachFor } from './coach';
 import { cardCaption, cardTileSize, exampleRef, handsThisRound, resolveHandRef, winnerRef, yoursRef } from './hand-card';
+import { noteShapeOf } from './shape';
 import { heldOf, stripGroups } from './strip';
 import { NAMES, ROUNDS, playHand } from './test-games';
 import type { CoachHandRef, CoachSegment, CoachState } from './types';
@@ -221,7 +222,15 @@ describe('handsThisRound', () => {
 });
 
 describe('resolveHandRef', () => {
-  const ref = (patternId: string, whose: CoachHandRef['whose'], away: number, title = 'Goulash'): CoachHandRef => ({ patternId, title, shape: '', whose, away, layout: [] });
+  const ref = (patternId: string, whose: CoachHandRef['whose'], away: number, title = 'Goulash'): CoachHandRef => ({
+    patternId,
+    title,
+    shape: '',
+    whose,
+    away,
+    layout: [],
+    note: '',
+  });
   /** Enough of the tutor's state for the card: where its `yours` refs live. */
   const coach = (refs: { target?: CoachHandRef; runnerUp?: CoachHandRef; hands?: CoachHandRef[]; say?: CoachSegment[] }): CoachState =>
     ({
@@ -278,6 +287,7 @@ describe('the card', () => {
       shape: '',
       whose,
       layout,
+      note: '',
       ...extra,
     });
     expect(cardCaption(card('yours', { away: 4 }))?.text).toBe('The bright tiles are yours; the faded ones you still need. Four tiles to go.');
@@ -290,5 +300,34 @@ describe('the card', () => {
     expect(cardCaption(card('example', { owner: 'Sana' }))?.text).toBe('One way it can look.');
     expect(cardCaption(card('example', { layout: [] }))).toBeNull();
     expect(heldOf(stripGroups(layout))).toEqual({ held: 14, total: 14 });
+  });
+});
+
+describe("every hand's footnote", () => {
+  it('rides on every card the tutor can open, the same line wherever the hand is named', { timeout: 120_000 }, () => {
+    const empty: HandAnalysis = { candidates: [], keep: [], spare: [], bestDiscard: null, ratings: [] };
+    let seen = 0;
+    const check = (ref: CoachHandRef, patterns: readonly Pattern[], where: string) => {
+      expect(ref.note, `${where}: ${ref.title}`).toBe(noteShapeOf(ref.title, patterns));
+      expect(ref.note, `${where}: ${ref.title}`).not.toBe('');
+      seen++;
+    };
+    for (const { progress, spec } of DEALT) {
+      const c = ctx('S', progress.roundWind);
+      for (const p of spec.patterns) check(exampleRef(p, karachi, c)!, spec.patterns, 'example');
+      for (const ref of handsThisRound(spec, empty, karachi, c)) check(ref, spec.patterns, 'hands this round');
+      // The player's own lay-outs, the hand after a claim, and winners, over seeded play.
+      playHand({
+        seed: `notes-${progress.roundWind}-${progress.handInRound}`,
+        progress,
+        onView: (view) => {
+          const coach = coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: 'new', names: NAMES });
+          for (const ref of [coach.target?.hand, coach.runnerUp?.hand, ...coach.goal.hands, ...coach.say.map((x) => x.hand), coach.outcome?.hand?.ref]) {
+            if (ref) check(ref, spec.patterns, `seq ${view.seq} ${coach.moment}`);
+          }
+        },
+      });
+    }
+    expect(seen).toBeGreaterThan(1000);
   });
 });

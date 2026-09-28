@@ -20,11 +20,12 @@ import {
   type Seat,
   type TileKind,
 } from '@society/engine';
-import { goalFor } from './goal';
+import { GLOSSARY } from './glossary';
+import { goalFor, roundNote } from './goal';
 import { handsThisRound, winnerRef, yoursRef } from './hand-card';
 import { shapeOf, titleOf } from './shape';
-import { SAY_BUDGET, countWord, isLoner, isolate, liveCopies, myDiscardCount, planCount, textOf, tilesWord, visibleLength, waitList } from './words';
-import type { CoachAction, CoachGoal, CoachHandRef, CoachOutcome, CoachSegment, CoachStage, CoachState, CoachTarget } from './types';
+import { SAY_BUDGET, countWord, flowerSinceMyLastMove, isLoner, isolate, liveCopies, myDiscardCount, planCount, textOf, tilesWord, visibleLength, waitList } from './words';
+import type { CoachAction, CoachGoal, CoachHandRef, CoachOutcome, CoachSegment, CoachStage, CoachState, CoachTarget, CoachTeach } from './types';
 
 /**
  * The coach: everything the tutor says about a hand, derived from the engine's
@@ -146,7 +147,7 @@ function line(...parts: readonly Part[]): CoachSegment[] {
 /** A winning hand the player would hold, told as theirs rather than as someone's win. An example it fell back to stays an example. */
 function asMine(ref: CoachHandRef, whose: 'yours' | 'ifClaimed'): CoachHandRef {
   if (ref.whose !== 'winner') return ref;
-  return { patternId: ref.patternId, title: ref.title, shape: ref.shape, whose, away: 0, layout: ref.layout };
+  return { patternId: ref.patternId, title: ref.title, shape: ref.shape, whose, away: 0, layout: ref.layout, note: ref.note };
 }
 
 interface Reason {
@@ -285,7 +286,21 @@ function fitting(attempts: readonly CoachSegment[][]): CoachSegment[] {
   return attempts.find((say) => visibleLength(textOf(say)) <= SAY_BUDGET) ?? attempts[attempts.length - 1]!;
 }
 
+/**
+ * The footnote for a flower drawn since the player last moved: what it is, and
+ * why they drew again. The glossary's own footnote for "flowers" is these
+ * words, so it's taught with it.
+ */
+const FLOWERS_NOTE: CoachTeach = { key: 'rule:flowers', place: 'note', label: 'flowers', text: GLOSSARY.bonus.short, also: ['term:bonus'] };
+
 export function coachFor(input: CoachInput): CoachState {
+  const state = adviceFor(input);
+  // Wherever the tutor has something to say, a flower drawn since the player's last move can be explained under it.
+  if (state.say.length === 0 || !flowerSinceMyLastMove(input.view)) return state;
+  return { ...state, teach: [...state.teach, FLOWERS_NOTE] };
+}
+
+function adviceFor(input: CoachInput): CoachState {
   const { view, ruleset, analysis, stage, names } = input;
   const spec = ruleset.handSpec(view.progress);
   const ctx = ctxOf(view);
@@ -294,6 +309,11 @@ export function coachFor(input: CoachInput): CoachState {
   const runnerUp = targetOf(analysis.candidates[1], spec.patterns, ruleset, ctx);
   const plan = planLine(target);
   const quiet = stage === 'solid';
+  // The round's footnote: a note on the player's first turn of the hand, or said on the bubble that gives the aim
+  // while someone else deals. It says what the round's everyday hand is, so that hand's own footnote goes with it.
+  const round = roundNote(spec.kind);
+  const roundTeach = (place: CoachTeach['place']): CoachTeach[] =>
+    round ? [{ key: `round:${spec.kind}`, place, label: round.label, text: round.text, also: goal.generalTitles.map((t) => `hand:${t}`) }] : [];
 
   const base = {
     stage,
@@ -302,6 +322,8 @@ export function coachFor(input: CoachInput): CoachState {
     runnerUp,
     plan,
     outcome: null,
+    teach: [] as readonly CoachTeach[],
+    at: { hand: view.progress.handIndex, seq: view.seq },
   } as const;
 
   // --- hand end: the debrief, where a beginner learns most -------------------
@@ -313,9 +335,12 @@ export function coachFor(input: CoachInput): CoachState {
       fitting(target && target.away > 0 ? [...[ended, ...shorter].map((words) => line(...words, ...shortOfLine(target.away, named(target.hand)))), ended] : [ended]);
     let say: CoachSegment[];
     let reason: string | null = null;
+    let teach: readonly CoachTeach[] = [];
     if (outcome?.type === 'win' && outcome.winnerIsMe) {
       say = outcome.hand ? line("Mahjong! That's ", named(outcome.hand.ref), `: ${outcome.hand.shape}.`) : [seg("Mahjong! That's a complete hand.")];
       reason = 'you completed the hand';
+      // E1 says the hand's shape itself, so its footnote would only say it again.
+      if (outcome.hand) teach = [{ key: `hand:${outcome.hand.title}`, place: 'said', hand: outcome.hand.ref, text: outcome.hand.ref.note }];
     } else if (outcome?.type === 'win') {
       const result = view.result?.type === 'win' ? view.result : null;
       const discarder = result?.discarder;
@@ -329,7 +354,7 @@ export function coachFor(input: CoachInput): CoachState {
       say = withShort(washoutLine(), washoutLine(true));
       reason = 'the wall ran dry';
     }
-    return { ...base, moment: 'handEnd', action: { kind: 'wait' }, say, reason, highlight: [], outcome };
+    return { ...base, moment: 'handEnd', action: { kind: 'wait' }, say, reason, highlight: [], outcome, teach };
   }
 
   // --- the West exchange -----------------------------------------------------
@@ -403,6 +428,7 @@ export function coachFor(input: CoachInput): CoachState {
   // discarded once, not until anyone has, or three hands in four it flashed up
   // for as long as the dealer took to throw.
   const beforeMyFirst = myDiscardCount(view) === 0 && view.players[view.me].melds.length === 0;
+  const firstTurn = myTurn && beforeMyFirst ? roundTeach('note') : [];
 
   if (myTurn && view.legal.win) {
     const ref = myWinRef(input, handOf(view), 'yours');
@@ -413,6 +439,7 @@ export function coachFor(input: CoachInput): CoachState {
       say: ref ? line("That's ", named(ref), ', complete. Call ', act('Mahjong!')) : [seg("That's a complete hand. Call "), act('Mahjong!')],
       reason: 'the hand is complete',
       highlight: [],
+      teach: firstTurn,
     };
   }
 
@@ -424,24 +451,24 @@ export function coachFor(input: CoachInput): CoachState {
     if (beforeMyFirst && !quiet) {
       // Someone else is dealing: the goal gets the bubble, and a plan for a hand not yet played would say nothing.
       const withWatch = goal.watchOut ? [seg(goal.aim), seg(` ${goal.watchOut}`)] : [seg(goal.aim)];
-      return { ...base, moment: 'handStart', plan: null, action, say: fitting([withWatch, [seg(goal.aim)]]), reason: goal.watchOut, highlight };
+      return { ...base, moment: 'handStart', plan: null, action, say: fitting([withWatch, [seg(goal.aim)]]), reason: goal.watchOut, highlight, teach: roundTeach('said') };
     }
     return { ...base, moment: 'waiting', action, say: [], reason: null, highlight: [] };
   }
 
   const moment = beforeMyFirst ? 'handStart' : 'turn';
   if (quiet || !target) {
-    return { ...base, moment, action, say: [], reason: null, highlight };
+    return { ...base, moment, action, say: [], reason: null, highlight, teach: firstTurn };
   }
 
   if (action.kind !== 'discard') {
-    return { ...base, moment, action, say: [seg("Every tile's pulling its weight. Pick the one you'd miss least.")], reason: null, highlight };
+    return { ...base, moment, action, say: [seg("Every tile's pulling its weight. Pick the one you'd miss least.")], reason: null, highlight, teach: firstTurn };
   }
   const reason = discardReason(analysis, goal, target, view.concealed, action.tile, myDiscardCount(view));
   const lead = act(`Discard ${tileName(action.tile)}`);
   const progress = progressAfter(input, spec, target, action.tile);
   const say = fitting([line(lead, ': ', ...reason.full, `.${progress}`), line(lead, ': ', ...reason.short, `.${progress}`), line(lead, ': ', ...reason.short, '.')]);
-  return { ...base, moment, action, say, reason: textOf(line(...reason.full)), highlight };
+  return { ...base, moment, action, say, reason: textOf(line(...reason.full)), highlight, teach: firstTurn };
 }
 
 /** The tile that was just thrown, from the river, for the debrief. */
