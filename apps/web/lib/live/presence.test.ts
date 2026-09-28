@@ -45,6 +45,31 @@ function snap(seats: PublicSeats, over: Partial<GameSnapshot> = {}): GameSnapsho
 const BILAL_LEFT: PublicSeats = [AMNA, { kind: 'bot', name: 'Bilal' }, SANA, OMAR];
 const LEFT_BILAL = `${I('Bilal')}'s left the table, so a bot's playing their seat for now.`;
 
+describe('tableNews: someone takes a bot’s seat', () => {
+  /** Bilal's seat after he got up: a bot called Hamza keeps it for him. */
+  const KEPT: PublicSeats = [AMNA, { kind: 'bot', name: 'Hamza', keptFor: 'Bilal' }, SANA, OMAR];
+
+  it('says someone is back in their seat when they sit back down in the one kept for them', () => {
+    expect(tableNews(snap(KEPT), snap(FOUR, { version: 7 }))).toBe(`${I('Bilal')}'s back in their seat.`);
+  });
+
+  it('says someone has taken over, and from which bot, for any other bot’s seat', () => {
+    expect(tableNews(snap(FOUR), snap([AMNA, BILAL, ZARA, OMAR], { version: 6 }))).toBe(`${I('Zara')}'s taken over the seat ${I('Sana')} was playing.`);
+    // A seat kept for Bilal, taken by Zara: she's taken it over, not come back to it.
+    expect(tableNews(snap(KEPT), snap([AMNA, ZARA, SANA, OMAR], { version: 7 }))).toBe(`${I('Zara')}'s taken over the seat ${I('Hamza')} was playing.`);
+  });
+
+  it('never tells the one who took the seat about it', () => {
+    // Zara reading: she wasn't seated, and now she has Sana's seat.
+    expect(tableNews(snap(FOUR, { me: null }), snap([AMNA, BILAL, ZARA, OMAR], { me: 2, version: 6 }))).toBeNull();
+  });
+
+  it('comes with the rest of the news in seat order', () => {
+    const next: PublicSeats = [AMNA, { kind: 'bot', name: 'Hamza', keptFor: 'Bilal' }, ZARA, OMAR];
+    expect(tableNews(snap(FOUR), snap(next, { version: 8 }))).toBe(`${LEFT_BILAL} ${I('Zara')}'s taken over the seat ${I('Sana')} was playing.`);
+  });
+});
+
 describe('tableNews: someone leaves', () => {
   it('says who left, by the name they had, when a person’s seat turns into a bot', () => {
     expect(tableNews(snap(FOUR), snap(BILAL_LEFT, { version: 6 }))).toBe(LEFT_BILAL);
@@ -73,8 +98,8 @@ describe('tableNews: someone leaves', () => {
     expect(tableNews(snap(FOUR), snap([AMNA, BILAL, OMAR, SANA], { version: 6 }))).toBeNull();
     expect(tableNews(snap(FOUR), snap([AMNA, ZARA, SANA, OMAR], { version: 6 }))).toBeNull();
     expect(tableNews(snap(FOUR), snap([AMNA, null, SANA, OMAR], { version: 6 }))).toBeNull();
-    // A bot's seat taken by a person isn't a leave either.
-    expect(tableNews(snap(FOUR), snap([AMNA, BILAL, ZARA, OMAR], { version: 6 }))).toBeNull();
+    // A bot's seat taken by a person isn't a leave either (it's news of its own, below).
+    expect(tableNews(snap(FOUR), snap([AMNA, BILAL, ZARA, OMAR], { version: 6 }))).not.toContain('left the table');
   });
 
   it('never tells the reader about their own seat, before or after', () => {

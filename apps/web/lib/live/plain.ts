@@ -8,16 +8,17 @@
 const MOVED_ON = 'The table moved on before that got there. Have a look, and go again if you still can.';
 const TOO_LATE = 'Too late for that one. The table had already moved on.';
 const NOT_ALLOWED = "That move isn't open to you right now. Have another look at your tiles.";
-const UNDER_WAY = "This game's already under way. When it's over, open this link again and you can take a seat before the next deal.";
+const UNDER_WAY = "All four seats are taken in this game. When it's over, open the invite link again and you can play the next one.";
 const NO_TABLE = "There's no table with that code. Check it with whoever sent you the link.";
-const NOT_SEATED = "You're not playing in this game. When it's over, open the invite link again to take a seat for the next one.";
+const NOT_SEATED = "You're not in this game. Open the invite link again: if a bot's playing a seat, you can take over from it.";
 const FULL = 'All four seats are taken. If someone gets up, try again, or host a table of your own.';
 const SEAT_TAKEN = 'Someone took that seat just as you did. Try again for another.';
-const CLOSED = 'This table has closed. Ask the host for a new link.';
+const NOT_FREE = "That seat isn't free. Open the invite link again to see where you can sit.";
+const CLOSED = "This table's been quiet for a while, so it's closed to new players. Ask someone who plays at this table to open the link, then try again.";
 const NO_GAME = "We can't find that game. Check the link with whoever sent it.";
 const GAME_OVER = "This game's finished. Head back to the room for the next one.";
-const BOT_SEAT = "A bot's playing your seat for the rest of this game. When it's over, open the invite link again to sit back in.";
-const HOST_ONLY = 'Only the host can start the game.';
+const BOT_SEAT = "A bot's playing your seat now. Open the invite link again to sit back down.";
+const HOST_ONLY = 'Only the host can start the game. Give them a nudge.';
 const HOST_ENDS = "Only the host can end the game. Ask them if everyone's had enough.";
 const HOST_HANDS_OVER = "Only the host can let a bot play for someone. Ask them if a friend's stepped away.";
 const SOMEONE_ELSE = 'You can only let a bot play for someone else. Tap their name at the top of the table.';
@@ -47,6 +48,7 @@ const BY_MESSAGE = new Map<string, string>(
     'lost the race': MOVED_ON,
     'the table changed under you; try again': MOVED_ON,
     'that seat was just taken; try again': SEAT_TAKEN,
+    'that seat is taken': SEAT_TAKEN,
     // The moment passed before the tap arrived.
     'not your turn': TOO_LATE,
     'no discard to claim': TOO_LATE,
@@ -80,6 +82,9 @@ const BY_MESSAGE = new Map<string, string>(
     'a game is in progress': IN_PROGRESS,
     'the seats changed; start again': SEATS_CHANGED,
     'the table has started; leave it from the game': LEAVE_FROM_TABLE,
+    // Taking a bot's seat over from the take-over screen, when the offer has gone.
+    'that seat is kept for someone': NOT_FREE,
+    'that is not a seat to sit in': NOT_FREE,
     // Room set-up the app never sends: only a hand-made request meets these.
     'rooms play karachi rules': NO_SETUP,
     'that is not a room request': NO_SETUP,

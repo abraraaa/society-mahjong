@@ -1,6 +1,6 @@
 'use client';
 import type { REALTIME_SUBSCRIBE_STATES, RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
-import type { GameSnapshot } from './snapshot';
+import type { GameSnapshot, RoomSnapshot } from './snapshot';
 import type { ClientAction } from './types';
 
 export class ApiError extends Error {
@@ -44,16 +44,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   }
 }
 
-export interface RoomSnapshot {
-  readonly id: string;
-  readonly code: string;
-  readonly rulesetId: string;
-  readonly status: 'lobby' | 'playing' | 'finished';
-  readonly seats: readonly ({ readonly kind: 'human' | 'bot'; readonly name: string } | null)[];
-  readonly me: number | null;
-  readonly isHost: boolean;
-  readonly gameId: string | null;
-}
+export type { RoomSnapshot };
 
 export const api = {
   createRoom: (rulesetId = 'karachi') => call<{ id: string; code: string }>('/api/rooms', { method: 'POST', body: JSON.stringify({ rulesetId }) }),
@@ -69,9 +60,12 @@ export const api = {
   end: (gameId: string) => call<GameSnapshot>(`/api/games/${gameId}/end`, { method: 'POST' }),
   /** "I'm back": the reader's own seat, from the bot playing it for them */
   back: (gameId: string) => call<GameSnapshot>(`/api/games/${gameId}/back`, { method: 'POST' }),
-  /** the host hands someone's seat to a bot; `sawAt` is the server's clock on the table the host was looking at */
-  letBotPlay: (gameId: string, seat: number, sawAt: number) => call<GameSnapshot>(`/api/games/${gameId}/away`, { method: 'POST', body: JSON.stringify({ seat, sawAt }) }),
+  /** the host hands someone's seat to a bot; `sawAt` and `sawVersion` are the server's clock on the table the host was looking at, and its version */
+  letBotPlay: (gameId: string, seat: number, sawAt: number, sawVersion: number) =>
+    call<GameSnapshot>(`/api/games/${gameId}/away`, { method: 'POST', body: JSON.stringify({ seat, sawAt, sawVersion }) }),
   leaveRoom: (code: string) => call<RoomSnapshot>(`/api/rooms/${encodeURIComponent(code)}/leave`, { method: 'POST' }),
+  /** Take over a bot's seat at the game in play (the take-over screen's offer), or, if the game has ended since, join the room. */
+  sit: (code: string, seat: number, name: string) => call<RoomSnapshot>(`/api/rooms/${encodeURIComponent(code)}/sit`, { method: 'POST', body: JSON.stringify({ seat, name }) }),
 };
 
 /** The channel's own news: SUBSCRIBED each time it joins, including every rejoin after a dropped connection, and CLOSED, TIMED_OUT or CHANNEL_ERROR when it goes. */

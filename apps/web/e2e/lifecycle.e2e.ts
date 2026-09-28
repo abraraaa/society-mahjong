@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { finalStandings } from '../lib/live/final';
-import { HOST_LEAVE, endLine, endSheet, waitCopy } from '../lib/live/lifecycle-copy';
+import { HOST_LEAVE, LEAVE, NO_SEAT, endLine, endSheet, takeSeatCopy, waitCopy } from '../lib/live/lifecycle-copy';
 import { plainError } from '../lib/live/plain';
 import type { GameSnapshot } from '../lib/live/snapshot';
 import { fixtures, serve } from './fixtures';
@@ -292,13 +292,14 @@ test.describe('the end of a game', () => {
     expect(t.pageErrors).toEqual([]);
   });
 
-  test('(e) everyone else’s Leave sheet has no end in it', async ({ page }) => {
+  test('(e) everyone else’s Leave sheet has no end in it, and says the link sits them back down', async ({ page }) => {
     const fx = fixtures();
     const t = await openTable(page, { view: () => ok({ ...fx.turn, isHost: false }) });
     await t.stage().getByRole('button', { name: 'Leave' }).click();
     const dialog = page.getByRole('dialog');
-    await expect(dialog.getByRole('heading', { name: 'Leave the table?' })).toBeVisible();
-    await expect(dialog.getByRole('button')).toHaveText(['Leave', 'Stay']);
+    await expect(dialog.getByRole('heading', { name: LEAVE.title })).toBeVisible();
+    await expect(dialog.getByText(LEAVE.body)).toBeVisible();
+    await expect(dialog.getByRole('button')).toHaveText([LEAVE.confirmLabel, LEAVE.cancelLabel]);
     expect(t.pageErrors).toEqual([]);
   });
 
@@ -379,6 +380,69 @@ test.describe('the end of a game', () => {
     const button = page.locator('.sheet').getByRole('button', { name: 'Play again' });
     await expect(button).toBeVisible();
     await expect(button).toBeInViewport({ ratio: 1 });
+    expect(t.pageErrors).toEqual([]);
+  });
+});
+
+test.describe('someone who isn’t seated at a game in play', () => {
+  test('(f) is offered a bot’s seat with its points; one tap takes it, and the table follows', async ({ page }) => {
+    const fx = fixtures();
+    let seated = false;
+    const t = await openTable(
+      page,
+      {
+        view: () => ok(seated ? fx.turn : fx.offer),
+        sit: () => {
+          seated = true;
+          return { status: 200, body: { ...fx.lobbySeated } };
+        },
+      },
+      { seated: false },
+    );
+    const copy = takeSeatCopy(fx.offer.offer!);
+    expect(copy.title).toBe('Take over from \u2068Sana\u2069?');
+    await expect(page.getByRole('heading', { name: copy.title })).toBeVisible();
+    await expect(page.getByText(copy.body)).toBeVisible();
+    expect(copy.body).toContain('(−3,000)');
+    await page.getByRole('button', { name: copy.confirmLabel }).click();
+    await expect(t.stage()).toBeVisible();
+    await expect(t.discard()).toBeVisible();
+    expect(t.count('sit')).toBe(1);
+    expect(t.of('sit')[0]!.sent).toEqual({ seat: 2, name: 'Amna' });
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(f) is offered their own seat back, or the one kept for them, in those words', async ({ page }) => {
+    const fx = fixtures();
+    let which = fx.offerYours;
+    await openTable(page, { view: () => ok(which) }, { seated: false });
+    await expect(page.getByRole('heading', { name: takeSeatCopy(fx.offerYours.offer!).title })).toBeVisible();
+    expect(takeSeatCopy(fx.offerYours.offer!).title).toBe('Sit back down?');
+    await expect(page.getByText(takeSeatCopy(fx.offerYours.offer!).body)).toBeVisible();
+    which = fx.offerKept;
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Take your seat?' })).toBeVisible();
+  });
+
+  test('(f) a seat that goes to someone else first says so, and looks again for another', async ({ page }) => {
+    const fx = fixtures();
+    const t = await openTable(page, { view: () => ok(fx.offer), sit: () => ({ status: 409, body: { error: 'that seat is taken' } }) }, { seated: false });
+    const copy = takeSeatCopy(fx.offer.offer!);
+    await expect(page.getByRole('heading', { name: copy.title })).toBeVisible();
+    const views = t.count('view');
+    await page.getByRole('button', { name: copy.confirmLabel }).click();
+    await expect(page.locator('main').getByRole('alert')).toHaveText(plainError({ status: 409, message: 'that seat is taken' }));
+    await expect.poll(() => t.count('view')).toBeGreaterThan(views);
+    await expect(page.getByRole('button', { name: copy.confirmLabel })).toBeEnabled();
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(f) with no bot’s seat to take, is told every seat is taken, and the way back', async ({ page }) => {
+    const fx = fixtures();
+    const t = await openTable(page, { view: () => ok({ ...fx.offer, offer: null }) }, { seated: false });
+    await expect(page.getByRole('heading', { name: NO_SEAT.heading })).toBeVisible();
+    await expect(page.getByText(NO_SEAT.line)).toBeVisible();
+    await expect(page.getByRole('link', { name: NO_SEAT.link })).toHaveAttribute('href', '/');
     expect(t.pageErrors).toEqual([]);
   });
 });

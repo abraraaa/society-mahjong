@@ -245,9 +245,11 @@ test.describe('bots and people at the table', () => {
     await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect(t.stage().locator('.seat .name').last()).toContainText('Bilal · away');
     expect(t.count('away')).toBe(1);
-    const sent = t.of('away')[0]!.sent as { seat: unknown; sawAt: unknown };
+    const sent = t.of('away')[0]!.sent as { seat: unknown; sawAt: unknown; sawVersion: unknown };
     expect(sent.seat).toBe(1);
     expect(typeof sent.sawAt).toBe('number');
+    // The version of the table the host was looking at: the server judges a tap the host never saw by it (R8).
+    expect(sent.sawVersion).toBe(fx.turn.version);
     expect(t.pageErrors).toEqual([]);
   });
 

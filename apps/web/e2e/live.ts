@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page, type Route, type WebSocketRoute } from '@playwright/test';
-import type { GameSnapshot } from '../lib/live/snapshot';
+import type { GameSnapshot, RoomSnapshot } from '../lib/live/snapshot';
 import type { ClientAction } from '../lib/live/types';
 import { GAME_ID, USER_ID, USER_NAME, serve } from './fixtures';
 
@@ -31,7 +31,7 @@ export interface ActBody {
 }
 
 export interface Call {
-  readonly kind: 'view' | 'act' | 'tick' | 'end' | 'back' | 'away';
+  readonly kind: 'view' | 'act' | 'tick' | 'end' | 'back' | 'away' | 'join' | 'room' | 'start' | 'sit';
   /** 1-based, per kind */
   readonly n: number;
   readonly body: ActBody | null;
@@ -49,6 +49,8 @@ export interface GameRoutes {
   readonly back?: (n: number) => Reply;
   /** the host's "Let a bot play", with what the page sent; a 500 when the test gives none */
   readonly away?: (sent: unknown, n: number) => Reply;
+  /** taking a bot's seat over from the take-over screen (the room's sit route), with what the page sent; a 500 when the test gives none */
+  readonly sit?: (sent: unknown, n: number) => Reply;
 }
 
 const b64url = (s: string) => Buffer.from(s).toString('base64url');
@@ -190,11 +192,11 @@ export async function stayLocal(page: Page): Promise<void> {
 }
 
 /**
- * Open the game page as a seated, signed-in guest whose name is remembered.
- * `clock` installs Playwright's fake clock first, so the test can move time on.
+ * The page as a signed-in guest whose name is remembered, with nothing leaving
+ * the machine: the session cookie, the name, Supabase's Auth answering as that
+ * guest, and Realtime as `realtime`'s Phoenix socket.
  */
-export async function openTable(page: Page, routes: GameRoutes, opts: { holdGameJoins?: boolean; clock?: boolean } = {}): Promise<LiveTable> {
-  const t = new LiveTable(page, routes, opts.holdGameJoins ?? false);
+export async function prepare(page: Page, realtime: FakeRealtime = new FakeRealtime(false)): Promise<FakeRealtime> {
   const context = page.context();
   await stayLocal(page);
   await context.addCookies([{ name: 'sb-127-auth-token', value: sessionCookie(), domain: '127.0.0.1', path: '/' }]);
@@ -204,7 +206,19 @@ export async function openTable(page: Page, routes: GameRoutes, opts: { holdGame
   await page.route(`${SUPABASE_URL}/**`, (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(route.request().url().includes('/auth/v1/user') ? guestUser() : {}) }),
   );
-  await page.routeWebSocket(/127\.0\.0\.1:3499\/realtime/, (ws) => t.realtime.attach(ws));
+  await page.routeWebSocket(/127\.0\.0\.1:3499\/realtime/, (ws) => realtime.attach(ws));
+  return realtime;
+}
+
+/**
+ * Open the game page as a seated, signed-in guest whose name is remembered.
+ * `clock` installs Playwright's fake clock first, so the test can move time on.
+ * `seated: false` is for a guest who isn't seated yet: the page opens on the
+ * take-over screen, or the one saying there's no seat, not the table.
+ */
+export async function openTable(page: Page, routes: GameRoutes, opts: { holdGameJoins?: boolean; clock?: boolean; seated?: boolean } = {}): Promise<LiveTable> {
+  const t = new LiveTable(page, routes, opts.holdGameJoins ?? false);
+  await prepare(page, t.realtime);
 
   const log = (kind: Call['kind'], route: Route, body: ActBody | null, sent?: unknown): Call => {
     const call: Call = { kind, n: t.count(kind) + 1, body, route, ...(sent === undefined ? {} : { sent }) };
@@ -244,10 +258,83 @@ export async function openTable(page: Page, routes: GameRoutes, opts: { holdGame
     if (reply !== 'hold') await answer(route, reply);
   });
 
+  await page.route(`**/api/rooms/${ROOM_CODE}/sit`, async (route) => {
+    const sent = JSON.parse(route.request().postData() ?? 'null') as unknown;
+    const call = log('sit', route, null, sent);
+    const reply = t.routes.sit ? t.routes.sit(sent, call.n) : { status: 500, body: { error: 'something went wrong' } };
+    if (reply !== 'hold') await answer(route, reply);
+  });
+
   if (opts.clock) await page.clock.install();
   await page.goto(`/g/${GAME_ID}`);
-  await expect(t.stage()).toBeVisible();
+  if (opts.seated ?? true) await expect(t.stage()).toBeVisible();
   return t;
+}
+
+/** The room code the lobby tests open. */
+export const ROOM_CODE = 'KHI-4287Q';
+
+export const room = (s: RoomSnapshot): Answer => ({ status: 200, body: s });
+
+/** What the room routes do with a request, when the test gives them: the join (the link opened), the lobby's poll, the host's Start, and taking a seat over. */
+export interface RoomRoutes {
+  readonly join: (n: number) => Reply;
+  /** the lobby's poll; the join's answer when the test gives none */
+  readonly room?: (n: number) => Reply;
+  /** the host's Start; a 500 when the test gives none */
+  readonly start?: (n: number) => Reply;
+  /** taking a bot's seat over from the take-over screen, with what the page sent; a 500 when the test gives none */
+  readonly sit?: (sent: unknown, n: number) => Reply;
+}
+
+export class Lobby {
+  readonly calls: Call[] = [];
+  readonly pageErrors: string[] = [];
+
+  constructor(readonly page: Page) {
+    page.on('pageerror', (e) => this.pageErrors.push(String(e)));
+  }
+
+  of(kind: Call['kind']): Call[] {
+    return this.calls.filter((c) => c.kind === kind);
+  }
+
+  count(kind: Call['kind']): number {
+    return this.of(kind).length;
+  }
+}
+
+/** Open the invite link as a signed-in guest whose name is remembered, with the room routes answered by the test. */
+export async function openLobby(page: Page, routes: RoomRoutes): Promise<Lobby> {
+  const l = new Lobby(page);
+  await prepare(page);
+  const log = (kind: Call['kind'], route: Route, sent?: unknown): Call => {
+    const call: Call = { kind, n: l.count(kind) + 1, body: null, route, ...(sent === undefined ? {} : { sent }) };
+    l.calls.push(call);
+    return call;
+  };
+  await page.route(`**/api/rooms/${ROOM_CODE}/join`, async (route) => {
+    const reply = routes.join(log('join', route).n);
+    if (reply !== 'hold') await answer(route, reply);
+  });
+  await page.route(`**/api/rooms/${ROOM_CODE}`, async (route) => {
+    const n = log('room', route).n;
+    const reply = routes.room ? routes.room(n) : routes.join(1);
+    if (reply !== 'hold') await answer(route, reply);
+  });
+  await page.route(`**/api/rooms/${ROOM_CODE}/start`, async (route) => {
+    const n = log('start', route).n;
+    const reply = routes.start ? routes.start(n) : { status: 500, body: { error: 'something went wrong' } };
+    if (reply !== 'hold') await answer(route, reply);
+  });
+  await page.route(`**/api/rooms/${ROOM_CODE}/sit`, async (route) => {
+    const sent = JSON.parse(route.request().postData() ?? 'null') as unknown;
+    const call = log('sit', route, sent);
+    const reply = routes.sit ? routes.sit(sent, call.n) : { status: 500, body: { error: 'something went wrong' } };
+    if (reply !== 'hold') await answer(route, reply);
+  });
+  await page.goto(`/r/${ROOM_CODE}`);
+  return l;
 }
 
 /**

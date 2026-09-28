@@ -3,7 +3,7 @@ import { RoomLobby } from './room-lobby';
 import { NoTable } from '@/components/no-table';
 import { frontDoor } from '@/lib/front-door';
 import { currentUser } from '@/lib/live/auth';
-import { roomByCode } from '@/lib/live/store';
+import { roomByCode, roomMembers } from '@/lib/live/store';
 import { isRoomCode } from '@/lib/room-code';
 import { supabaseServiceKey, supabaseUrl } from '@/lib/supabase/env';
 
@@ -52,6 +52,7 @@ export default async function RoomPage({ params }: { params: Promise<{ code: str
     // Read-only, with the service role: the visitor may have no session yet. A failed read
     // throws; frontDoor then opens the lobby and the join has the final say.
     room: roomByCode,
+    members: roomMembers,
     userId: async () => (await currentUser())?.id ?? null,
   });
   if (door !== 'lobby') return <NoTable code={upper} reason={door} />;

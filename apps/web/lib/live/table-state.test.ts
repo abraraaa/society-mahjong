@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { EVERYONE_HERE, markAway, markPresent, noteClockMove } from './absence';
-import { NEW_TABLE, TABLE_STATE_V, lastActed, parseTableState, sameTableState, tableStateJson, wakeAt, withLegacyScores, type GameOver, type TableState } from './table-state';
+import {
+  NEW_TABLE,
+  TABLE_STATE_V,
+  lastActed,
+  parseTableState,
+  reconcileTook,
+  sameTableState,
+  tableStateJson,
+  wakeAt,
+  withLegacyScores,
+  withTakeOver,
+  type GameOver,
+  type TableState,
+} from './table-state';
 import { STALE_GAME_MS } from './lifecycle';
 import type { Seats } from './types';
 
@@ -142,7 +155,7 @@ describe('tableStateJson', () => {
   it('writes who’s away only once some seat has something in it, and reads it back the same', () => {
     expect(tableStateJson(NEW_TABLE)).not.toHaveProperty('absence');
     const away = noteClockMove(markAway(EVERYONE_HERE, SEATS, 1, 'host'), SEATS, { by: 'clock', seat: 0, a: { type: 'discard', seat: 0, tile: 's5' } }, true);
-    const t: TableState = { ...NEW_TABLE, absence: markPresent(away, SEATS, 0, T0) };
+    const t: TableState = { ...NEW_TABLE, absence: markPresent(away, SEATS, 0, T0, 7) };
     const written = tableStateJson(t);
     expect(written['absence']).toEqual([
       {
@@ -153,6 +166,7 @@ describe('tableStateJson', () => {
         clockMoves: 1,
         lastClockMove: { by: 'clock', seat: 0, a: { type: 'discard', seat: 0, tile: 's5' } },
         lastTap: T0,
+        tapVersion: 7,
         played: { turns: 0, sets: 0, exchanges: 0, wins: 0, hands: 0 },
       },
       {
@@ -163,6 +177,7 @@ describe('tableStateJson', () => {
         clockMoves: 0,
         lastClockMove: null,
         lastTap: null,
+        tapVersion: null,
         played: { turns: 0, sets: 0, exchanges: 0, wins: 0, hands: 0 },
       },
       EVERYONE_HERE[2],
@@ -280,5 +295,48 @@ describe('wakeAt', () => {
   it('is null once the game is over, whatever the clocks or the last move say', () => {
     expect(wakeAt({ deadlines: { claim: T0 + 20_000, turn: T0 + 90_000 }, table: { ...NEW_TABLE, over: OVER }, actedAt: T0 })).toBeNull();
     expect(wakeAt({ deadlines: { claim: null, turn: null }, table: { ...NEW_TABLE, over: OVER }, actedAt: T0 })).toBeNull();
+  });
+});
+
+describe('who took a seat over', () => {
+  const zara = { userId: 'u-zara', hand: 5, seq: 40 };
+  const seatsWithZara = [
+    { kind: 'human', userId: 'u-abrar', name: 'Abrar' },
+    { kind: 'human', userId: 'u-zara', name: 'Zara' },
+    { kind: 'bot', name: 'Sana' },
+    { kind: 'bot', name: 'Omar' },
+  ] as const;
+
+  it('reads a take-over per seat, and anything it can’t read as nobody', () => {
+    expect(parseTableState({ v: 1, took: [null, zara, null, null] }).table.took).toEqual([null, zara, null, null]);
+    expect(parseTableState({ v: 1, took: [null, { userId: 'u-zara', hand: 5 }, { hand: 1, seq: 2 }, 'x'] }).table.took).toBeUndefined();
+    expect(parseTableState({ v: 1, took: [null, { ...zara, seq: -1 }, null, null] }).table.took).toBeUndefined();
+    expect(parseTableState({ v: 1, took: 'nobody' }).table.took).toBeUndefined();
+    expect(parseTableState({ v: 1 }).table.took).toBeUndefined();
+  });
+
+  it('keeps a legacy row’s take-overs to itself, untouched', () => {
+    const { table } = parseTableState({ took: [null, zara, null, null] });
+    expect(table.took).toBeUndefined();
+    expect(table.extra).toEqual({ took: [null, zara, null, null] });
+  });
+
+  it('writes take-overs only once someone has taken a seat over, and reads them back the same', () => {
+    expect(tableStateJson(NEW_TABLE)).not.toHaveProperty('took');
+    const t: TableState = { ...NEW_TABLE, took: [null, zara, null, null] };
+    const json = tableStateJson(t);
+    expect(json['took']).toEqual([null, zara, null, null]);
+    expect(parseTableState(json).table).toEqual(t);
+    expect(sameTableState(t, NEW_TABLE)).toBe(false);
+    expect(sameTableState({ ...NEW_TABLE, took: [null, null, null, null] }, NEW_TABLE)).toBe(true);
+  });
+
+  it('drops a take-over whose seat isn’t that person’s any more, or whose hand has been played', () => {
+    const took = withTakeOver(undefined, 1, zara);
+    expect(took).toEqual([null, zara, null, null]);
+    expect(reconcileTook(took, seatsWithZara, 5)).toBe(took);
+    expect(reconcileTook(took, seatsWithZara, 6)).toBeUndefined();
+    expect(reconcileTook(took, [seatsWithZara[0], { kind: 'bot', name: 'Hamza', heldFor: 'u-zara' }, seatsWithZara[2], seatsWithZara[3]], 5)).toBeUndefined();
+    expect(reconcileTook(undefined, seatsWithZara, 5)).toBeUndefined();
   });
 });

@@ -39,10 +39,10 @@ describe('parseAbsence', () => {
 
   it('reads garbage in an entry as nothing, and a count that isn’t a whole number from nought up as nought', () => {
     const [a, b, c, d] = parseAbsence([
-      { userId: 'u-amna', since: 'then', misses: -3, away: 'napping', clockMoves: 1.5, lastTap: 'soon', played: { turns: -1, sets: 2, exchanges: 'x' } },
+      { userId: 'u-amna', since: 'then', misses: -3, away: 'napping', clockMoves: 1.5, lastTap: 'soon', tapVersion: 2.5, played: { turns: -1, sets: 2, exchanges: 'x' } },
       'garbage',
       null,
-      { userId: 7, misses: 1, away: 'host', lastClockMove: { by: 'clock', seat: 3, a: { type: 'resolveClaims' } } },
+      { userId: 7, misses: 1, away: 'host', lastClockMove: { by: 'clock', seat: 3, a: { type: 'resolveClaims' } }, lastTap: 5, tapVersion: 12 },
     ]);
     expect(a).toEqual({
       userId: 'u-amna',
@@ -52,11 +52,12 @@ describe('parseAbsence', () => {
       clockMoves: 0,
       lastClockMove: null,
       lastTap: null,
+      tapVersion: null,
       played: { turns: 0, sets: 2, exchanges: 0, wins: 0, hands: 0 },
     });
     expect(b).toEqual(EVERYONE_HERE[1]);
     expect(c).toEqual(EVERYONE_HERE[2]);
-    expect(d).toMatchObject({ userId: null, misses: 1, away: 'host', lastClockMove: null });
+    expect(d).toMatchObject({ userId: null, misses: 1, away: 'host', lastClockMove: null, lastTap: 5, tapVersion: 12 });
   });
 
   it('reads back what it wrote, the clock’s last move rebuilt from its checked fields', () => {
@@ -132,6 +133,9 @@ describe('markPresent and markAway', () => {
     const back = markPresent(away, SEATS, 1, T0);
     expect(back[1]).toEqual({ ...away[1], misses: 0, away: null, lastTap: T0, played: { turns: 0, sets: 0, exchanges: 0, wins: 0, hands: 0 } });
     expect(markPresent(back, SEATS, 1, T0)).toEqual(back);
+    // With the version of the table that saves it, when there's one: the host's hand-over is judged by it (R8).
+    expect(markPresent(away, SEATS, 1, T0 + 5, 9)[1]).toMatchObject({ lastTap: T0 + 5, tapVersion: 9 });
+    expect(back[1].tapVersion).toBeNull();
   });
 
   it('hands a seat to a bot once, with nothing played for it yet, and leaves a seat already away as it is', () => {

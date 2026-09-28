@@ -10,10 +10,16 @@ export type RoomStatus = 'lobby' | 'playing' | 'finished';
  * difference. A person's `since` is when they sat down (ISO), which says who
  * has sat longest when the host's powers pass on (seating.ts hostOf); a seat
  * without one counts as the longest held.
+ *
+ * A bot may be keeping the seat for someone (`heldFor`, their id, and
+ * `keptName`, their name, since they aren't seated anywhere it could be read
+ * from): someone who left the table mid-game (`kept: 'left'`), or who wasn't
+ * here when the game was dealt (`kept: 'late'`). They're offered it first
+ * when they come back (seating.ts seatOffer, seatJoiner).
  */
 export type SeatEntry =
   | { readonly kind: 'human'; readonly userId: string; readonly name: string; readonly since?: string }
-  | { readonly kind: 'bot'; readonly name: string }
+  | { readonly kind: 'bot'; readonly name: string; readonly heldFor?: string; readonly keptName?: string; readonly kept?: 'left' | 'late' }
   | null;
 export type Seats = readonly [SeatEntry, SeatEntry, SeatEntry, SeatEntry];
 
@@ -74,14 +80,20 @@ export interface GameEnd {
 
 /**
  * A change to who plays a seat, built by the server only and never parsed
- * from a body (service.ts changeSeat): the seat's own person is back
- * (`back`), or whoever has the host's powers (`bySeat`) hands another
+ * from a body (service.ts changeSeat, noteTakeOver): the seat's own person is
+ * back (`back`); whoever has the host's powers (`bySeat`) hands another
  * person's seat to a bot (`letBotPlay`), as long as that person hasn't tapped
- * since the host's table was sent (`sawAt`, the server's clock then).
+ * since the host's table was sent: judged by the version of the table the
+ * host was looking at (`sawVersion`) against the one that saved the tap, and
+ * only for a tap saved without one, or a page that sends none, by the
+ * server's clock on the host's table (`sawAt`); or the seat's person has just
+ * taken it over from a bot mid-game (`took`), which the table notes with the
+ * hand and the moment they took it (table-state.ts TakeOver).
  */
 export type SeatChange =
   | { readonly type: 'back'; readonly seat: Seat }
-  | { readonly type: 'letBotPlay'; readonly seat: Seat; readonly bySeat: Seat; readonly sawAt: number | null };
+  | { readonly type: 'letBotPlay'; readonly seat: Seat; readonly bySeat: Seat; readonly sawAt: number | null; readonly sawVersion?: number | null }
+  | { readonly type: 'took'; readonly seat: Seat };
 
 /**
  * Who made a move, as the hand log records it: the seat's own person, by

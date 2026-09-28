@@ -1,7 +1,6 @@
 import 'server-only';
 import { HttpError } from './errors';
 export { HttpError };
-import { withBots } from './rooms';
 import { getRuleset, publicView, viewFor, type HandState, type Seat } from '@society/engine';
 import type { CoachStage } from '../coach/types';
 import { isAway, presentHumans } from './absence';
@@ -13,11 +12,27 @@ import { handWrites, stamp } from './hand-log';
 import { STALE_GAME_MS, VOTE_ATTEMPTS, isStale, nextHandWait, presentAtEnd, publicGameOver } from './lifecycle';
 import { logError } from './log';
 import { emptySeatBots, policyFor, presentLevels } from './policy';
-import { SEAT_ATTEMPTS, hostOf, vacate } from './seating';
-import { commitTable, countHand, finishGame, gameById, liveMeta, loadLive, recordHand, roomById, saveSeats, stagesBySeat, type GameRow, type LiveRow, type RoomRow } from './store';
+import { SEAT_ATTEMPTS, hostOf, seatOffer, standIn, vacate } from './seating';
+import {
+  commitTable,
+  countHand,
+  finishGame,
+  followSeat,
+  gameById,
+  liveMeta,
+  loadLive,
+  recordHand,
+  recountMemberGames,
+  roomById,
+  saveSeats,
+  stagesBySeat,
+  type GameRow,
+  type LiveRow,
+  type RoomRow,
+} from './store';
 import { JustPlayed, rejectionStatus, step } from './table';
 import { TABLE_STATE_V, lastActed, wakeAt, withLegacyScores, type Absence, type GameOver, type TableState } from './table-state';
-import { isHuman, seatOf, type ClientAction, type Deadlines, type GameEnd, type SeatChange } from './types';
+import { isHuman, seatOf, type ClientAction, type Deadlines, type GameEnd, type SeatChange, type Seats } from './types';
 import { isUuid, parseClientAction, parseSeat } from './validate';
 
 export type { GameSnapshot };
@@ -94,6 +109,8 @@ function snapshot(c: Caller, shown: Shown, now: number): GameSnapshot {
   const me = over ? (userId === null ? null : seatOf(over.seats, userId)) : c.me;
   // Levels are read by the room's seats.
   const roomSeat = userId === null ? null : seatOf(room.seats, userId);
+  const scores = over ? over.scores : (shown.table.scores ?? [0, 0, 0, 0]);
+  const inPlay = !over && game.status === 'active';
   return {
     gameId: game.id,
     roomId: room.id,
@@ -105,7 +122,7 @@ function snapshot(c: Caller, shown: Shown, now: number): GameSnapshot {
     deadlines: shown.deadlines,
     // Who's away is news only while the game is in play; the final table shows who sat where.
     seats: over ? publicSeats(over.seats, undefined) : publicSeats(room.seats, absence),
-    scores: over ? over.scores : (shown.table.scores ?? [0, 0, 0, 0]),
+    scores,
     me,
     view: me === null ? publicView(shown.state) : viewFor(shown.state, ruleset, me),
     status: over ? (over.how === 'abandoned' ? 'abandoned' : 'finished') : game.status,
@@ -114,27 +131,59 @@ function snapshot(c: Caller, shown: Shown, now: number): GameSnapshot {
     ended: over ? publicGameOver(over, userId) : null,
     mine: over ? null : ownAbsence(room.seats, absence, me),
     // Who the next hand waits on: the people here, in the room's seats as they are now.
-    nextHand: over || game.status !== 'active' ? null : nextHandWait(shown.state, room.seats, presentHumans(room.seats, absence), shown.table),
+    nextHand: inPlay ? nextHandWait(shown.state, room.seats, presentHumans(room.seats, absence), shown.table) : null,
+    // Someone not seated at a game in play may take a bot's seat over: the seat kept for them first (R21).
+    offer: inPlay && me === null && userId !== null ? seatOffer(room.seats, userId, scores) : null,
+    joinedAt: inPlay ? joinedAt(shown, me, userId) : null,
   };
+}
+
+/**
+ * When the caller took their seat over from a bot (table-state.ts TakeOver),
+ * while it matters: in the hand they took it over in, until it has finished.
+ * Null for anyone else, or any other hand.
+ */
+function joinedAt(shown: Shown, me: Seat | null, userId: string | null): { hand: number; seq: number } | null {
+  const took = me === null ? null : (shown.table.took?.[me] ?? null);
+  if (!took || took.userId !== userId) return null;
+  const { progress, phase } = shown.state;
+  return took.hand === progress.handIndex && phase !== 'finished' ? { hand: took.hand, seq: took.seq } : null;
+}
+
+/**
+ * The bookkeeping after a game's end, as steps after its commit: the finish
+ * (store.ts finishGame, with who was there at the end marked seen), then,
+ * for a game that finished, each person's count of games played at the room,
+ * worked out again after the game's status is written so this game counts (a
+ * recount, so running it twice counts nothing twice). An abandoned game
+ * counts for nobody, so it changes no count.
+ */
+function finishSteps(gameId: string, room: RoomRow, over: GameOver, absence: Absence): CommitStep[] {
+  const finish: CommitStep = { what: 'finish the game', run: () => finishGame(gameId, room, over, absence) };
+  if (over.how === 'abandoned') return [finish];
+  const people = over.seats.flatMap((s) => (s?.kind === 'human' ? [s.userId] : []));
+  return [finish, { what: "count the members' games", run: () => recountMemberGames(room.id, people) }];
 }
 
 /**
  * A game whose end is saved (table_state.over) but whose bookkeeping isn't
  * all written yet, because the finish after that commit failed part way: the
  * game still reads active. Any request that finds one runs the finish again
- * from `over` alone (R12), at most once per request. It's safe to repeat
- * (store.ts finishGame), a failure is only logged, as after the commit, and
- * the next request tries again. The poke carries the version the table is
- * already at, so pages that have it look no further, and the room hears
- * too, for a lobby open on it. A heal never counts as the game's end: the
- * request that ended the game did that.
+ * from `over` alone (R12), at most once per request, and recounts the
+ * members' games. It's safe to repeat (store.ts finishGame), a failure is
+ * only logged, as after the commit, and the next request tries again. The
+ * poke carries the version the table is already at, so pages that have it
+ * look no further, and the room hears too, for a lobby open on it. A heal
+ * never counts as the game's end: the request that ended the game did that.
  */
-async function healFinish(gameId: string, room: RoomRow, over: GameOver, version: number): Promise<void> {
-  await afterCommit(
-    [{ what: 'finish the game', run: () => finishGame(gameId, room, over) }],
-    () => broadcast([gamePoke(gameId, version, { gameOver: true }), roomPoke(room.id, 'seats', {})]),
-    { gameId, version, heal: true },
-  );
+async function healFinish(gameId: string, room: RoomRow, table: TableState, version: number): Promise<void> {
+  const over = table.over;
+  if (!over) return;
+  await afterCommit(finishSteps(gameId, room, over, table.absence), () => broadcast([gamePoke(gameId, version, { gameOver: true }), roomPoke(room.id, 'seats', {})]), {
+    gameId,
+    version,
+    heal: true,
+  });
 }
 
 /**
@@ -144,29 +193,61 @@ async function healFinish(gameId: string, room: RoomRow, over: GameOver, version
  * STALE_GAME_MS is ended as idle (endIfStale), before the room is joined or
  * dealt again. The room then comes back as that left it. If the finish didn't
  * get as far as the room, the room still reads as finished, as one left
- * "playing" by a game that has ended always does (rooms.ts withGameOver). Any
- * other room comes back as it was.
+ * "playing" by a game that has ended always does (rooms.ts withGameOver).
+ *
+ * So does a room already closed whose game still reads active: its finish
+ * closed the room and stopped before the game's own row, most likely at the
+ * seat it had to give back to someone who left as the last hand was scored
+ * (store.ts closeRoom). A final table doesn't poll, so nobody may look at
+ * that game again before the host deals: it's finished here, and the seat
+ * given back, before the room is joined or dealt again. Any other room comes
+ * back as it was.
  */
 export async function settleRoomGame(room: RoomRow, now = Date.now()): Promise<RoomRow> {
   const gameId = room.current_game_id;
+  if (room.status === 'finished' && gameId !== null) return finishClosedRoomGame(room, gameId);
   if (room.status !== 'playing' || gameId === null) return room;
   const meta = await liveMeta(gameId);
   if (!meta) return room;
-  if (meta.table.over) await healFinish(gameId, room, meta.table.over, meta.version);
+  if (meta.table.over) await healFinish(gameId, room, meta.table, meta.version);
   // Stale by this quick read; endIfStale reads the table again, and does nothing if someone has just played.
   else if (!isStale(lastActed(meta), now) || !(await endIfStale(gameId, now))) return room;
   const fresh = (await roomById(room.id)) ?? room;
   return fresh.status === 'playing' && fresh.current_game_id === gameId ? { ...fresh, status: 'finished' } : fresh;
 }
 
-/** The caller's current view. Spectators (seated nowhere) get the public view. */
+/** settleRoomGame for a room already closed: its game's finish run again when the game still reads active and its end is saved. */
+async function finishClosedRoomGame(room: RoomRow, gameId: string): Promise<RoomRow> {
+  const game = await gameById(gameId);
+  if (game?.status !== 'active') return room;
+  const meta = await liveMeta(gameId);
+  if (!meta?.table.over) return room;
+  await healFinish(gameId, room, meta.table, meta.version);
+  return (await roomById(room.id)) ?? room;
+}
+
+/** Whether a bot is keeping a seat in the room for this person: they left the game, or weren't here when it was dealt. */
+function keptFor(seats: Seats, userId: string): boolean {
+  return seats.some((s) => s?.kind === 'bot' && s.heldFor === userId);
+}
+
+/**
+ * The caller's current view. Someone seated nowhere gets the public view:
+ * the room's host, and anyone a bot is keeping a seat for, with the seat
+ * they may take over (`offer`); a game that has ended also shows its final
+ * table to whoever sat at it at the end. Anyone else is turned away.
+ */
 export async function viewGame(gameId: string, userId: string, now = Date.now()): Promise<GameSnapshot> {
   const { game, room } = await loadGame(gameId);
   const me = seatOf(room.seats, userId);
-  if (me === null && room.host_id !== userId) throw new HttpError(403, 'not at this table');
+  const known = me !== null || room.host_id === userId || keptFor(room.seats, userId);
+  // A game's own people, or someone who was there at its end: nobody else reads the table at all.
+  if (!known && game.status === 'active') throw new HttpError(403, 'not at this table');
   const [live, levels] = await Promise.all([loadLive(gameId), stagesBySeat(room.seats)]);
   if (!live) throw new HttpError(404, 'game has no live state');
-  if (live.table.over && game.status === 'active') await healFinish(gameId, room, live.table.over, live.version);
+  const over = live.table.over;
+  if (!known && !(over && seatOf(over.seats, userId) !== null)) throw new HttpError(403, 'not at this table');
+  if (over && game.status === 'active') await healFinish(gameId, room, live.table, live.version);
   return snapshot({ game, room, me, userId, levels }, shownOf(live, room), now);
 }
 
@@ -177,8 +258,9 @@ export async function viewGame(gameId: string, userId: string, now = Date.now())
  *
  * `userId` null is the server itself (the cron sweep, a bot taking a seat).
  * A person needs a seat to act; to tick (resolve expired clocks and read the
- * table back) they need a seat or the host's chair, as viewing does, so a
- * stranger holding a game id can neither move the table nor watch it.
+ * table back) they need a seat, the host's chair, or a seat a bot is keeping
+ * for them, as viewing a game in play does, so a stranger holding a game id
+ * can neither move the table nor watch it.
  *
  * The commit point is one commit_table call (applyStep): the state, the
  * running totals, the clocks and every move the request made, with the
@@ -235,7 +317,7 @@ async function actOnce(
   const { game, room } = await loadGame(gameId);
   const me = userId === null ? null : seatOf(room.seats, userId);
   if (action && me === null) throw new HttpError(403, 'not seated at this table');
-  if (userId !== null && me === null && room.host_id !== userId) throw new HttpError(403, 'not at this table');
+  if (userId !== null && me === null && room.host_id !== userId && !keptFor(room.seats, userId)) throw new HttpError(403, 'not at this table');
   if (game.status !== 'active') throw new HttpError(409, 'game is over');
 
   // The players' levels size the clocks and pick how the filler bots play; read alongside the table, not after it.
@@ -244,7 +326,7 @@ async function actOnce(
   const caller: Caller = { game, room, me, userId, levels };
   const over = live.table.over;
   if (over) {
-    await healFinish(game.id, room, over, live.version);
+    await healFinish(game.id, room, live.table, live.version);
     const snap = snapshot(caller, shownOf(live, room), now);
     if (action) throw new HttpError(409, 'game is over', snap);
     return { kind: 'done', snap };
@@ -262,11 +344,12 @@ async function actOnce(
  * the commit ran and nobody was poked.
  */
 async function applyStep(
-  c: Caller,
+  caller: Caller,
   live: LiveRow,
   input: { readonly action: ClientAction | null; readonly end?: GameEnd; readonly change?: SeatChange },
   now: number,
 ): Promise<GameSnapshot | 'lost'> {
+  const c = await seatsAsTaken(caller, live);
   const { game, room, me, userId, levels } = c;
   const { action, end, change } = input;
   // A newer deploy wrote this table's bookkeeping in a shape this code can't read. Saving over it would lose what it
@@ -300,6 +383,8 @@ async function applyStep(
       bots,
       levels,
       strict,
+      // What this step saves as if its commit lands; a commit that loses is stepped again on a fresh read, with that one's.
+      version: live.version + 1,
     });
   } catch (err) {
     // Refused with the table attached, so the host's sheet shows who's just played.
@@ -338,7 +423,7 @@ async function applyStep(
   if (result.gameOver && over) {
     // The game's own status is finishGame's last write, so a finish that fails part way leaves the game active, and the next
     // request that looks at it finishes it again (healFinish). The game is over either way: its end is committed.
-    steps.push({ what: 'finish the game', run: () => finishGame(game.id, room, over) });
+    steps.push(...finishSteps(game.id, room, over, result.tableState.absence));
     // Counted here, by the request that ended the game, whether or not its finish landed, and never by a heal: each end once.
     // recordEvent never throws; a failed write is its own event_write_failed line.
     steps.push({ what: 'count the end', run: () => recordEvent(gameEnded({ roomId: room.id, gameId: game.id, over, leaver: userId })) });
@@ -350,10 +435,37 @@ async function applyStep(
     gameOver: result.gameOver,
     ...(over?.how === 'abandoned' ? { abandoned: true } : {}),
   });
-  await afterCommit(steps, () => broadcast([poke]), { gameId: game.id, version });
+  // A game's end closes its room, and may give a seat back to someone whose leave landed as the last hand was scored (their
+  // leave has already told the room a bot has it), so a lobby open on the room hears too, as it does from a heal.
+  const pokes = result.gameOver ? [poke, roomPoke(room.id, 'seats', {})] : [poke];
+  await afterCommit(steps, () => broadcast(pokes), { gameId: game.id, version });
 
   // What a clock did for the caller rides in their own `mine`, on whichever phone's request resolved it; another seat's stays theirs.
   return snapshot(c, { version, deadlines: result.deadlines, state: next, table: result.tableState }, now);
+}
+
+/**
+ * The caller as read, or with the room read again when the table says
+ * someone took a seat over in this hand that the seats as read don't show
+ * them in (table-state.ts TakeOver). A take-over writes the seats, then
+ * notes itself on the table with a commit of its own, so seats read before
+ * the first write, with a table read after the second, would have a bot move
+ * for a seat that's a person's now. Read again, the room is at least as new
+ * as that take-over. (One read before the note loses its commit to it, and
+ * is stepped again on a fresh read.) Otherwise the note's person has left
+ * that seat since, and the step drops the note.
+ */
+async function seatsAsTaken(c: Caller, live: LiveRow): Promise<Caller> {
+  const hand = live.state.progress.handIndex;
+  const behind = (live.table.took ?? []).some((t, seat) => {
+    const s = c.room.seats[seat];
+    return t !== null && t.hand === hand && !(s?.kind === 'human' && s.userId === t.userId);
+  });
+  if (!behind) return c;
+  const room = await roomById(c.room.id);
+  if (!room) return c;
+  const levels = await stagesBySeat(room.seats);
+  return { ...c, room, me: c.userId === null ? null : seatOf(room.seats, c.userId), levels };
 }
 
 /**
@@ -390,7 +502,7 @@ export async function endGame(gameId: string, userId: string, now = Date.now()):
     if (!live) throw new HttpError(404, 'game has no live state');
     const caller: Caller = { game, room, me, userId, levels };
     if (live.table.over) {
-      await healFinish(gameId, room, live.table.over, live.version);
+      await healFinish(gameId, room, live.table, live.version);
       return snapshot(caller, shownOf(live, room), now);
     }
     if (powersAt(room, null, tableOf(live, room).absence) !== userId) throw new HttpError(403, 'only the host can end the game');
@@ -414,7 +526,7 @@ async function idleEnd(gameId: string, now: number): Promise<'ended' | 'healed' 
     const live = await loadLive(gameId);
     if (!live) return null;
     if (live.table.over) {
-      await healFinish(gameId, room, live.table.over, live.version);
+      await healFinish(gameId, room, live.table, live.version);
       return 'healed';
     }
     if (!isStale(lastActed(live), now)) return null;
@@ -431,7 +543,7 @@ export async function endIfStale(gameId: string, now = Date.now()): Promise<bool
 }
 
 /** What a page asks of changeSeat, before it's checked: its own person back, or (the host) a bot for someone else's seat. */
-export type SeatChangeRequest = { readonly type: 'back' } | { readonly type: 'letBotPlay'; readonly seat: unknown; readonly sawAt: unknown };
+export type SeatChangeRequest = { readonly type: 'back' } | { readonly type: 'letBotPlay'; readonly seat: unknown; readonly sawAt: unknown; readonly sawVersion?: unknown };
 
 /**
  * Who plays a seat (R4, R8): "I'm back" from someone a bot has been playing
@@ -439,7 +551,8 @@ export type SeatChangeRequest = { readonly type: 'back' } | { readonly type: 'le
  * after they've stepped away. Saved with the table, like a move, on a fresh
  * read each time someone else's commit lands first (three tries). The host's
  * hand-over is refused when its person has tapped since the host's table was
- * sent (`sawAt`, the server's clock on it): 409 with the table, so the host
+ * sent (`sawVersion`, that table's version; `sawAt`, the server's clock on
+ * it, for a page that sends no version): 409 with the table, so the host
  * sees them still playing. One that changes nothing (back when already here,
  * a seat already away) writes nothing and gives the table as it is.
  */
@@ -455,7 +568,7 @@ export async function changeSeat(gameId: string, userId: string, request: SeatCh
     const caller: Caller = { game, room, me, userId, levels };
     if (live.table.over) {
       // Ended, its bookkeeping not all written: write it, and say the game's over.
-      await healFinish(gameId, room, live.table.over, live.version);
+      await healFinish(gameId, room, live.table, live.version);
       throw new HttpError(409, 'game is over', snapshot(caller, shownOf(live, room), now));
     }
     const seat = me!;
@@ -470,15 +583,46 @@ export async function changeSeat(gameId: string, userId: string, request: SeatCh
       // Here, before the step, whose own check would call it someone else's seat (403).
       if (!isHuman(room.seats, target)) throw new HttpError(409, 'a bot already plays that seat');
       const sawAt = typeof request.sawAt === 'number' && Number.isFinite(request.sawAt) ? request.sawAt : null;
-      change = { type: 'letBotPlay', seat: target, bySeat: seat, sawAt };
+      const sawVersion = typeof request.sawVersion === 'number' && Number.isSafeInteger(request.sawVersion) && request.sawVersion >= 0 ? request.sawVersion : null;
+      change = { type: 'letBotPlay', seat: target, bySeat: seat, sawAt, sawVersion };
     }
     return applyStep(caller, live, { action: null, change }, now);
   });
 }
 
 /**
+ * The table notes that someone has just taken a bot's seat over (rooms.ts
+ * sitDown has written the seats): the hand, and the state's seq, as the
+ * commit leaves them (table-state.ts TakeOver), which is when the tutor's
+ * first look at a hand they didn't see start begins (snapshot joinedAt).
+ * They're here from that moment, too. A commit of its own, after the seat
+ * write, so no bot moves for the seat after it: a step that read the seats
+ * before the take-over either loses its commit to this one, or sees the note
+ * and reads the room again (seatsAsTaken). Again on a fresh read each time
+ * someone else's commit lands first (three tries). Best-effort: the seat is
+ * theirs whatever happens here, so a failure is only logged, as
+ * take_over_note_failed, and they simply get no first look.
+ */
+export async function noteTakeOver(gameId: string, userId: string, now = Date.now()): Promise<void> {
+  try {
+    await retryOnLost(SEAT_ATTEMPTS, async () => {
+      const { game, room } = await loadGame(gameId);
+      const me = seatOf(room.seats, userId);
+      if (me === null || game.status !== 'active') return null;
+      const [live, levels] = await Promise.all([loadLive(gameId), stagesBySeat(room.seats)]);
+      if (!live || live.table.over) return null;
+      const out = await applyStep({ game, room, me, userId, levels }, live, { action: null, change: { type: 'took', seat: me } }, now);
+      return out === 'lost' ? 'lost' : null;
+    });
+  } catch (err) {
+    logError('take_over_note_failed', err, { gameId });
+  }
+}
+
+/**
  * Stand up from a live table. A bot takes the seat for the rest of the game
- * so the others can carry on. When the last human leaves, the game ends as
+ * so the others can carry on, and keeps it for them (R20): opening the invite
+ * link again offers it back ("Sit back down?"), with its tiles and points. When the last human leaves, the game ends as
  * abandoned, saved with the table like any other end (an unfinished hand
  * doesn't count, and there's no final table), and is finished: the room
  * closes. A game whose end is already saved has nothing left to leave: its
@@ -500,7 +644,7 @@ export async function leaveGame(gameId: string, userId: string, now = Date.now()
       if (!live) throw new HttpError(404, 'game has no live state');
       // Already over, its end not all recorded: record it, rather than end it twice.
       if (live.table.over) {
-        await healFinish(gameId, room, live.table.over, live.version);
+        await healFinish(gameId, room, live.table, live.version);
         return { abandoned: live.table.over.how === 'abandoned' };
       }
       // The leaver keeps their seat in the room: the game they're leaving is over, and the room is between games.
@@ -513,14 +657,17 @@ export async function leaveGame(gameId: string, userId: string, now = Date.now()
     // then there's no game left to leave, and the seat stays theirs for the host's next deal. Record the end instead.
     const meta = await liveMeta(gameId);
     if (meta?.table.over) {
-      await healFinish(gameId, room, meta.table.over, meta.version);
+      await healFinish(gameId, room, meta.table, meta.version);
       return { abandoned: meta.table.over.how === 'abandoned' };
     }
-    const seats = withBots(vacated);
+    const seats = standIn(room.seats, me, { userId, name: room.seats[me]?.name ?? '' });
     // Optimistic on the room's updated_at: two people standing up at once means the second reads again and empties only their own seat.
     // An end committed after the read above doesn't move updated_at, so this can still land after it; the finish then gives the seat
-    // back as it closes the room (store.ts closeRoom), and a close that lands first makes this lose, and the loop finds the game over.
+    // back once it has closed the room (store.ts closeRoom), on a fresh read of the room, and a finish run again does the same if
+    // that failed. A close that lands first makes this lose, and the loop finds the game over.
     if (await saveSeats(room.id, seats, room.updated_at)) {
+      // The game's record of who sits where follows the seat to its bot; the finish rewrites it anyway, so this is best-effort.
+      await followSeat(gameId, me, seats[me] ?? null);
       await broadcast([roomPoke(room.id, 'seats', { seats: publicSeats(seats, meta?.table.absence) })]);
       // The bot now in the seat may owe the table a move: settle it straight away. The seat is already given up, so a failure
       // here is logged, not handed to the leaver; the next tick or the sweep plays the bot's move instead.

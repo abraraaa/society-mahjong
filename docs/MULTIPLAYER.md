@@ -91,9 +91,30 @@ creates it, and the server does everything else with the service role.
    tries, then a 409 asking for another tap), and nobody lands in someone
    else's seat. Standing up and Start carry the same condition: a friend
    who sits down while the host is dealing is not quietly replaced by a
-   bot; the host is asked to start again.
-3. **Start.** Server creates `games` (seed generated server-side, never
-   sent to clients while any hand is live), then the first hand's row with
+   bot; the host is asked to start again. Opening the link also checks the
+   person in: their `room_members` row's `last_seen_at` moves to now (the
+   row is made on their first visit), and so does the host's when the room
+   is made or they tap Start. A check-in never writes `rooms`, so it can't
+   make a host's Start meet "the seats changed". A room that isn't playing
+   and has been quiet for six weeks (nothing written to it, and nobody it
+   knows seen there) turns newcomers away, at the invite link and at the
+   join; its own people (anyone seated there, or who ever has been) still
+   get in, and their check-in opens it again. Standing up from the lobby
+   works before the first game and between games. A newcomer is seated, in
+   this order: a bot keeping their own seat, an empty seat, a bot keeping
+   nobody's seat, a bot keeping someone else's, and last the seat of someone
+   seated who isn't here (below), the one seen longest ago first (nobody
+   seen before anyone seen), never the room's host's. Someone whose seat was
+   given away like that and comes back before the start is seated the same
+   way; only when every other seat is the host's or someone here's are they
+   told the table is full. Someone who opens the link once a game has
+   started is offered a bot's seat to take over instead (below).
+3. **Start.** Every empty seat gets a bot, and so does every seat whose
+   person isn't here: that bot keeps the seat for them (`kept: 'late'`), and
+   a bot already keeping someone's seat goes on keeping it. Nobody's seat is
+   given away at the start. Server creates `games` (seed generated
+   server-side, never sent to clients while any hand is live), then the
+   first hand's row with
    the moves the bots made at the deal, then `game_players` (who sat
    where), then the first `live_state` via `startHand`, and only then
    points the room at the game. If any step after the first fails, the game
@@ -170,7 +191,8 @@ server  session → seat
           passes) appended to the hand's log, with its result once it ends
         then, when a hand ended, count it (unless it ended the game) and
           tally the players; when the game ended, finish it (who finished
-          where, the room, the game's row) and count its end for the funnel.
+          where, the room, the game's row) and count its end for the funnel,
+          and poke the room's channel too, for a lobby open on it.
           A failure here is logged, and the move still counts; a finish that
           failed is written again by the next request that touches the game
           (which never counts the end a second time)
@@ -179,10 +201,10 @@ server  session → seat
 ```
 
 "I'm back" (`POST /api/games/:id/back`) and the host's "let a bot play"
-(`POST /api/games/:id/away`, `{ seat, sawAt }`) go the same way, as a
-change to who plays a seat instead of a move, through the same commit, and
-are tried again on a fresh read if another request saves first (three
-tries).
+(`POST /api/games/:id/away`, `{ seat, sawAt, sawVersion }`) go the same
+way, as a change to who plays a seat instead of a move, through the same
+commit, and are tried again on a fresh read if another request saves first
+(three tries).
 
 Implemented in `apps/web/lib/live/`: `table.ts` is the pure part (settle,
 deadlines, expiry, `step`), covered by tests that play whole hands through
@@ -317,6 +339,8 @@ tried again on a fresh read (five tries, `VOTE_ATTEMPTS`), so four people
 tapping together while their phones tick never bounce off each other. A
 tap on a hand that has already started does nothing, except bring its
 person back like any tap; one from a phone on the same person counts once.
+Either is still saved, for its moment: it's a tap, so the host can't hand
+that seat to a bot straight after it.
 A page loaded before votes sends no hand: its tap is checked against the
 version it saw, as any move is, and then counts as a vote. After the last
 hand there is no next hand: the game has already ended.
@@ -324,7 +348,8 @@ hand there is no next hand: the game has already ended.
 **The host's powers** (starting a game, ending one, and letting a bot play
 for someone who's stepped away) are worked out, never stored (`seating.ts`
 `hostOf`): the room's host while they're seated and here (at a game in
-play, not away); otherwise whoever here has sat longest (a seat with no
+play, not away; between games, seen at the room lately, below); otherwise
+whoever here has sat longest (a seat with no
 record of when it was taken counts as longest, then seat order; each seat
 is stamped with when its person sat down); nobody who isn't seated. So a
 room whose host has stood up, or stepped away, isn't stuck: the table, the
@@ -336,15 +361,40 @@ right.
 the host or for being idle), every result sheet becomes the final table.
 The button of whoever had the host's powers when it ended, worked out from
 who sat where then, says "Play again" and everyone else's "Back to the
-room": both lead to the lobby, where Start (now "Play again, same seats")
-deals a fresh game for the same seats with the scores back at nought. A
-finished game's page keeps showing its own final table, seats and scores,
-whatever the room does next. Anyone still on the old table follows the
+room": both lead to the lobby, where Start (now "Play again, same seats",
+or "Play again, with one bot" when a seat is empty, a bot's, or someone's
+who isn't here yet) deals a fresh game for the same seats with the scores
+back at nought. When anyone seated isn't here yet, the host is told "Anyone
+not here yet gets a bot when you start, and can take their seat back when
+they arrive." A finished game's page keeps showing its own final table,
+seats and scores, whatever the room does next. Anyone still on the old table follows the
 room channel's `started` message to the new one.
 
+**Who's here, between games** is read from `room_members`, never stamped
+on the seats (`seating.ts` `isHere`). A seated person is here when their
+`last_seen_at` is within the last six hours and no earlier than the end of
+the room's last game. It moves when they open the invite link, sit down or
+tap Start; the lobby's five-second poll also moves it for a seated person
+with no row yet, or one last seen over half an hour ago, so someone with the
+lobby open all evening stays here; and when a game ends it moves to the
+end's moment for everyone at the table then who wasn't away. So after a
+game, the people who finished it stay here for six hours. Someone a bot was
+playing for at the end, everyone after a game that ended idle or was
+abandoned, and last week's people who haven't opened the link tonight read
+"not here yet" in the lobby until they do. The host's powers go to whoever
+here should have them, and the lobby says who that is ("Waiting for Ayesha
+to start."). A finished room also shows its last game ("Last game: Ayesha
+finished top on +14,504."), read from its latest finished game and that
+game's `game_players`: an abandoned game never hides the one before it.
+If who's been seen can't be read, the lobby tags nobody and its next poll
+tries again; Start and a newcomer's join fail instead, so nobody is dealt
+out or turned away on a guess.
+
 **Leaving.** Any seat can stand up from a live table (Leave, top right,
-with a confirmation). A bot takes the seat for the rest of the game so the
-others carry on. Everyone else's table says so the next time it looks
+with a confirmation that says opening the invite link again sits them back
+down). A bot takes the seat so the others carry on, and keeps it for them
+(`kept: 'left'`, with their name, so the table can say whose seat it is),
+and the seat's `game_players` row follows it. Everyone else's table says so the next time it looks
 ("Bilal's left the table, so a bot's playing their seat for now."), which
 is at the next move (the bot's own, if the seat owed one) or the slow
 poll: getting up changes the seats, not the table, so it pokes no game
@@ -360,8 +410,39 @@ that lands just after the game's end is saved (the last hand scored, its
 finish not yet written) gives nothing up: the finish is written instead,
 and the seat stays theirs for the host's next deal. So does one that lands
 a moment after that end, before its finish closes the room: the final table
-has them seated, so closing the room hands the bot's seat back to them. In
-the lobby, leaving simply empties the seat.
+has them seated, so once the room is closed the bot's seat is handed back
+to them, worked out afresh from the room as it reads then (a newcomer who
+has sat in another seat meanwhile doesn't stop it; one who has taken that
+very seat keeps it), and the lobby is poked. If the room keeps changing
+under it, or the write fails, the game's own row isn't written yet, so the
+next request that touches the game finishes it again, give-back and all.
+In the lobby, leaving simply empties the seat.
+
+**Kept seats, sitting back down and taking over.** Anyone not seated at a
+game in play who opens the invite link, or the game's page, is offered a
+bot's seat, with the running total it carries: their own seat first ("Sit
+back down?" for someone who left, "Take your seat?" for someone who wasn't
+here at the start), otherwise a bot keeping nobody's seat ("Take over from
+Sana?", the tutor there if they want it), then one keeping someone else's.
+The server refuses a seat kept for someone else while a bot keeping
+nobody's is free, and never offers a person's seat, away or not. Taking it
+(`POST /api/rooms/:code/sit`) is an optimistic seat write like a join; the
+newcomer carries on with the seat's tiles and points, and the bot has
+already answered everything it owed, so nobody lands on a running clock.
+The game's `game_players` row follows the seat, everyone's table hears
+("Bilal's back in their seat.", or "Zara's taken over the seat Sana was
+playing.") and so does the lobby. Then the table notes the take-over with a
+commit of its own (`table_state.took`: who, the hand, and the state's `seq`
+at that commit), which is what the tutor's first look at a hand someone
+didn't see start goes by (the snapshot's `joinedAt`, sent only to them,
+only in that hand, until it finishes). No bot moves for that seat after
+that `seq`: a request that read the seats before the take-over either loses
+its commit to the note and is stepped again, or, if it reads the table
+after the note, sees the note doesn't match the seats it read and reads the
+room again first. If the game has ended by the time someone taps, they're
+seated in the room as the invite link would seat them. Only the room's
+host, and anyone a bot is keeping a seat for, can open a game's page
+without a seat; anyone else is sent back to the invite link.
 
 **Someone who's stepped away.** Turn limits nudge at 20 seconds
 remaining. A turn, or a pass of tiles, whose clock runs out on someone is a
@@ -374,14 +455,21 @@ the people still here. Everyone sees "Sana's away, so a bot's playing their
 tiles for now." and her pill reads "Sana · away". The host (whoever has the
 host's powers, below) can also tap a person's name to let a bot play for
 them straight away; that's refused, with the table, if that person has
-tapped something since the host's table was sent. While away, a panel at
-the bottom of their own table says why and what the bot has done for them
-so far, and "I'm back" hands the seat back ("Welcome back."). Any move of
-their own but a pass, or a Next hand tap, brings them back too. A late tap,
+tapped something since the host's table was sent. That's judged by
+versions: each tap is saved with the version of the table that carries it,
+and the host's request says which version they were looking at, since a
+tap that began before the host's table was read can still land after it.
+(A page loaded before versions were sent, or a tap saved before they were
+kept, is judged by the server's clock on the host's table instead.) While
+away, a panel at the bottom of their own table says why and what the bot
+has done for them so far, and "I'm back" hands the seat back ("Welcome
+back."). Any move of their own but a pass, or a Next hand tap, brings them
+back too. A late tap,
 sent after their own clock had run out and the bot had moved for them, is
 let go rather than refused, and isn't counted as a miss. Someone away when a
 hand ends keeps its points, but the hand isn't tallied on their profile.
-Leaving while away turns the seat into an ordinary bot's. Nothing
+Leaving while away hands the seat to a bot that keeps it, as any leave
+does. Nothing
 auto-discards, which would feel punitive at a friends' table: a room that
 opts into "strict" only gets the shorter clocks (7 s claims for everyone,
 30 s turns).
@@ -426,7 +514,9 @@ changing either are in `docs/DATA-MODEL.md`. What a live table keeps:
   Next hand on a finished hand (`ready`: the hand, their ids and when the
   next hand starts regardless; written only while someone has); and, once the
   game has ended, how it ended (`over`: how, by whom, when, how many hands,
-  the final scores and who sat where). A table last
+  the final scores and who sat where); and who took a seat over from a bot
+  in the hand being played (`took`, per seat: who, the hand and the `seq`;
+  written only while someone has). A table last
   saved before it existed reads its scores from `rooms.ledger` until its
   next move saves them; nothing writes `rooms.ledger` any more.
 - `hands`, one row per hand, made by the request that deals it, with its
@@ -437,18 +527,31 @@ changing either are in `docs/DATA-MODEL.md`. What a live table keeps:
   `table` or `host`); `a` is the engine move, or a table note (a seat going
   away, and why; someone back; the game ending), so a hand's log explains
   every bot move in it.
+- `rooms.seats`: who sits where now. A bot may be keeping the seat for
+  someone (`heldFor`, their id; `keptName`, their name; `kept`: `left` or
+  `late`), so the room can offer it back to them.
 - `game_players`, one row per seat, written at the deal: who sat where, with
-  the person's id on a human's row and the name on every row. When the game
+  the person's id on a human's row and the name on every row. A seat that
+  changes hands mid-game (someone leaving, or taking a bot's seat over) has
+  its row follow it, best-effort. When the game
   ends they're written again from `over`, with each seat's final score and
   place (ties share a place; nobody is placed in an abandoned game). (If a
   seated person has no profile row, that game's rows are written without
   ids.)
+- `room_members`, one row per person who has sat at a room: when they were
+  first and last seen there (`last_seen_at`, which says who's here between
+  games, above) and how many games they've played there (`games_played`:
+  finished games, complete, ended by the host or idle, that they were
+  seated at the end of; worked out again from `game_players` after each
+  finish, so a finish run twice counts nothing twice).
 - `games.ended_how` (`complete`, `host`, `idle` or `abandoned`), `ended_by`
   (the host who ended it, if one did), `ended_at` and `hands_played` say
   how the game ended, for the funnel.
 - `app_events`, one row for each moment the funnel counts
   (`lib/live/events.ts`, read by `docs/ops/funnel.sql` query 9): a room
-  made, a seat taken by the room's link, a game dealt (with how many people
+  made, a seat taken (by the room's link, or by displacing someone who
+  isn't here, sitting back down, or taking a bot's seat over mid-game), a
+  game dealt (with how many people
   were at each level, or `levels: null` when the levels couldn't be read),
   and a game finished (with how it ended) or abandoned. Each is written as
   it happens, and a write that fails is logged, never a failed request. A

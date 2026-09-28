@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { BROADCAST_TIMEOUT_MS, broadcast, gamePoke } from './broadcast';
+import { BROADCAST_TIMEOUT_MS, broadcast, gamePoke, roomPoke, seatsPoke } from './broadcast';
 
 const KEY = 'service-role-key-for-tests';
 
@@ -91,5 +91,17 @@ describe('broadcast', () => {
     vi.stubGlobal('fetch', fetch);
     await broadcast([gamePoke('g-1', 4)]);
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('pokes', () => {
+  it('tells a table the seats changed hands with no version, so every page looks again', () => {
+    expect(seatsPoke('g-1')).toEqual({ topic: 'game:g-1', event: 'state', payload: { seats: true } });
+    expect(seatsPoke('g-1').payload).not.toHaveProperty('version');
+  });
+
+  it('tells a table its version moved, and a lobby its seats did', () => {
+    expect(gamePoke('g-1', 4, { gameOver: true })).toEqual({ topic: 'game:g-1', event: 'state', payload: { version: 4, gameOver: true } });
+    expect(roomPoke('r-1', 'seats', {})).toEqual({ topic: 'room:r-1', event: 'seats', payload: {} });
   });
 });

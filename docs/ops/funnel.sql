@@ -298,12 +298,15 @@ order by 1 desc;
 -- Unlike the queries above, nothing here is pieced together from who is
 -- sitting where now: each moment was written down when it happened.
 --   rooms_made:      rooms created ("Host a table").
---   people_who_sat:  different people who took a seat by the room's link
---                    that week. Making a room seats its host without the
---                    link, so a host is counted here only when they took a
---                    seat by it: in someone else's room, or in their own
+--   people_who_sat:  different people who took a seat that week: by the
+--                    room's link (data->>'how' is 'join', or 'displaced'
+--                    for a regular's seat who wasn't there), or mid-game
+--                    from a bot ('sit_back', 'kept_seat' or 'take_over').
+--                    Making a room seats its host without the link, so a
+--                    host is counted here only when they took a seat
+--                    afterwards: in someone else's room, or in their own
 --                    after standing up from it (in its lobby, or by leaving
---                    a game and sitting back down between games).
+--                    a game and sitting back down).
 --   games_dealt:     games dealt, first games and games played again alike.
 --   finished:        games that reached the final table, split by how:
 --     complete:      the last hand was scored;
