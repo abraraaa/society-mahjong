@@ -415,7 +415,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
         marks={marks}
         {...(ending !== undefined ? { endLine: ending } : {})}
       />
-      {/* After the table, so a sheet opened from the result sheet is drawn over it. */}
+      {/* Each question opens on the top layer (ConfirmSheet), over the result sheet or whatever other sheet the table has up. */}
       {open?.kind === 'leave' &&
         (snap.isHost ? (
           <ConfirmSheet

@@ -159,8 +159,24 @@ async function rejection(p: Promise<unknown>): Promise<HttpError> {
   return err as HttpError;
 }
 
-/** Seat 0's own play (the analysis bot's choice) until the hand ends, the bots answering sharply between: each table seat 0 decided at, then the end. */
-function tablesToEnd(state: HandState): HandState[] {
+/** Hands already played out, by the table they started from: the same table always plays out the same way. */
+const playedOut = new Map<string, readonly HandState[]>();
+
+/**
+ * Seat 0's own play (the analysis bot's choice) until the hand ends, the bots answering sharply between: each table seat 0
+ * decided at, then the end. The bots take most of a second over a hand, so each starting table is played out once per file
+ * and remembered: several tests start from the same deal, and one test may start from it several times.
+ */
+function tablesToEnd(state: HandState): readonly HandState[] {
+  const key = JSON.stringify(state);
+  const known = playedOut.get(key);
+  if (known) return known;
+  const tables = playOutFresh(state);
+  playedOut.set(key, tables);
+  return tables;
+}
+
+function playOutFresh(state: HandState): HandState[] {
   const tables = [state];
   let s = state;
   for (let i = 0; i < 500 && s.phase !== 'finished'; i++) {
@@ -700,6 +716,23 @@ describe('standing up from a live table', () => {
     await expect(leaveGame(GAME, 'u-abrar', T0)).resolves.toEqual({ abandoned: true });
     expect(commits().map((c) => c.expected)).toEqual([live.version, live.version + 1]);
     expect(store.finishGame).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up no seat when the last hand has just ended the game and its finish hasn’t landed: the finish runs instead', async () => {
+    const live = setTable();
+    db.room = { ...(db.room as RoomRow), seats: two };
+    // The last hand's end is committed; the game still reads active, and Bea is still seated beside Abrar.
+    const over: GameOver = { how: 'complete', by: null, at: T0, hands: 16, scores: [2000, 14504, -8000, -8504], seats: two };
+    db.live = { ...live, version: 30, table: { v: 1, scores: over.scores, over, extra: {} } };
+    // Were the seat given up, this write would land.
+    vi.mocked(store.saveSeats).mockResolvedValueOnce('2026-09-24T00:00:01Z');
+    await expect(leaveGame(GAME, 'u-abrar', T0)).resolves.toEqual({ abandoned: false });
+    // No bot takes the seat, so the host's Play again deals Abrar in.
+    expect(store.saveSeats).not.toHaveBeenCalled();
+    expect(store.finishGame).toHaveBeenCalledTimes(1);
+    expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, over);
+    expect(store.commitTable).not.toHaveBeenCalled();
+    expect(broadcaster.gamePoke).toHaveBeenCalledWith(GAME, 30, { gameOver: true });
   });
 
   it('gives up no seat when the host has already dealt a newer game than the one being left', async () => {

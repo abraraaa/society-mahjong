@@ -1,8 +1,9 @@
 import { expect, test } from '@playwright/test';
 import { finalStandings } from '../lib/live/final';
 import { HOST_LEAVE, endLine, endSheet } from '../lib/live/lifecycle-copy';
+import { plainError } from '../lib/live/plain';
 import type { GameSnapshot } from '../lib/live/snapshot';
-import { fixtures } from './fixtures';
+import { fixtures, serve } from './fixtures';
 import { flush, ok, openTable } from './live';
 
 /**
@@ -92,6 +93,97 @@ test.describe('the end of a game', () => {
     expect(t.pageErrors).toEqual([]);
   });
 
+  test('(d) the question sits over the result sheet: the sheet is dimmed and out of reach until it’s answered', async ({ page }) => {
+    const fx = fixtures();
+    const t = await openTable(page, { view: () => ok(fx.handDone) });
+    const result = page.locator('.sheet:not([role="dialog"])');
+    await result.getByRole('button', { name: 'End the game here' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('heading', { name: endSheet(false, 2).title })).toBeVisible();
+
+    // Where the result sheet's title shows past the question, the question's scrim is on top of it.
+    const box = (await result.locator('h2').boundingBox())!;
+    const [x, y] = [box.x + box.width / 2, box.y + box.height / 2];
+    expect(await page.evaluate(([px, py]) => document.elementFromPoint(px!, py!)?.className ?? null, [x, y])).toBe('scrim scrim-top');
+    // So a tap there is the scrim's "no": the question goes, and nothing is sent.
+    await page.mouse.click(x, y);
+    await expect(dialog).toHaveCount(0);
+    await flush(page);
+    expect(t.count('end')).toBe(0);
+    expect(t.count('act')).toBe(0);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(d) an End that fails keeps the question up for another tap, says so, and looks at the table again', async ({ page }) => {
+    const fx = fixtures();
+    const failed = { status: 500, message: 'something went wrong' };
+    const t = await openTable(page, { view: () => ok(fx.handDone), end: (n) => (n === 1 ? { status: failed.status, body: { error: failed.message } } : ok(fx.endedByHost)) });
+    // The first look, and the one on SUBSCRIBED.
+    await expect.poll(() => t.count('view')).toBe(2);
+    await flush(page);
+    const looks = t.count('view');
+    const copy = endSheet(false, 2);
+    const dialog = page.getByRole('dialog');
+    await page.locator('.sheet').getByRole('button', { name: 'End the game here' }).click();
+    await dialog.getByRole('button', { name: copy.confirmLabel }).click();
+
+    await expect(t.toast()).toHaveText(plainError(failed));
+    await expect(dialog.getByRole('heading', { name: copy.title })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: copy.confirmLabel })).toBeEnabled();
+    await expect.poll(() => t.count('view')).toBeGreaterThan(looks);
+
+    // Another tap, and this time it lands.
+    await dialog.getByRole('button', { name: copy.confirmLabel }).click();
+    await expect(page.locator('.sheet').getByRole('heading', { name: 'Final scores' })).toBeVisible();
+    await expect(dialog).toHaveCount(0);
+    expect(t.count('end')).toBe(2);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(d) an End turned back with the table attached shows that table at once, and keeps the question up', async ({ page }) => {
+    const fx = fixtures();
+    // Someone else's move landed first, three times over: the server sends the table as it now stands.
+    const moved: GameSnapshot = { ...fx.handDone, version: 12, scores: [1500, -500, -500, -500] };
+    const lost = 'the table changed under you; try again';
+    const t = await openTable(page, {
+      view: () => ok(fx.handDone),
+      end: (n) => (n === 1 ? { status: 409, body: { error: lost, snapshot: serve(moved) } } : ok({ ...fx.endedByHost, version: 13 })),
+    });
+    const copy = endSheet(false, 2);
+    const dialog = page.getByRole('dialog');
+    await page.locator('.sheet').getByRole('button', { name: 'End the game here' }).click();
+    await dialog.getByRole('button', { name: copy.confirmLabel }).click();
+
+    await expect(t.toast()).toHaveText(plainError({ status: 409, message: lost }));
+    // The totals behind the question are the ones that came back with the refusal, which no look would give.
+    await expect(page.locator('.sheet:not([role="dialog"]) .standings .row.is-me .total')).toHaveText('+1,500');
+    await expect(dialog.getByRole('button', { name: copy.confirmLabel })).toBeEnabled();
+
+    await dialog.getByRole('button', { name: copy.confirmLabel }).click();
+    await expect(page.locator('.sheet').getByRole('heading', { name: 'Final scores' })).toBeVisible();
+    expect(t.count('end')).toBe(2);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(d) an End refused because the host’s powers have passed on closes the question, says why, and looks again', async ({ page }) => {
+    const fx = fixtures();
+    const refused = { status: 403, message: 'only the host can end the game' };
+    const t = await openTable(page, { view: () => ok(fx.handDone), end: () => ({ status: refused.status, body: { error: refused.message } }) });
+    await expect.poll(() => t.count('view')).toBe(2);
+    await flush(page);
+    const looks = t.count('view');
+    const dialog = page.getByRole('dialog');
+    await page.locator('.sheet').getByRole('button', { name: 'End the game here' }).click();
+    await dialog.getByRole('button', { name: endSheet(false, 2).confirmLabel }).click();
+
+    await expect(t.toast()).toHaveText(plainError(refused));
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(() => t.count('view')).toBeGreaterThan(looks);
+    await expect(page.locator('.sheet').getByRole('button', { name: 'Next hand' })).toBeVisible();
+    expect(t.count('end')).toBe(1);
+    expect(t.pageErrors).toEqual([]);
+  });
+
   test('(d) nobody else is offered the end on the result sheet', async ({ page }) => {
     const fx = fixtures();
     const t = await openTable(page, { view: () => ok({ ...fx.handDone, isHost: false }) });
@@ -130,6 +222,36 @@ test.describe('the end of a game', () => {
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByRole('heading', { name: 'Leave the table?' })).toBeVisible();
     await expect(dialog.getByRole('button')).toHaveText(['Leave', 'Stay']);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(g) a phone on its side sees a won hand’s final table from its title, scrolls to the scores, and keeps its button in reach', async ({ page }) => {
+    const fx = fixtures();
+    const t = await openTable(page, { view: () => ok(fx.endedByHost) });
+    const sheet = page.locator('.sheet');
+    const button = sheet.getByRole('button', { name: 'Play again' });
+    const line = sheet.getByText(endLineOf(fx.endedByHost));
+    await expect(sheet.getByRole('heading', { name: 'Final scores' })).toBeVisible();
+    // Upright, it all fits, as it always did: nothing to scroll.
+    expect(await sheet.evaluate((s) => s.scrollHeight <= s.clientHeight)).toBe(true);
+
+    for (const [width, height] of [
+      [852, 393],
+      [320, 640],
+    ] as const) {
+      await page.setViewportSize({ width, height });
+      await sheet.evaluate((s) => s.scrollTo(0, 0));
+      // The top of the sheet, the winner's name with it, is on the screen, and so is the button.
+      expect((await sheet.boundingBox())!.y).toBeGreaterThanOrEqual(0);
+      await expect(sheet.locator('h2')).toBeInViewport({ ratio: 1 });
+      await expect(button).toBeInViewport({ ratio: 1 });
+      // The rest is a scroll away, clear of the button, which stays where it was.
+      await sheet.evaluate((s) => s.scrollTo(0, s.scrollHeight));
+      await expect(line).toBeInViewport({ ratio: 1 });
+      await expect(button).toBeInViewport({ ratio: 1 });
+      const [text, tap] = [(await line.boundingBox())!, (await button.boundingBox())!];
+      expect(text.y + text.height).toBeLessThanOrEqual(tap.y);
+    }
     expect(t.pageErrors).toEqual([]);
   });
 

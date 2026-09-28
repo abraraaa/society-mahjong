@@ -296,8 +296,11 @@ for everyone", which asks again ("End the game now?", saying the hand
 being played won't count) before ending it for the whole table. When the
 last human leaves, the game ends as `abandoned`, saved with the table like
 any other end (a hand cut short doesn't count), and the room goes back to
-`finished`; anyone still on the page sees "The table has closed". In the
-lobby, leaving simply empties the seat.
+`finished`; anyone still on the page sees "The table has closed". A Leave
+that lands just after the game's end is saved (the last hand scored, its
+finish not yet written) gives nothing up: the finish is written instead,
+and the seat stays theirs for the host's next deal. In the lobby, leaving
+simply empties the seat.
 
 Turn limits nudge at 20 seconds remaining. After two expired turns the seat
 is handed to a bot stand-in and the human reclaims it on return. No

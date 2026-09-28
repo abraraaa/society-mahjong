@@ -911,7 +911,7 @@ b .term {
   }
 }
 
-/* A definition opens above whatever sheet is already up. */
+/* A definition, or a question such as Leave or End, opens above whatever sheet is already up. */
 .scrim.scrim-top {
   z-index: 40;
 }

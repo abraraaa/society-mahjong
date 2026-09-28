@@ -50,7 +50,12 @@ The report's `schema` line checks that the database has what migration 0005 adde
 
 - `ok`: all there.
 - `missing: …`: names what isn't there, which means the database is behind the code, and every live table fails until it's fixed. Run the _Migrate and deploy_ workflow (GitHub, then Actions, then _Migrate and deploy_, then Run workflow; set up as in docs/DATA-MODEL.md, "Setting up the pipeline"), then reload the report.
-- `could not check: …`: the database didn't answer at all, which is a different problem. The `tables` lines will say the same, and a paused project is the usual cause (see the 500 above).
+- `no access: …`: the database refused the server, and every live table fails until it's fixed. The line says which of two things it is:
+  - **The key is wrong.** Some `tables` lines start `no access` too. Supabase says `Invalid API key` to a wrong or rotated key, and `permission denied` to the anon or publishable key where the service key should be (it can read a few tables, but not `live_state`, `games` or 0005's). In Vercel, check `SUPABASE_SERVICE_ROLE_KEY` (or `SUPABASE_SECRET_KEY`) against the project's **service_role** or **secret** key (Supabase, then Project Settings, then API Keys), fix it for Production, redeploy, and reload the report.
+  - **`commit_table` has lost its grant.** Every `tables` line reads `ok` and only `commit_table` is refused, so the key is right but the function may not be run by it. In Supabase's SQL editor, run the `grant execute on function public.commit_table(…) to service_role;` line from `supabase/migrations/0005_settled_model.sql`, then reload the report.
+- `could not check: …`: the database said something else, or nothing at all. Usually it didn't answer, the `tables` lines say the same, and a paused project is the usual cause (see the 500 above). If the tables all read `ok`, the words in brackets are the clue.
+
+When more than one of these applies, the line gives each in turn, in that order.
 
 **While you're in Supabase**, check the plan under the organisation's billing settings. A paid plan doesn't pause, so this check matters only on Free.
 
