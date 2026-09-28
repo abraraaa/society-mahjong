@@ -57,28 +57,25 @@ vi.mock('../supabase/service', () => {
 });
 
 import { SupabaseError, HttpError } from './errors';
+import * as store from './store';
 import {
   abandonGame,
-  appendAction,
+  commitTable,
   countHand,
   createRoom,
-  endHand,
   expiredGames,
   finishGame,
   gameById,
   loadLive,
-  openHand,
   recordHand,
-  recordResult,
   roomByCode,
   roomById,
-  saveLive,
   saveSeats,
-  settleScores,
   stagesBySeat,
   startGame,
   type RoomRow,
 } from './store';
+import { commitArgs, type TableWrite } from './hand-log';
 import { humanLevels, policyFor } from './policy';
 import type { Seats } from './types';
 
@@ -137,8 +134,26 @@ const wonHand = {
   progress: { handIndex: 2 },
   result: { type: 'win', winner: 1, patternId: 'all-pungs', settlement: { transfers: [{ from: 0, to: 1, amount: 8 }] } },
 } as unknown as HandState;
-const washout = { ...wonHand, result: { type: 'draw' } } as unknown as HandState;
 const newGame = { id: 'g-2', room_id: 'r-1', seed: 'seed', status: 'active', hands_played: 0 };
+const T = Date.parse('2026-09-24T20:00:00.000Z');
+/** Hana's win, as one request writes it: the hand ends, its points are in the running totals, and a clock waits on nobody. */
+const write: TableWrite = {
+  state: wonHand,
+  table: { v: 1, scores: [-8, 8, 0, 0], extra: {} },
+  deadlines: { claim: null, turn: null },
+  wakeAt: null,
+  acted: true,
+  hands: [
+    {
+      hand: 2,
+      dealer: 0,
+      progress: wonHand.progress,
+      moves: [{ v: 4, by: 'player', seat: 1, userId: 'u-hana', a: { type: 'declareWin', seat: 1 } }],
+      result: wonHand.result,
+      ended: true,
+    },
+  ],
+};
 
 beforeEach(() => {
   supabase.log.length = 0;
@@ -164,6 +179,40 @@ describe('reads', () => {
     expect(await roomByCode('abcd')).toEqual(room);
     expect(supabase.log[0]!.steps).toContainEqual(['eq', ['code', 'ABCD']]);
     expect(await expiredGames(0)).toEqual(['g-9']);
+  });
+
+  it('read the live table with its bookkeeping, clocks and stamps, parsing table_state', async () => {
+    const row = {
+      version: 7,
+      state: wonHand,
+      claim_deadline: null,
+      turn_deadline: '2026-09-24T20:01:30.000Z',
+      table_state: { v: 1, scores: [-8, 8, 0, 0], ready: { hand: 2 } },
+      wake_at: '2026-09-24T20:01:30.000Z',
+      acted_at: '2026-09-24T19:59:00.000Z',
+      updated_at: '2026-09-24T20:00:00.000Z',
+    };
+    answerAll(undefined, () => row);
+    expect(await loadLive(GAME)).toEqual({
+      version: 7,
+      state: wonHand,
+      deadlines: { claim: null, turn: T + 90_000 },
+      table: { v: 1, scores: [-8, 8, 0, 0], extra: { ready: { hand: 2 } } },
+      legacy: false,
+      wakeAt: T + 90_000,
+      actedAt: T - 60_000,
+      updatedAt: T,
+    });
+    expect(supabase.log[0]!.steps).toEqual([
+      ['select', ['version, state, claim_deadline, turn_deadline, table_state, wake_at, acted_at, updated_at']],
+      ['eq', ['game_id', GAME]],
+      ['maybeSingle', []],
+    ]);
+
+    // A table last saved by older code: 0005's '{}' is legacy, with no scores of its own; no wake time stays none.
+    answerAll(undefined, () => ({ ...row, table_state: {}, wake_at: null }));
+    const legacy = await loadLive(GAME);
+    expect(legacy).toMatchObject({ table: { scores: null, extra: {} }, legacy: true, wakeAt: null, actedAt: T - 60_000, updatedAt: T });
   });
 
   it('throw when the database fails, instead of passing for "no such room" or an empty table', async () => {
@@ -241,9 +290,7 @@ const WRITES: readonly Write[] = [
     data: () => room,
   },
   { name: 'saveSeats', run: () => saveSeats('r-1', seats, room.updated_at), labels: ['save the seats'], data: () => [{ updated_at: room.updated_at }] },
-  { name: 'saveLive', run: () => saveLive(GAME, 3, wonHand, { claim: null, turn: null }), labels: ['save the table'], data: () => [{ version: 4 }] },
-  { name: 'appendAction', run: () => appendAction(GAME, 2, { type: 'pass', seat: 0 }), labels: ['log the move'] },
-  { name: 'openHand', run: () => openHand(GAME, wonHand), labels: ['open the hand'] },
+  { name: 'commitTable', run: () => commitTable(GAME, 3, write), labels: ['save the table'], data: () => 4 },
   {
     name: 'startGame',
     run: () => startGame(room, 'seed', seats, wonHand, { claim: null, turn: null }),
@@ -257,12 +304,8 @@ const WRITES: readonly Write[] = [
     data: (q) => (q.target === 'games' ? newGame : q.target === 'rooms' ? [] : null),
     ends: 'refuses',
   },
-  { name: 'finishGame', run: () => finishGame(GAME, 'r-1'), labels: ['close the room', 'stop the clocks', 'finish the game'] },
-  { name: 'abandonGame', run: () => abandonGame(GAME, 'r-1'), labels: ['close the room', 'stop the clocks', 'abandon the game'] },
-  { name: 'settleScores', run: () => settleScores(GAME, room, wonHand), labels: ['settle the scores'], data: () => [{ id: 'r-1' }] },
-  { name: 'endHand', run: () => endHand(GAME, wonHand), labels: ['close the hand'] },
-  { name: 'recordResult, for a win', run: () => recordResult(GAME, wonHand), labels: ['record the result'] },
-  { name: 'recordResult, for a washout', run: () => recordResult(GAME, washout), labels: ['record the result'] },
+  { name: 'finishGame', run: () => finishGame(GAME, 'r-1'), labels: ['close the room', 'finish the game'] },
+  { name: 'abandonGame', run: () => abandonGame(GAME, 'r-1'), labels: ['close the room', 'abandon the game'] },
   { name: 'countHand', run: () => countHand(GAME), labels: ['count the hand'] },
 ];
 
@@ -284,10 +327,11 @@ describe('writes', () => {
     }
   });
 
-  it('still tell a lost race from a failure: no row matched is false or null, not a throw', async () => {
+  it('still tell a lost race from a failure: no row matched is null, not a throw', async () => {
     answerAll(undefined, () => []);
     expect(await saveSeats('r-1', seats, room.updated_at)).toBeNull();
-    expect(await saveLive(GAME, 3, wonHand, { claim: null, turn: null })).toBe(false);
+    answerAll(undefined, () => null);
+    expect(await commitTable(GAME, 3, write)).toBeNull();
   });
 
   it('drop the game and say so when the seats moved before the deal', async () => {
@@ -305,32 +349,31 @@ describe('finishing or abandoning a game', () => {
     { name: 'abandonGame', run: () => abandonGame(GAME, 'r-1'), status: 'abandoned' },
   ];
 
-  it.each(ends)('$name closes the room first, then stops the clocks, and marks the game last', async ({ run, status }) => {
+  it.each(ends)('$name closes the room first and marks the game last, leaving the table itself alone', async ({ run, status }) => {
     await run();
-    expect(ran()).toEqual(['rooms:update', 'live_state:update', 'games:update']);
-    const [closeRoom, clocks, game] = supabase.log;
+    expect(ran()).toEqual(['rooms:update', 'games:update']);
+    const [closeRoom, game] = supabase.log;
     expect(closeRoom!.steps[0]).toEqual(['update', [{ status: 'finished', updated_at: expect.any(String) }]]);
-    expect(clocks!.steps[0]).toEqual(['update', [{ claim_deadline: null, turn_deadline: null, updated_at: expect.any(String) }]]);
-    expect(clocks!.steps).toContainEqual(['eq', ['game_id', GAME]]);
     expect(game!.steps[0]![1][0]).toMatchObject({ status });
     expect(game!.steps).toContainEqual(['eq', ['id', GAME]]);
   });
 
-  it.each(ends)('$name touches the room only while it still holds this game, so one the host has dealt again keeps playing', async ({ run }) => {
+  it.each(ends)('$name closes the room only while it still holds this game and is playing it, so a repeat, or a room dealt again, writes nothing', async ({ run }) => {
     await run();
     const closeRoom = supabase.log.find(is('rooms', 'update'))!;
     expect(closeRoom.steps).toContainEqual(['eq', ['id', 'r-1']]);
     expect(closeRoom.steps).toContainEqual(['eq', ['current_game_id', GAME]]);
+    expect(closeRoom.steps).toContainEqual(['eq', ['status', 'playing']]);
 
-    // A room that has moved on matches no row, which is not a failure: the old game is still finished.
+    // A room that has moved on, or already closed, matches no row, which is not a failure: the old game is still finished.
     supabase.log.length = 0;
     answerAll(undefined, () => []);
     await run();
-    expect(ran()).toEqual(['rooms:update', 'live_state:update', 'games:update']);
+    expect(ran()).toEqual(['rooms:update', 'games:update']);
   });
 
   it.each(ends)('$name leaves the game active whichever write fails, so it can be run again from the start', async ({ run }) => {
-    for (const i of [0, 1, 2]) {
+    for (const i of [0, 1]) {
       supabase.log.length = 0;
       failNth(i);
       await expect(run()).rejects.toBeInstanceOf(SupabaseError);
@@ -342,51 +385,52 @@ describe('finishing or abandoning a game', () => {
     supabase.log.length = 0;
     answerAll();
     await run();
-    expect(ran()).toEqual(['rooms:update', 'live_state:update', 'games:update']);
+    expect(ran()).toEqual(['rooms:update', 'games:update']);
   });
 });
 
-describe('closing a hand', () => {
-  it("settles a win into the room's running totals and returns them", async () => {
-    answerAll(undefined, () => [{ id: 'r-1' }]);
-    const before: RoomRow = { ...room, ledger: [3, -3, 0, 0] };
-    expect(await settleScores(GAME, before, wonHand)).toEqual([-5, 5, 0, 0]);
-    expect(ran()).toEqual(['rooms:update']);
-    const [write] = supabase.log;
-    expect(write!.steps[0]).toEqual(['update', [{ ledger: [-5, 5, 0, 0], updated_at: expect.any(String) }]]);
-    expect(write!.steps).toContainEqual(['eq', ['id', 'r-1']]);
+describe('saving the live table', () => {
+  it('is one commit_table call, whose argument is exactly what commitArgs builds, and gives back the new version', async () => {
+    answerAll(undefined, () => 4);
+    expect(await commitTable(GAME, 3, write)).toBe(4);
+    expect(supabase.log).toEqual([{ target: 'rpc:commit_table', steps: [['rpc', [commitArgs(GAME, 3, write)]]] }]);
+    const [args] = supabase.log[0]!.steps[0]![1] as [Record<string, unknown>];
+    expect(args).toMatchObject({ p_game_id: GAME, p_expected: 3, p_acted: true, p_wake_at: null, p_table_state: { v: 1, scores: [-8, 8, 0, 0] } });
   });
 
-  it('leaves the totals of a room the host has dealt again alone, and says nothing was written', async () => {
-    answerAll(undefined, () => []);
-    expect(await settleScores(GAME, room, wonHand)).toBeNull();
-    expect(supabase.log[0]!.steps).toContainEqual(['eq', ['current_game_id', GAME]]);
+  it('gives null when someone else saved first, and throws, once and without trying again, when the database fails', async () => {
+    answerAll(undefined, () => null);
+    expect(await commitTable(GAME, 3, write)).toBeNull();
+    supabase.log.length = 0;
+    answerAll(() => true);
+    const err = await thrown(commitTable(GAME, 3, write));
+    expect(err).toBeInstanceOf(SupabaseError);
+    expect((err as SupabaseError).what).toBe('save the table');
+    expect(ran()).toEqual(['rpc:commit_table:rpc']);
   });
 
-  it('writes no scores for a washout', async () => {
-    expect(await settleScores(GAME, room, washout)).toBeNull();
-    expect(supabase.log).toHaveLength(0);
+  it('is the only way the store writes a live table: nothing updates live_state or writes hand_results', async () => {
+    for (const gone of ['saveLive', 'appendAction', 'openHand', 'endHand', 'settleScores', 'recordResult', 'clearDeadlines']) expect(store, gone).not.toHaveProperty(gone);
+    const everything: (() => Promise<unknown>)[] = [
+      ...WRITES.map((w) => w.run),
+      () => loadLive(GAME),
+      () => roomByCode('ABCD'),
+      () => roomById('r-1'),
+      () => gameById(GAME),
+      () => expiredGames(0),
+      () => stagesBySeat(seats),
+      () => recordHand(seats, wonHand),
+    ];
+    for (const run of everything) {
+      answerAll(undefined, (q) => (q.target === 'games' ? newGame : q.target === 'rooms' ? [{ id: 'r-1' }] : q.target === 'rpc:commit_table' ? 4 : null));
+      await thrown(run());
+    }
+    expect(supabase.log.length).toBeGreaterThan(everything.length);
+    expect(ran().filter((q) => q === 'live_state:update' || q === 'live_state:upsert' || q.startsWith('hand_results:') || q.startsWith('hands:update'))).toEqual([]);
   });
+});
 
-  it("marks the hand's row ended, with its result", async () => {
-    await endHand(GAME, wonHand);
-    expect(ran()).toEqual(['hands:update']);
-    const [write] = supabase.log;
-    expect(write!.steps[0]).toEqual(['update', [{ result: wonHand.result, settlement: { transfers: [{ from: 0, to: 1, amount: 8 }] }, ended_at: expect.any(String) }]]);
-    expect(write!.steps).toContainEqual(['eq', ['game_id', GAME]]);
-    expect(write!.steps).toContainEqual(['eq', ['hand_index', 2]]);
-  });
-
-  it('records a win with its winner and pattern, and a washout with neither', async () => {
-    await recordResult(GAME, wonHand);
-    await recordResult(GAME, washout);
-    const rows = supabase.log.filter(is('hand_results', 'insert')).map((q) => q.steps[0]![1][0]);
-    expect(rows).toEqual([
-      { game_id: GAME, hand_index: 2, winner: 1, pattern_id: 'all-pungs', settlement: { transfers: [{ from: 0, to: 1, amount: 8 }] } },
-      { game_id: GAME, hand_index: 2, winner: null, pattern_id: null, settlement: {} },
-    ]);
-  });
-
+describe('after a hand ends', () => {
   it('counts the hand on the game', async () => {
     await countHand(GAME);
     expect(supabase.log[0]).toEqual({ target: 'rpc:bump_hands_played', steps: [['rpc', [{ p_game_id: GAME }]]] });

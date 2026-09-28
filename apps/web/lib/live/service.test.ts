@@ -1,23 +1,32 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { analysisBot, karachi, reduce, viewFor, type HandState } from '@society/engine';
 import type { GameRow, LiveRow, RoomRow } from './store';
+import type { HandWrite, TableWrite } from './hand-log';
 import { dealFirstHand, deadlinesFor, settle, type StepResult } from './table';
-import type { ClientAction, Seats } from './types';
+import type { TableState } from './table-state';
+import type { ClientAction, Deadlines, Seats } from './types';
 import { policyFor } from './policy';
 import { parseClientAction } from './validate';
 
 /**
  * actOnGame against an in-memory store: who may tick a table (resolve its
- * expired clocks and read it back), who may act at it, and what happens when
- * the database fails after a move is saved. The store and the broadcaster
- * are faked, saving the table as a database would (the version goes up);
- * the table is the real one, and `step` is wrapped only so a test can hand
- * back a hand that has just ended.
+ * expired clocks and read it back), who may act at it, what one request saves
+ * (one commit_table call: the state, the running totals, the clocks and every
+ * move it made), and what happens when the database fails after that commit.
+ * The store and the broadcaster are faked, the store committing as the
+ * database would: the version goes up only when nobody saved first, and
+ * acted_at moves only for a person's request. The table is the real one;
+ * `step`, `afterCommit` and `wakeAt` are wrapped only so a test can see what
+ * they were given.
  */
 const db = vi.hoisted(() => ({
   game: null as unknown,
   room: null as unknown,
   live: null as unknown,
+  /** how many of the next commits someone else saves first */
+  lose: 0,
+  /** the database's own clock, which stamps acted_at and updated_at */
+  now: 1_700_000_500_000,
 }));
 
 vi.mock('server-only', () => ({}));
@@ -25,16 +34,28 @@ vi.mock('./store', () => ({
   gameById: vi.fn(async () => db.game),
   roomById: vi.fn(async () => db.room),
   loadLive: vi.fn(async () => db.live),
-  saveLive: vi.fn(async (_gameId: string, expectedVersion: number, state: unknown, deadlines: unknown) => {
-    db.live = { version: expectedVersion + 1, state, deadlines };
-    return true;
+  commitTable: vi.fn(async (_gameId: string, expectedVersion: number, w: TableWrite) => {
+    const live = db.live as LiveRow;
+    if (db.lose > 0) {
+      // Someone else's request lands first, and this one writes nothing.
+      db.lose -= 1;
+      db.live = { ...live, version: live.version + 1 };
+      return null;
+    }
+    if (live.version !== expectedVersion) return null;
+    db.live = {
+      version: expectedVersion + 1,
+      state: w.state,
+      deadlines: w.deadlines,
+      table: w.table,
+      legacy: false,
+      wakeAt: w.wakeAt,
+      actedAt: w.acted ? db.now : live.actedAt,
+      updatedAt: db.now,
+    } satisfies LiveRow;
+    return expectedVersion + 1;
   }),
   stagesBySeat: vi.fn(async (seats: readonly ({ kind: string } | null)[]) => seats.map((s) => (s?.kind === 'human' ? 'new' : null))),
-  appendAction: vi.fn(async () => {}),
-  openHand: vi.fn(async () => {}),
-  settleScores: vi.fn(async () => null),
-  endHand: vi.fn(async () => {}),
-  recordResult: vi.fn(async () => {}),
   countHand: vi.fn(async () => {}),
   recordHand: vi.fn(async () => {}),
   finishGame: vi.fn(async () => {}),
@@ -46,6 +67,14 @@ vi.mock('./table', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./table')>();
   return { ...actual, step: vi.fn(actual.step) };
 });
+vi.mock('./commit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./commit')>();
+  return { ...actual, afterCommit: vi.fn(actual.afterCommit) };
+});
+vi.mock('./table-state', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./table-state')>();
+  return { ...actual, wakeAt: vi.fn(actual.wakeAt) };
+});
 vi.mock('./broadcast', () => ({
   broadcast: vi.fn(async () => {}),
   gamePoke: vi.fn(() => ({ topic: 't', event: 'e', payload: {} })),
@@ -55,8 +84,10 @@ vi.mock('./broadcast', () => ({
 import { HttpError, actOnGame, leaveGame, sweepGames, viewGame } from './service';
 import { SupabaseError } from './errors';
 import * as broadcaster from './broadcast';
+import * as commit from './commit';
 import * as store from './store';
 import * as table from './table';
+import * as tableState from './table-state';
 
 const T0 = 1_700_000_000_000;
 const policy = policyFor(['new']);
@@ -71,9 +102,17 @@ const seats: Seats = [
   { kind: 'bot', name: 'Ayesha' },
 ];
 
+/** A v1 table with nobody on any points yet, last moved by a person at T0. */
+const FRESH: TableState = { v: 1, scores: [0, 0, 0, 0], extra: {} };
+
+/** The live row for a table at `state`, as loadLive reads it. */
+function liveRow(state: HandState, deadlines: Deadlines, extra: Partial<LiveRow> = {}): LiveRow {
+  return { version: 3, state, deadlines, table: FRESH, legacy: false, wakeAt: null, actedAt: T0, updatedAt: T0, ...extra };
+}
+
 function setTable(): LiveRow {
   const first = dealFirstHand(karachi, seats, 'svc-1', policy, T0);
-  const live: LiveRow = { version: 3, state: first.state, deadlines: first.deadlines };
+  const live = liveRow(first.state, first.deadlines);
   db.game = { id: GAME, room_id: 'r-1', seed: 'svc-1', status: 'active', hands_played: 0 } satisfies GameRow;
   db.room = {
     id: 'r-1',
@@ -88,6 +127,7 @@ function setTable(): LiveRow {
     updated_at: '2026-09-24T00:00:00Z',
   } satisfies RoomRow;
   db.live = live;
+  db.lose = 0;
   return live;
 }
 
@@ -105,7 +145,7 @@ async function rejection(p: Promise<unknown>): Promise<HttpError> {
   return err as HttpError;
 }
 
-/** Seat 0's own play (the analysis bot's choice) until the hand ends, the bots answering between: each table seat 0 decided at, then the end. */
+/** Seat 0's own play (the analysis bot's choice) until the hand ends, the bots answering sharply between: each table seat 0 decided at, then the end. */
 function tablesToEnd(state: HandState): HandState[] {
   const tables = [state];
   let s = state;
@@ -122,38 +162,51 @@ function playOut(state: HandState): HandState {
   return tablesToEnd(state).at(-1)!;
 }
 
-/** The next call to step hands back `state` as the table after the move. */
-function nextStepGives(state: HandState, gameOver = false): void {
-  vi.mocked(table.step).mockImplementationOnce(
-    (): StepResult => ({
-      state,
-      deadlines: { claim: null, turn: null },
-      changed: true,
-      gameOver,
-      moves: [],
-      dealt: false,
-      finishedHand: state.phase === 'finished' && !gameOver,
-      standIns: [],
-    }),
-  );
+/**
+ * The hand's last decision, left to the clock: the table as seat 0 is about to make it, on this seed Abrar's winning move.
+ * With everyone solid the bots play sharp, so a tick past its clock plays the hand out exactly as `tablesToEnd` did.
+ */
+function lastDecision(live: LiveRow, extra: Partial<LiveRow> = {}): { live: LiveRow; ended: HandState; late: number } {
+  const tables = tablesToEnd(live.state);
+  const last = tables.at(-2)!;
+  const at = liveRow(last, deadlinesFor(last, karachi, seats, policy, T0), extra);
+  db.live = at;
+  vi.mocked(store.stagesBySeat).mockResolvedValue(['solid', null, null, null]);
+  return { live: at, ended: tables.at(-1)!, late: expired(at) };
 }
 
-const DOWN = () => new SupabaseError('write', { message: 'TypeError: fetch failed' });
+/** The totals with a won hand's transfers added, worked out here rather than by the code under test. */
+function plus(scores: readonly number[], s: HandState): number[] {
+  const next = [...scores];
+  if (s.result?.type === 'win') for (const t of s.result.settlement.transfers) ((next[t.from]! -= t.amount), (next[t.to]! += t.amount));
+  return next;
+}
 
-/** The five writes that close a hand, in the order they run, by the name each has in the log. */
-const CLOSING = [
-  ['settle the scores', () => store.settleScores],
-  ['close the hand', () => store.endHand],
-  ['record the result', () => store.recordResult],
-  ['count the hand', () => store.countHand],
-  ['tally the players', () => store.recordHand],
-] as const;
-const closers = () => CLOSING.map(([, fn]) => vi.mocked(fn()));
+/** Every commit made so far: the version it expected, and what it wrote. */
+function commits(): { expected: number; w: TableWrite }[] {
+  return vi.mocked(store.commitTable).mock.calls.map(([, expected, w]) => ({ expected, w }));
+}
+
+/** The one commit made so far, and its one hand entry. */
+function theCommit(): { expected: number; w: TableWrite; hand: HandWrite } {
+  const all = commits();
+  expect(all).toHaveLength(1);
+  const [c] = all;
+  expect(c!.w.hands).toHaveLength(1);
+  return { ...c!, hand: c!.w.hands[0]! };
+}
+
+/** The steps run after each commit so far, by the name each has in the log. */
+function afterSteps(): string[][] {
+  return vi.mocked(commit.afterCommit).mock.calls.map(([steps]) => steps.map((x) => x.what));
+}
 
 /** The last hand of the North round, over: after it there is no hand left to deal. */
 function lastHand(state: HandState): HandState {
   return { ...playOut(state), progress: { roundWind: 'N', roundIndex: 3, handInRound: 3, handIndex: 15 } };
 }
+
+const DOWN = () => new SupabaseError('write', { message: 'TypeError: fetch failed' });
 
 /** Every JSON line written to console.error so far. */
 function logged(log: { mock: { calls: unknown[][] } }): Record<string, unknown>[] {
@@ -166,6 +219,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.mocked(store.stagesBySeat).mockImplementation(async (s) => s.map((x) => (x?.kind === 'human' ? 'new' : null)));
 });
 
 describe('ticking a table', () => {
@@ -175,13 +229,13 @@ describe('ticking a table', () => {
     expect(err.status).toBe(403);
     expect(err.body).toBeUndefined();
     expect(store.loadLive).not.toHaveBeenCalled();
-    expect(store.saveLive).not.toHaveBeenCalled();
+    expect(store.commitTable).not.toHaveBeenCalled();
   });
 
   it('lets a seated player resolve an expired clock and see their own hand', async () => {
     const live = setTable();
     const snap = await actOnGame(GAME, 'u-abrar', null, null, expired(live));
-    expect(store.saveLive).toHaveBeenCalledTimes(1);
+    expect(store.commitTable).toHaveBeenCalledTimes(1);
     expect(snap.version).toBe(live.version + 1);
     expect(snap.me).toBe(0);
     expect(snap.view.seq).toBeGreaterThan(live.state.seq);
@@ -190,7 +244,7 @@ describe('ticking a table', () => {
   it('lets the host tick without a seat, and shows them only the public table', async () => {
     const live = setTable();
     const snap = await actOnGame(GAME, 'u-hana', null, null, expired(live));
-    expect(store.saveLive).toHaveBeenCalledTimes(1);
+    expect(store.commitTable).toHaveBeenCalledTimes(1);
     expect(snap.me).toBeNull();
     expect(snap.isHost).toBe(true);
     expect('me' in snap.view).toBe(false);
@@ -199,14 +253,16 @@ describe('ticking a table', () => {
   it('still lets the server itself sweep a table with nobody signed in', async () => {
     const live = setTable();
     const snap = await actOnGame(GAME, null, null, null, expired(live));
-    expect(store.saveLive).toHaveBeenCalledTimes(1);
+    expect(store.commitTable).toHaveBeenCalledTimes(1);
     expect(snap.me).toBeNull();
   });
 
   it('writes nothing when a seated player ticks before any clock has run out', async () => {
     const live = setTable();
     const snap = await actOnGame(GAME, 'u-abrar', null, null, T0 + 1000);
-    expect(store.saveLive).not.toHaveBeenCalled();
+    expect(store.commitTable).not.toHaveBeenCalled();
+    expect(commit.afterCommit).not.toHaveBeenCalled();
+    expect(broadcaster.broadcast).not.toHaveBeenCalled();
     expect(snap.version).toBe(live.version);
   });
 });
@@ -266,7 +322,7 @@ describe('acting at a table', () => {
       const err = await rejection(actOnGame(GAME, who, pass, 3, T0));
       expect(err.status).toBe(403);
     }
-    expect(store.saveLive).not.toHaveBeenCalled();
+    expect(store.commitTable).not.toHaveBeenCalled();
   });
 
   it('refuses resolveClaims from a seated player, whatever seat it names, before reading anything', async () => {
@@ -275,8 +331,7 @@ describe('acting at a table', () => {
     const err = await rejection(actOnGame(GAME, 'u-abrar', forged, 3, T0));
     expect(err.status).toBe(400);
     expect(store.gameById).not.toHaveBeenCalled();
-    expect(store.saveLive).not.toHaveBeenCalled();
-    expect(store.appendAction).not.toHaveBeenCalled();
+    expect(store.commitTable).not.toHaveBeenCalled();
   });
 
   it('refuses a move of the wrong shape, whoever calls, before reading anything', async () => {
@@ -291,20 +346,22 @@ describe('acting at a table', () => {
     const live = setTable();
     // Seat 0's last decision of the hand: left to the clock, the stand-in makes it and the hand ends.
     const last = tablesToEnd(live.state).at(-2)!;
-    db.live = { version: 3, state: last, deadlines: deadlinesFor(last, karachi, seats, policy, T0) } satisfies LiveRow;
+    db.live = liveRow(last, deadlinesFor(last, karachi, seats, policy, T0));
     const late = expired(db.live as LiveRow);
 
     const err = await rejection(actOnGame(GAME, 'u-abrar', { type: 'nextHand' }, 3, late));
     expect(err.status).toBe(400);
-    expect(store.saveLive).not.toHaveBeenCalled();
-    expect(store.openHand).not.toHaveBeenCalled();
+    expect(store.commitTable).not.toHaveBeenCalled();
 
-    // A tick instead ends the hand and records it, so it is not lost.
+    // A tick instead ends the hand and records it, with the move that ended it, so it is not lost.
     const snap = await actOnGame(GAME, 'u-abrar', null, null, late);
     expect(snap.view.phase).toBe('finished');
     expect(snap.view.progress.handIndex).toBe(live.state.progress.handIndex);
-    for (const write of closers()) expect(write).toHaveBeenCalledTimes(1);
-    expect(store.openHand).not.toHaveBeenCalled();
+    const { hand } = theCommit();
+    expect(hand).toMatchObject({ hand: live.state.progress.handIndex, ended: true });
+    expect(hand.result).not.toBeNull();
+    expect(store.countHand).toHaveBeenCalledTimes(1);
+    expect(store.recordHand).toHaveBeenCalledTimes(1);
   });
 
   it('logs the move as validated, never whatever else the object carried', async () => {
@@ -312,104 +369,221 @@ describe('acting at a table', () => {
     const move = analysisBot(viewFor(live.state, karachi, 0), karachi) as ClientAction;
     const padded = { ...move, note: 'hello from the client' } as unknown as ClientAction;
     await actOnGame(GAME, 'u-abrar', padded, live.version, T0 + 1000);
-    expect(store.appendAction).toHaveBeenCalledTimes(1);
-    const [, handIndex, action] = vi.mocked(store.appendAction).mock.calls[0]!;
-    expect(handIndex).toBe(live.state.progress.handIndex);
-    expect(action).toEqual(parseClientAction(move));
-    expect(action).not.toHaveProperty('note');
+    const { hand } = theCommit();
+    expect(hand.hand).toBe(live.state.progress.handIndex);
+    expect(hand.moves[0]!.a).toEqual(parseClientAction(move));
+    expect(hand.moves[0]!.a).not.toHaveProperty('note');
+  });
+});
+
+describe('one request, one commit', () => {
+  it('saves a move as one commit made by a person: the move, then every bot move after it, all at the new version', async () => {
+    const live = setTable();
+    const move = analysisBot(viewFor(live.state, karachi, 0), karachi) as ClientAction;
+    const snap = await actOnGame(GAME, 'u-abrar', move, live.version, T0 + 1000);
+    const { expected, w, hand } = theCommit();
+    expect(expected).toBe(live.version);
+    expect(w.acted).toBe(true);
+    expect(hand).toMatchObject({ hand: 0, dealer: live.state.dealer, progress: live.state.progress, result: null, ended: false });
+    const [mine, ...after] = hand.moves;
+    expect(mine).toEqual({ v: live.version + 1, by: 'player', seat: 0, userId: 'u-abrar', a: move });
+    expect(after.length).toBeGreaterThan(0);
+    for (const m of after) {
+      expect(m.v).toBe(live.version + 1);
+      expect(m.userId).toBeUndefined();
+      expect(m.by === 'bot' ? m.seat !== 0 : m.by === 'table' && m.seat === 0 && m.a.type === 'pass', JSON.stringify(m)).toBe(true);
+    }
+    expect(after.some((m) => m.by === 'bot')).toBe(true);
+    // Saved as the table stands after the step, which is the table the caller is handed.
+    expect(w.state.seq).toBe(snap.view.seq);
+    expect(w.deadlines).toEqual(snap.deadlines);
+    expect(snap.version).toBe(live.version + 1);
+    // The wake time is the earliest clock: the one now waiting on Abrar.
+    const clocks = [w.deadlines.claim, w.deadlines.turn].filter((t): t is number => t !== null);
+    expect(clocks.length).toBeGreaterThan(0);
+    expect(w.wakeAt).toBe(Math.min(...clocks));
+    // Nothing else to write: no hand ended, and the game goes on.
+    expect(afterSteps()).toEqual([[]]);
+  });
+
+  it('saves a tick that resolves a clock as nobody’s move', async () => {
+    const live = setTable();
+    await actOnGame(GAME, 'u-abrar', null, null, expired(live));
+    const { w, hand } = theCommit();
+    expect(w.acted).toBe(false);
+    expect(hand.moves[0]).toMatchObject({ v: live.version + 1, by: 'clock', seat: 0 });
+    expect(hand.moves[0]).not.toHaveProperty('userId');
+  });
+
+  it('saves the next hand’s deal with a new hand entry of its own index, dealer and progress', async () => {
+    const live = setTable();
+    const done = playOut(live.state);
+    db.live = liveRow(done, { claim: null, turn: null }, { version: 5 });
+    const snap = await actOnGame(GAME, 'u-abrar', { type: 'nextHand' }, 5, T0 + 1000);
+    const { w, hand } = theCommit();
+    const dealt = vi.mocked(table.step).mock.results.at(-1)!.value as StepResult;
+    expect(dealt.state.progress.handIndex).toBe(1);
+    expect(hand).toMatchObject({ hand: 1, dealer: dealt.state.dealer, progress: dealt.state.progress, result: null, ended: false });
+    expect(hand.dealer).not.toBe(done.dealer);
+    // Hand 1's dealer is a bot, so the bots have moved before Abrar's first decision; those moves open the new hand's log.
+    expect(hand.moves.length).toBeGreaterThan(0);
+    expect(hand.moves.every((m) => m.v === 6 && m.by !== 'player')).toBe(true);
+    expect(w.acted).toBe(true);
+    expect(snap.view.progress.handIndex).toBe(1);
+    expect(afterSteps()).toEqual([[]]);
+  });
+
+  it('saves a hand that finishes with its result, its end and the new totals, then counts and tallies it before the poke', async () => {
+    const live = setTable();
+    const { ended, late } = lastDecision(live, { table: { v: 1, scores: [3, -3, 0, 0], extra: {} } });
+    expect(ended.result?.type).toBe('win');
+    const snap = await actOnGame(GAME, 'u-abrar', null, null, late);
+    const { w, hand } = theCommit();
+    expect(hand).toMatchObject({ hand: 0, ended: true });
+    expect(hand.result).toEqual(ended.result);
+    expect(w.table.scores).toEqual(plus([3, -3, 0, 0], ended));
+    expect(w.table.scores).not.toEqual([3, -3, 0, 0]);
+    expect(snap.scores).toEqual(w.table.scores);
+    expect(snap.view.phase).toBe('finished');
+    // A finished hand waits on nobody, so there's nothing to wake for.
+    expect(w.deadlines).toEqual({ claim: null, turn: null });
+    expect(w.wakeAt).toBeNull();
+    expect(afterSteps()).toEqual([['count the hand', 'tally the players']]);
+    expect(store.countHand).toHaveBeenCalledWith(GAME);
+    expect(store.recordHand).toHaveBeenCalledWith(seats, ended);
+    expect(store.finishGame).not.toHaveBeenCalled();
+    const order = [store.commitTable, store.countHand, store.recordHand, broadcaster.broadcast].map((fn) => vi.mocked(fn).mock.invocationCallOrder[0]!);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  it('gives a lost commit 409 with a fresh table, and runs nothing after it: no bookkeeping, no poke', async () => {
+    const live = setTable();
+    const { late } = lastDecision(live);
+    db.lose = 1;
+    const err = await rejection(actOnGame(GAME, 'u-abrar', null, null, late));
+    expect(err.status).toBe(409);
+    expect(err.message).toBe('lost the race');
+    // The table as the other request left it.
+    expect((err.body as { version: number }).version).toBe(live.version + 1);
+    expect(store.commitTable).toHaveBeenCalledTimes(1);
+    expect(commit.afterCommit).not.toHaveBeenCalled();
+    expect(store.countHand).not.toHaveBeenCalled();
+    expect(store.recordHand).not.toHaveBeenCalled();
+    expect(broadcaster.broadcast).not.toHaveBeenCalled();
+  });
+});
+
+describe('the running totals', () => {
+  it('seeds a legacy table’s totals from rooms.ledger, in the snapshot and in the commit that saves them', async () => {
+    const live = setTable();
+    db.room = { ...(db.room as RoomRow), ledger: [3, -3, 0, 0] };
+    db.live = { ...live, table: { v: 1, scores: null, extra: {} }, legacy: true };
+    expect((await viewGame(GAME, 'u-abrar', T0)).scores).toEqual([3, -3, 0, 0]);
+    const snap = await actOnGame(GAME, 'u-abrar', null, null, expired(live));
+    expect(snap.scores).toEqual([3, -3, 0, 0]);
+    expect(theCommit().w.table).toEqual({ v: 1, scores: [3, -3, 0, 0], extra: {} });
+    // Saved, the table is its own from now on.
+    expect(db.live).toMatchObject({ legacy: false, table: { scores: [3, -3, 0, 0] } });
+  });
+
+  it('reads the totals from the table once it has a "v", never from rooms.ledger', async () => {
+    const live = setTable();
+    db.room = { ...(db.room as RoomRow), ledger: [9, 9, 9, 9] };
+    db.live = { ...live, table: { v: 1, scores: [5, -5, 0, 0], extra: {} } };
+    expect((await viewGame(GAME, 'u-abrar', T0)).scores).toEqual([5, -5, 0, 0]);
+    const snap = await actOnGame(GAME, 'u-abrar', null, null, expired(live));
+    expect(snap.scores).toEqual([5, -5, 0, 0]);
+    expect(theCommit().w.table.scores).toEqual([5, -5, 0, 0]);
+  });
+
+  it('never saves over a table a newer deploy wrote: 503, logged as table_state_newer, and nothing committed', async () => {
+    const live = setTable();
+    db.live = { ...live, table: { v: 2, scores: [5, -5, 0, 0], extra: { absence: [] } } };
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const err = await rejection(actOnGame(GAME, 'u-abrar', null, null, expired(live)));
+    expect(err.status).toBe(503);
+    expect(err.message).toBe('something went wrong');
+    expect(store.commitTable).not.toHaveBeenCalled();
+    expect(logged(log)).toEqual([expect.objectContaining({ event: 'table_state_newer', gameId: GAME, version: live.version })]);
+    // Looking is still fine.
+    expect((await viewGame(GAME, 'u-abrar', T0)).scores).toEqual([5, -5, 0, 0]);
+  });
+});
+
+describe('when a person last moved the table', () => {
+  const wokeFrom = () => vi.mocked(tableState.wakeAt).mock.calls.map(([x]) => x.actedAt);
+
+  it('carries a legacy table’s recent last save forward as a person’s move on its first commit', async () => {
+    const live = setTable();
+    const now = expired(live);
+    // Older code never wrote acted_at (the migration gave it its own time), but it stamped updated_at on every save.
+    db.live = { ...live, table: { v: 1, scores: null, extra: {} }, legacy: true, actedAt: now - 30 * 24 * 3600_000, updatedAt: now - 10 * 60_000 };
+    await actOnGame(GAME, null, null, null, now);
+    expect(theCommit().w.acted).toBe(true);
+    expect(wokeFrom()).toEqual([now]);
+  });
+
+  it('leaves a legacy table that stalled long ago with its old time', async () => {
+    const live = setTable();
+    const now = expired(live);
+    db.live = { ...live, table: { v: 1, scores: null, extra: {} }, legacy: true, actedAt: now - 30 * 24 * 3600_000, updatedAt: now - 7 * 3600_000 };
+    await actOnGame(GAME, null, null, null, now);
+    expect(theCommit().w.acted).toBe(false);
+    expect(wokeFrom()).toEqual([now - 7 * 3600_000]);
+  });
+
+  it('reads a table with a "v" by acted_at alone, whatever updated_at says', async () => {
+    const live = setTable();
+    const now = expired(live);
+    db.live = { ...live, actedAt: now - 7 * 3600_000, updatedAt: now - 60_000 };
+    await actOnGame(GAME, null, null, null, now);
+    expect(theCommit().w.acted).toBe(false);
+    expect(wokeFrom()).toEqual([now - 7 * 3600_000]);
   });
 });
 
 describe('when the database fails after the table has moved', () => {
   it('still gives the caller the new table and tells the others, and logs the failed write', async () => {
     const live = setTable();
+    const { late } = lastDecision(live);
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const move = analysisBot(viewFor(live.state, karachi, 0), karachi) as ClientAction;
-    vi.mocked(store.appendAction).mockRejectedValueOnce(new SupabaseError('log the move', { message: 'TypeError: fetch failed' }));
-    const snap = await actOnGame(GAME, 'u-abrar', move, live.version, T0 + 1000);
+    vi.mocked(store.countHand).mockRejectedValueOnce(new SupabaseError('count the hand', { message: 'TypeError: fetch failed' }));
+    const snap = await actOnGame(GAME, 'u-abrar', null, null, late);
     expect(snap.version).toBe(live.version + 1);
     expect(snap.me).toBe(0);
-    expect(snap.view.seq).toBeGreaterThan(live.state.seq);
-    expect(store.saveLive).toHaveBeenCalledTimes(1);
+    expect(snap.view.phase).toBe('finished');
+    expect(store.commitTable).toHaveBeenCalledTimes(1);
     expect(broadcaster.broadcast).toHaveBeenCalledTimes(1);
     expect(broadcaster.gamePoke).toHaveBeenCalledWith(GAME, live.version + 1, expect.anything());
     expect(logged(log)).toEqual([
       expect.objectContaining({
         level: 'error',
         event: 'after_commit_failed',
-        step: 'log the move',
+        step: 'count the hand',
         gameId: GAME,
         version: live.version + 1,
         name: 'SupabaseError',
-        message: 'could not log the move: TypeError: fetch failed',
+        message: 'could not count the hand: TypeError: fetch failed',
       }),
     ]);
   });
 
-  it("writes the hand log, then each of the hand's closing writes, before it pokes, so the others refetch a settled table", async () => {
+  it.each(['count the hand', 'tally the players'])('when "%s" fails, still runs the other and shows the committed totals', async (what) => {
     const live = setTable();
-    const move = analysisBot(viewFor(live.state, karachi, 0), karachi) as ClientAction;
-    const ended = playOut(live.state);
-    nextStepGives(ended);
-    vi.mocked(store.settleScores).mockResolvedValueOnce([-8, 8, 0, 0]);
-    const snap = await actOnGame(GAME, 'u-abrar', move, live.version, T0 + 1000);
-    expect(snap.scores).toEqual([-8, 8, 0, 0]);
-    expect(store.settleScores).toHaveBeenCalledWith(GAME, db.room, ended);
-    expect(store.endHand).toHaveBeenCalledWith(GAME, ended);
-    expect(store.recordResult).toHaveBeenCalledWith(GAME, ended);
-    expect(store.countHand).toHaveBeenCalledWith(GAME);
-    expect(store.recordHand).toHaveBeenCalledWith(seats, ended);
-    const order = [store.appendAction, ...CLOSING.map(([, fn]) => fn()), broadcaster.broadcast].map((fn) => vi.mocked(fn).mock.invocationCallOrder[0]!);
-    expect(order).toEqual([...order].sort((a, b) => a - b));
-  });
-
-  it('when the hand log fails, still closes the hand; when the scores fail to settle, shows them as the room holds them', async () => {
-    const live = setTable();
-    db.room = { ...(db.room as RoomRow), ledger: [3, -3, 0, 0] };
+    const { ended, late } = lastDecision(live, { table: { v: 1, scores: [3, -3, 0, 0], extra: {} } });
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const move = analysisBot(viewFor(live.state, karachi, 0), karachi) as ClientAction;
-    nextStepGives(playOut(live.state));
-    vi.mocked(store.appendAction).mockRejectedValueOnce(DOWN());
-    vi.mocked(store.settleScores).mockRejectedValueOnce(DOWN());
-    const snap = await actOnGame(GAME, 'u-abrar', move, live.version, T0 + 1000);
-    expect(snap.version).toBe(live.version + 1);
-    expect(snap.view.phase).toBe('finished');
-    // The ledger write did not land, so the caller sees what the room holds, as the others will.
-    expect(snap.scores).toEqual([3, -3, 0, 0]);
-    // The hand's other writes do not depend on the scores, and still run.
-    for (const write of closers()) expect(write).toHaveBeenCalledTimes(1);
-    expect(broadcaster.broadcast).toHaveBeenCalledTimes(1);
-    expect(logged(log).map((l) => l['step'])).toEqual(['log the move', 'settle the scores']);
-  });
-
-  it.each(CLOSING.slice(1).map(([what]) => what))('when "%s" fails after the scores have settled, shows the settled scores and still runs the rest', async (what) => {
-    const live = setTable();
-    db.room = { ...(db.room as RoomRow), ledger: [3, -3, 0, 0] };
-    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-    nextStepGives(playOut(live.state));
-    vi.mocked(store.settleScores).mockResolvedValueOnce([-5, 5, 0, 0]);
-    const failing = CLOSING.find(([w]) => w === what)![1]();
-    vi.mocked(failing).mockRejectedValueOnce(DOWN());
-    const snap = await actOnGame(GAME, 'u-abrar', null, null, expired(live));
-    // What the room now holds, as the others will see it on their refetch.
-    expect(snap.scores).toEqual([-5, 5, 0, 0]);
-    for (const write of closers()) expect(write).toHaveBeenCalledTimes(1);
+    vi.mocked(what === 'count the hand' ? store.countHand : store.recordHand).mockRejectedValueOnce(DOWN());
+    const snap = await actOnGame(GAME, 'u-abrar', null, null, late);
+    expect(snap.scores).toEqual(plus([3, -3, 0, 0], ended));
+    expect(store.countHand).toHaveBeenCalledTimes(1);
+    expect(store.recordHand).toHaveBeenCalledTimes(1);
     expect(broadcaster.broadcast).toHaveBeenCalledTimes(1);
     expect(logged(log)).toEqual([expect.objectContaining({ event: 'after_commit_failed', step: what })]);
   });
 
-  it('keeps the totals it read when the room has already moved on to another game and took no scores', async () => {
-    const live = setTable();
-    db.room = { ...(db.room as RoomRow), ledger: [3, -3, 0, 0] };
-    nextStepGives(playOut(live.state));
-    vi.mocked(store.settleScores).mockResolvedValueOnce(null);
-    const snap = await actOnGame(GAME, 'u-abrar', null, null, expired(live));
-    expect(snap.scores).toEqual([3, -3, 0, 0]);
-  });
-
   it('leaves a game whose end did not record active, so the next "next hand" finishes it again', async () => {
     const live = setTable();
-    db.live = { version: 7, state: lastHand(live.state), deadlines: { claim: null, turn: null } } satisfies LiveRow;
+    db.live = liveRow(lastHand(live.state), { claim: null, turn: null }, { version: 7 });
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     vi.mocked(store.finishGame).mockRejectedValueOnce(DOWN());
@@ -430,24 +604,27 @@ describe('when the database fails after the table has moved', () => {
     expect(store.finishGame).toHaveBeenLastCalledWith(GAME, 'r-1');
     // The real table decided both times that there was no hand left to deal.
     expect(vi.mocked(table.step).mock.results.map((r) => (r.value as StepResult).gameOver)).toEqual([true, true]);
-    expect(store.openHand).not.toHaveBeenCalled();
-    expect(store.appendAction).not.toHaveBeenCalled();
-    for (const write of closers()) expect(write).not.toHaveBeenCalled();
+    // Both commits carry no hand entries: no hand was dealt, and none ended there.
+    expect(commits().map((c) => c.w.hands)).toEqual([[], []]);
+    expect(store.countHand).not.toHaveBeenCalled();
+    expect(store.recordHand).not.toHaveBeenCalled();
   });
 
   it('still fails outright, saving nothing, when the save itself fails', async () => {
     const live = setTable();
-    vi.mocked(store.saveLive).mockRejectedValueOnce(new SupabaseError('save the table', { message: 'TypeError: fetch failed' }));
-    await expect(actOnGame(GAME, 'u-abrar', null, null, expired(live))).rejects.toBeInstanceOf(SupabaseError);
+    const { late } = lastDecision(live);
+    vi.mocked(store.commitTable).mockRejectedValueOnce(new SupabaseError('save the table', { message: 'TypeError: fetch failed' }));
+    await expect(actOnGame(GAME, 'u-abrar', null, null, late)).rejects.toBeInstanceOf(SupabaseError);
     expect(broadcaster.broadcast).not.toHaveBeenCalled();
-    expect(store.appendAction).not.toHaveBeenCalled();
+    expect(commit.afterCommit).not.toHaveBeenCalled();
+    expect(store.countHand).not.toHaveBeenCalled();
   });
 
   it('fails outright, saving nothing, when the table cannot be read', async () => {
     setTable();
     vi.mocked(store.loadLive).mockRejectedValueOnce(new SupabaseError('read the table', { message: 'TypeError: fetch failed' }));
     await expect(actOnGame(GAME, 'u-abrar', null, null, T0)).rejects.toBeInstanceOf(SupabaseError);
-    expect(store.saveLive).not.toHaveBeenCalled();
+    expect(store.commitTable).not.toHaveBeenCalled();
     expect(broadcaster.broadcast).not.toHaveBeenCalled();
   });
 });
@@ -489,9 +666,9 @@ describe('standing up from a live table', () => {
     db.room = { ...(db.room as RoomRow), seats: two };
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.mocked(store.saveSeats).mockResolvedValueOnce('2026-09-24T00:00:01Z');
-    vi.mocked(store.saveLive).mockResolvedValueOnce(false);
+    db.lose = 1;
     await expect(leaveGame(GAME, 'u-abrar', expired(live))).resolves.toEqual({ abandoned: false });
-    expect(store.saveLive).toHaveBeenCalledTimes(1);
+    expect(store.commitTable).toHaveBeenCalledTimes(1);
     expect(log).not.toHaveBeenCalled();
   });
 });
@@ -503,14 +680,15 @@ describe('the daily sweep', () => {
     const live = setTable();
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(await sweepGames([GAME], expired(live))).toEqual({ [GAME]: 'ok' });
-    expect(store.saveLive).toHaveBeenCalledTimes(1);
+    expect(store.commitTable).toHaveBeenCalledTimes(1);
+    expect(theCommit().w.acted).toBe(false);
     expect(log).not.toHaveBeenCalled();
   });
 
   it('does not log a table someone else moved first, or one that ended since the sweep looked', async () => {
     const live = setTable();
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.mocked(store.saveLive).mockResolvedValueOnce(false);
+    db.lose = 1;
     expect(await sweepGames([GAME], expired(live))).toEqual({ [GAME]: 'already moved' });
 
     db.game = { ...(db.game as GameRow), status: 'finished' };

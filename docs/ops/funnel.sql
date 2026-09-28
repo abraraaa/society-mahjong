@@ -26,13 +26,15 @@
 --   counted from rooms.host_id even after they stand up.
 -- * A human seat is {"kind":"human","userId":"<uuid>","name":"..."}; a bot
 --   seat is {"kind":"bot","name":"..."}; an empty seat is null.
--- * hand_results has one row per finished hand. winner is the winning seat
---   (0 to 3), or null for a washout (the wall ran out).
+-- * hands has one row per hand dealt. ended_at is set once the hand is over,
+--   and result says how it went: result->>'type' is 'win', or 'draw' for a
+--   washout (the wall ran out). hand_results, which older queries read, is no
+--   longer written, so hands is where finished hands are counted.
 --
 -- Columns used, checked against the migrations:
 --   rooms        id, code, host_id, seats, created_at
 --   games        id, room_id, status, started_at
---   hand_results id, game_id, winner, created_at
+--   hands        game_id, result, ended_at
 --   profiles     is_guest, created_at
 
 
@@ -115,7 +117,7 @@ with last_seen as (
     g.id,
     g.status,
     g.started_at,
-    greatest(g.started_at, (select max(h.created_at) from public.hand_results h where h.game_id = g.id)) as last_activity
+    greatest(g.started_at, (select max(hd.ended_at) from public.hands hd where hd.game_id = g.id)) as last_activity
   from public.games g
 )
 select
@@ -132,17 +134,17 @@ order by 1 desc;
 
 -- 5. Hands per game.
 -- How far games get, split by how they ended (finished, abandoned, or still
--- active). Hands are counted from hand_results, one row per finished hand.
--- no_hand_finished is games that were dealt and left before any hand ended;
--- washout_pct is the share of hands nobody won.
+-- active). Hands are counted from hands, where a finished hand has its
+-- ended_at. no_hand_finished is games that were dealt and left before any
+-- hand ended; washout_pct is the share of hands nobody won.
 with per_game as (
   select
     g.id,
     g.status,
-    count(h.id) as hands,
-    count(h.id) filter (where h.winner is null) as washouts
+    count(hd.game_id) filter (where hd.ended_at is not null) as hands,
+    count(hd.game_id) filter (where hd.ended_at is not null and hd.result ->> 'type' = 'draw') as washouts
   from public.games g
-  left join public.hand_results h on h.game_id = g.id
+  left join public.hands hd on hd.game_id = g.id
   group by g.id, g.status
 )
 select

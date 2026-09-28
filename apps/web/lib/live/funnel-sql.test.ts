@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest';
  * docs/ops/funnel.sql is pasted into the Supabase SQL editor by hand, where a
  * typo in a column name only shows up as an error on the night someone wants
  * the numbers. These tests read it next to the migrations: it must only
- * ever read, and every column it names on rooms, games, hand_results and
- * profiles must exist there.
+ * ever read, and every column it names on rooms, games, hands and profiles
+ * must exist there.
  */
 
 const ROOT = new URL('../../../../', import.meta.url);
@@ -15,7 +15,7 @@ const withoutComments = (sql: string) => sql.replace(/--[^\n]*/g, '');
 
 const FUNNEL = withoutComments(read('docs/ops/funnel.sql'));
 /** The alias each query in funnel.sql gives each table. */
-const ALIASES: Record<string, string> = { r: 'rooms', g: 'games', h: 'hand_results', p: 'profiles' };
+const ALIASES: Record<string, string> = { r: 'rooms', g: 'games', hd: 'hands', p: 'profiles' };
 
 /** Columns per public table, replaying the schema's create table, add column, rename column and drop table statements in order. */
 function schemaColumns(sql: string): Map<string, Set<string>> {
@@ -27,7 +27,7 @@ function schemaColumns(sql: string): Map<string, Set<string>> {
     .split(';');
   for (const raw of statements) {
     const s = raw.replace(/\s+/g, ' ').trim().toLowerCase();
-    const created = /^create table public\.(\w+) \((.*)\)$/.exec(s);
+    const created = /^create table (?:if not exists )?public\.(\w+) \((.*)\)$/.exec(s);
     if (created) {
       const cols = created[2]!
         .split(/,(?![^(]*\))/)
@@ -64,7 +64,7 @@ describe('docs/ops/funnel.sql', () => {
   it('names only columns the migrations give those tables', () => {
     const migrations = readdirSync(new URL('supabase/migrations/', ROOT)).filter((f) => f.endsWith('.sql')).sort();
     const tables = schemaColumns(migrations.map((f) => read(`supabase/migrations/${f}`)).join('\n'));
-    const used = [...FUNNEL.matchAll(/\b([rghp])\.(\w+)\b/g)].map(([, alias, col]) => [ALIASES[alias!]!, col!] as const);
+    const used = [...FUNNEL.matchAll(/\b(hd|[rgp])\.(\w+)\b/g)].map(([, alias, col]) => [ALIASES[alias!]!, col!] as const);
     expect(used.length).toBeGreaterThan(20);
     const missing = used.filter(([table, col]) => !tables.get(table)?.has(col)).map(([table, col]) => `${table}.${col}`);
     expect(missing).toEqual([]);

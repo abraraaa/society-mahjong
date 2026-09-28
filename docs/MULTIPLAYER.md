@@ -112,19 +112,28 @@ server  session → seat
         settle: bots act inline until a human has a real decision; a human
           with nothing to claim is passed for, so windows only open when
           someone can use them
+        a hand won in this request adds its points to the running scores
         deadlines from the table's timer policy (longest level at the table)
-        write live_state (version+1) if version unchanged, else 409
-        append the action to the hand's log; close the hand row on a result
+        commit_table, one transaction, only if version is unchanged (else 409,
+          with nothing written): live_state (version+1), table_state, both
+          clocks, wake_at, acted_at when a person sent it, and every move the
+          request made (the player's, the bots', the clock's, the table's
+          passes) appended to the hand's log, with its result once it ends
+        then, when a hand ended, count it and tally the players; after the
+          last hand, finish the game. A failure here is logged, and the move
+          still counts
         broadcast {version} on game:{id}; every client refetches its own view
         respond with the actor's private view and version
 ```
 
 Implemented in `apps/web/lib/live/`: `table.ts` is the pure part (settle,
 deadlines, expiry, `step`), covered by tests that play whole hands through
-it; `service.ts` wraps it in loads, saves and broadcasts; the route handlers
-are thin. Not yet done from the design: `reveal_at` pacing of bot events (a
-client currently snaps to the latest view), the private per-seat delta
-channel (policies exist; nothing is sent on it yet) and presence.
+it; `hand-log.ts` stamps the moves and builds `commit_table`'s arguments;
+`service.ts` wraps it all in the load, the one commit, the steps after it
+and the broadcast; the route handlers are thin. Not yet done from the
+design: `reveal_at` pacing of bot events (a client currently snaps to the
+latest view), the private per-seat delta channel (policies exist; nothing
+is sent on it yet) and presence.
 
 Redaction is a pure function `viewFor(state, seat | null)`: other players'
 concealed tiles become counts, wall and dead wall become counts, seed and
@@ -248,14 +257,28 @@ broadcast of the exposed tile with a short claim window once implemented.
 
 ## 4. Data model for M2
 
-Replaces the per-event `game_events` table in the initial migration.
+The tables, the JSON documents the app keeps in them, and the rules for
+changing either are in `docs/DATA-MODEL.md`. What a live table keeps:
 
-- `rooms` (code, host_id, ruleset_id, options, status, seats jsonb, ledger jsonb)
-- `games` (room_id, seed text server-only, status, rounds, started_at, ended_at, replay_url)
-- `live_state` (game_id pk, version, state jsonb, claim_deadline, turn_deadline, updated_at)
-- `hands` (game_id, hand_index, dealer, actions text, result jsonb, settlement jsonb)
-- `hand_results` (flattened for stats)
-- `profiles` as above
+- `live_state`, one row per game: the engine's `state` under optimistic
+  versioning, both clocks, `wake_at` and `acted_at`, and `table_state`, the
+  table's own bookkeeping as JSON (`lib/live/table-state.ts`). For now that
+  document holds the game's running scores. A table last saved before it
+  existed reads its scores from `rooms.ledger` until its next move saves
+  them; moves no longer write `rooms.ledger`.
+- `hands`, one row per hand, made by the request that deals it, with its
+  result and settlement once it ends (`hand_results` is no longer written).
+  `actions` is the move log: every move in the hand, in order, each
+  `{ v, by, seat?, userId?, a }`. `v` is the `live_state` version its
+  request produced; `by` says who made it (`player`, `bot`, `clock`, `away`,
+  `table` or `host`); `a` is the engine move, or a table note.
+- Replaying a hand (`lib/live/hand-log.ts` `replayHand`): deal it from the
+  game's seed with its progress, its dealer and its dealer streak (the run of
+  hand rows just before it with the same dealer, which is why the streak
+  isn't stored), then play the log's moves in array order, skipping table
+  notes. Hands begun before every move was logged hold bare actions and
+  don't replay. (A game's first hand doesn't yet hold the moves bots make at
+  the deal, before anyone's first decision.)
 
 RLS: seated users read `rooms`, `games`, `hands` (actions only after the
 hand ends), `hand_results`; nobody reads `live_state` or `games.seed`

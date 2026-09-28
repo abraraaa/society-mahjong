@@ -1,5 +1,6 @@
 import { reduce, startHand, type GameProgress, type HandResult, type HandState, type Ruleset, type Seat } from '@society/engine';
-import { isPlayerMove, type AwayReason, type GameEndHow, type LoggedMove, type Move, type MoveMaker, type PlayerMove, type TableNote } from './types';
+import { tableStateJson, type TableState } from './table-state';
+import { isPlayerMove, type AwayReason, type Deadlines, type GameEndHow, type LoggedMove, type Move, type MoveMaker, type PlayerMove, type TableNote } from './types';
 import { parseClientAction, parseSeat } from './validate';
 
 /**
@@ -11,6 +12,10 @@ import { parseClientAction, parseSeat } from './validate';
  * the hand's row in `hands.actions` (`handWrites` says which row), they make
  * the hand's seed plus its log the hand: `replayHand` plays the log from the
  * deal and gets the same table, move for move, whoever or whatever made each.
+ *
+ * One request's moves are saved by the same commit_table call as its state
+ * (`commitArgs` builds that call's arguments), so the log is never missing a
+ * move that counted, and each game's commits land in version order.
  */
 
 /** One hand's row, as one request writes it: the hand's identity, the moves this request made on it, and its result once it has ended. */
@@ -40,6 +45,63 @@ export function handWrites(before: HandState, after: HandState, moves: readonly 
   const endedHere = ended && (dealt || before.phase !== 'finished');
   if (!dealt && !endedHere && moves.length === 0) return [];
   return [{ hand: after.progress.handIndex, dealer: after.dealer, progress: after.progress, moves: [...moves], result: ended ? after.result : null, ended }];
+}
+
+/**
+ * commit_table's `p_hands`: one entry per hand row, with exactly the keys the
+ * function reads (migration 0005): `hand`, `dealer`, `progress`, `moves`,
+ * `result`, `settlement` and `ended`. `settlement` is the win's, and null for
+ * a washout or a hand still being played. The row's index, dealer and
+ * progress can't be null, so a renamed key here would fail every move.
+ */
+export function commitHands(hands: readonly HandWrite[]): unknown[] {
+  return hands.map((h) => ({
+    hand: h.hand,
+    dealer: h.dealer,
+    progress: h.progress,
+    moves: h.moves,
+    result: h.result,
+    settlement: h.result?.type === 'win' ? h.result.settlement : null,
+    ended: h.ended,
+  }));
+}
+
+/** One request's write to a live table: the new hand state, the table's bookkeeping, its clocks and wake time, whether a person moved it, and its hand rows. */
+export interface TableWrite {
+  readonly state: HandState;
+  readonly table: TableState;
+  readonly deadlines: Deadlines;
+  readonly wakeAt: number | null;
+  readonly acted: boolean;
+  readonly hands: readonly HandWrite[];
+}
+
+function iso(ms: number | null): string | null {
+  return ms === null ? null : new Date(ms).toISOString();
+}
+
+/**
+ * commit_table's arguments, exactly its nine `p_*` keys: the times as ISO
+ * strings or null, the table state as `tableStateJson` writes it, and the hand
+ * rows as `commitHands` gives them. The store sends this and nothing else, so
+ * a test can build the very argument without a database.
+ */
+export function commitArgs(
+  gameId: string,
+  expectedVersion: number,
+  w: TableWrite,
+): Record<'p_game_id' | 'p_expected' | 'p_state' | 'p_table_state' | 'p_claim_deadline' | 'p_turn_deadline' | 'p_wake_at' | 'p_acted' | 'p_hands', unknown> {
+  return {
+    p_game_id: gameId,
+    p_expected: expectedVersion,
+    p_state: w.state,
+    p_table_state: tableStateJson(w.table),
+    p_claim_deadline: iso(w.deadlines.claim),
+    p_turn_deadline: iso(w.deadlines.turn),
+    p_wake_at: iso(w.wakeAt),
+    p_acted: w.acted,
+    p_hands: commitHands(w.hands),
+  };
 }
 
 const MOVE_MAKERS: readonly MoveMaker[] = ['player', 'bot', 'clock', 'away', 'table', 'host'];

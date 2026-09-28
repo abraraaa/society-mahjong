@@ -21,5 +21,7 @@ if [ "${TWICE:-1}" = "1" ]; then
   done
 fi
 echo "checks"
-run "$here/checks.sql"
+# checks.sql feeds commit_table the payload the app builds (commit-table-payload.json, written by
+# apps/web/lib/live/commit-payload.test.ts), passed as a psql variable.
+psql -v ON_ERROR_STOP=1 -q -X -d "$db" -v payload="$(cat "$here/commit-table-payload.json")" -f "$here/checks.sql"
 echo "ok"

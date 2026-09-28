@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { analysisBot, karachi, startHand, viewFor, type GameProgress, type HandResult, type HandState, type Seat } from '@society/engine';
 import { dealFirstHand, step, type StepInput, type StepResult } from './table';
-import { dealerStreakAt, handWrites, parseLoggedMove, replayHand, stamp } from './hand-log';
+import { commitArgs, commitHands, dealerStreakAt, handWrites, parseLoggedMove, replayHand, stamp, type HandWrite, type TableWrite } from './hand-log';
 import type { ClientAction, LiveGame, LoggedMove, Move, Seats } from './types';
 import { policyFor } from './policy';
+import { tableStateJson } from './table-state';
 
 const ME: Seat = 0;
 const seats: Seats = [
@@ -72,20 +73,20 @@ describe('stamp', () => {
   });
 });
 
-describe('handWrites', () => {
-  /** A hand played by the human to its end, keeping every step with the table it was taken on. */
-  function playedHand(seed: string): { steps: { before: LiveGame; r: StepResult }[]; game: LiveGame } {
-    let game: LiveGame = dealFirstHand(karachi, seats, seed, policy, T0);
-    const steps: { before: LiveGame; r: StepResult }[] = [];
-    for (let i = 0; i < 400 && game.state.phase !== 'finished'; i++) {
-      const r = step({ game, ruleset: karachi, seats, policy, now: T0 + i * 1000, action: myMove(game), actor: ME });
-      steps.push({ before: game, r });
-      game = r;
-    }
-    expect(game.state.phase).toBe('finished');
-    return { steps, game };
+/** A hand played by the human to its end, keeping every step with the table it was taken on. */
+function playedHand(seed: string): { steps: { before: LiveGame; r: StepResult }[]; game: LiveGame } {
+  let game: LiveGame = dealFirstHand(karachi, seats, seed, policy, T0);
+  const steps: { before: LiveGame; r: StepResult }[] = [];
+  for (let i = 0; i < 400 && game.state.phase !== 'finished'; i++) {
+    const r = step({ game, ruleset: karachi, seats, policy, now: T0 + i * 1000, action: myMove(game), actor: ME });
+    steps.push({ before: game, r });
+    game = r;
   }
+  expect(game.state.phase).toBe('finished');
+  return { steps, game };
+}
 
+describe('handWrites', () => {
   it('gives a move on a live hand one entry with its moves and no result, and the move that ends it the result', { timeout: 60_000 }, () => {
     const { steps } = playedHand('writes-1');
     const live = steps.find(({ r }) => r.state.phase !== 'finished')!;
@@ -151,6 +152,81 @@ describe('handWrites', () => {
       expect(writes[0]!.hand).toBe(r.state.progress.handIndex);
       expect(writes[0]!.moves).toHaveLength(r.moves.length);
     }
+  });
+});
+
+/** The hand writes of three real steps: a move on a live hand, the step that finishes it (a win, on this seed), and the deal of the next. */
+function threeWrites(): { live: HandWrite; ended: HandWrite; dealt: HandWrite } {
+  const seed = 'writes-2';
+  const { steps, game } = playedHand(seed);
+  const live = steps.find(({ r }) => r.state.phase !== 'finished')!;
+  const last = steps.at(-1)!;
+  const deal = step({ game, ruleset: karachi, seats, policy, now: T0, action: { type: 'nextHand' }, actor: ME, seed });
+  const [a] = handWrites(live.before.state, live.r.state, stamp(live.r.moves, 2));
+  const [b] = handWrites(last.before.state, last.r.state, stamp(last.r.moves, 3));
+  const [c] = handWrites(game.state, deal.state, stamp(deal.moves, 4));
+  return { live: a!, ended: b!, dealt: c! };
+}
+
+describe('commitHands', () => {
+  it('gives each hand row exactly the keys commit_table reads, with the types it casts them to', { timeout: 60_000 }, () => {
+    const { live, ended, dealt } = threeWrites();
+    expect(ended.result?.type).toBe('win');
+    const washout: HandWrite = { ...ended, result: { type: 'draw' } };
+    // As it reaches the database: JSON.
+    const entries = JSON.parse(JSON.stringify(commitHands([live, ended, dealt, washout]))) as Record<string, unknown>[];
+    expect(entries).toHaveLength(4);
+    for (const e of entries) {
+      expect(Object.keys(e).sort()).toEqual(['dealer', 'ended', 'hand', 'moves', 'progress', 'result', 'settlement']);
+      // hands.hand_index, dealer and progress are not null: a hand the function can't place fails the whole commit.
+      expect(Number.isInteger(e['hand'])).toBe(true);
+      expect(e['hand']).toBe((e['progress'] as { handIndex: unknown }).handIndex);
+      expect(Number.isInteger(e['dealer']) && (e['dealer'] as number) >= 0 && (e['dealer'] as number) <= 3).toBe(true);
+      const moves = e['moves'] as Record<string, unknown>[];
+      expect(Array.isArray(moves)).toBe(true);
+      for (const m of moves) {
+        expect(typeof m['v']).toBe('number');
+        expect(typeof m['by']).toBe('string');
+      }
+      for (const doc of [e['result'], e['settlement']]) expect(doc === null || (typeof doc === 'object' && !Array.isArray(doc))).toBe(true);
+      expect(typeof e['ended']).toBe('boolean');
+    }
+    const [onLive, onEnd, onDeal, onWashout] = entries;
+    expect(onLive).toMatchObject({ hand: 0, result: null, settlement: null, ended: false });
+    expect((onLive!['moves'] as unknown[]).length).toBeGreaterThan(0);
+    // The win's settlement goes with its result; a washout has none.
+    expect(onEnd).toMatchObject({ hand: 0, ended: true });
+    expect(onEnd!['result']).toEqual(JSON.parse(JSON.stringify(ended.result)));
+    expect(onEnd!['settlement']).toEqual(JSON.parse(JSON.stringify(ended.result?.type === 'win' ? ended.result.settlement : 'no win')));
+    expect(onWashout).toMatchObject({ result: { type: 'draw' }, settlement: null, ended: true });
+    expect(onDeal).toMatchObject({ hand: 1, dealer: dealt.dealer, result: null, settlement: null, ended: false });
+    expect(commitHands([])).toEqual([]);
+  });
+});
+
+describe('commitArgs', () => {
+  it('gives exactly commit_table’s nine arguments, times as ISO strings or null', { timeout: 60_000 }, () => {
+    const { live, ended } = threeWrites();
+    const table = { v: 1, scores: [3, -3, 0, 0] as const, extra: { ready: { hand: 0 } } };
+    const w: TableWrite = { state: { seq: 7 } as never, table, deadlines: { claim: T0 + 20_000, turn: null }, wakeAt: T0 + 20_000, acted: true, hands: [live, ended] };
+    const args = commitArgs('g-1', 6, w);
+    expect(Object.keys(args).sort()).toEqual(['p_acted', 'p_claim_deadline', 'p_expected', 'p_game_id', 'p_hands', 'p_state', 'p_table_state', 'p_turn_deadline', 'p_wake_at']);
+    expect(args).toEqual({
+      p_game_id: 'g-1',
+      p_expected: 6,
+      p_state: w.state,
+      p_table_state: tableStateJson(table),
+      p_claim_deadline: new Date(T0 + 20_000).toISOString(),
+      p_turn_deadline: null,
+      p_wake_at: new Date(T0 + 20_000).toISOString(),
+      p_acted: true,
+      p_hands: commitHands([live, ended]),
+    });
+    expect(args.p_table_state).toEqual({ v: 1, scores: [3, -3, 0, 0], ready: { hand: 0 } });
+
+    // No clocks, a request no person made, and no hand rows.
+    const quiet = commitArgs('g-1', 7, { ...w, deadlines: { claim: null, turn: T0 + 90_000 }, wakeAt: null, acted: false, hands: [] });
+    expect(quiet).toMatchObject({ p_claim_deadline: null, p_turn_deadline: new Date(T0 + 90_000).toISOString(), p_wake_at: null, p_acted: false, p_hands: [] });
   });
 });
 

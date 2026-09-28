@@ -1,4 +1,5 @@
 import type { Action, HandState, Seat } from '@society/engine';
+import type { TableState } from './table-state';
 
 /** Where a room is in its life: waiting for people, at the table, or between games. */
 export type RoomStatus = 'lobby' | 'playing' | 'finished';
@@ -22,6 +23,8 @@ export interface Deadlines {
 export interface LiveGame {
   readonly state: HandState;
   readonly deadlines: Deadlines;
+  /** the table's own bookkeeping (live_state.table_state); a fresh table when omitted, as for a game just dealt */
+  readonly tableState?: TableState;
 }
 
 /**

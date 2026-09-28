@@ -4,7 +4,9 @@ import type { CoachStage } from '@/lib/coach';
 // Relative rather than '@/': vitest runs without the path alias, and the tests load this.
 import { createServiceClient } from '../supabase/service';
 import { HttpError, must } from './errors';
+import { commitArgs, type TableWrite } from './hand-log';
 import { stageFromStats, tallyHand, type ProfileStats } from './stage';
+import { parseTableState, type TableState } from './table-state';
 import type { Deadlines, RoomStatus, Seats } from './types';
 import { logError } from './log';
 import { cleanDisplayName, isUuid } from './validate';
@@ -20,7 +22,10 @@ export interface RoomRow {
   readonly status: RoomStatus;
   readonly seats: Seats;
   readonly current_game_id: string | null;
-  /** running totals per seat for the current game */
+  /**
+   * running totals per seat, as code before table_state kept them. Nothing writes it now but startGame's reset; it's read
+   * only to seed a legacy table's scores (table-state.ts withLegacyScores)
+   */
   readonly ledger: readonly number[];
   /** the row's last write, as the database formats it; a seat write compares against it so a lost race is not a lost seat */
   readonly updated_at: string;
@@ -38,6 +43,16 @@ export interface LiveRow {
   readonly version: number;
   readonly state: HandState;
   readonly deadlines: Deadlines;
+  /** live_state.table_state, parsed */
+  readonly table: TableState;
+  /** the table has no "v" yet: it was last saved by code before table_state, so its scores are still in rooms.ledger (R13) and its last activity is in updated_at too (R23) */
+  readonly legacy: boolean;
+  /** live_state.wake_at: when the server next has to act on the table unasked */
+  readonly wakeAt: number | null;
+  /** live_state.acted_at: when a person last moved the table */
+  readonly actedAt: number;
+  /** live_state.updated_at: the last save of any kind */
+  readonly updatedAt: number;
 }
 
 const db = () => createServiceClient();
@@ -46,8 +61,11 @@ const ROOM_COLUMNS = 'id, code, host_id, ruleset_id, options, status, seats, cur
 function toIso(ms: number | null): string | null {
   return ms === null ? null : new Date(ms).toISOString();
 }
-function fromIso(s: string | null): number | null {
-  return s === null ? null : Date.parse(s);
+/** A time as the database formats it, in epoch ms; null for none, or for anything that isn't a time. */
+function fromIso(s: unknown): number | null {
+  if (typeof s !== 'string') return null;
+  const ms = Date.parse(s);
+  return Number.isNaN(ms) ? null : ms;
 }
 
 /** The room with this code, or null when there is none. A read that fails throws: a blip is not "no room with that code". */
@@ -117,100 +135,58 @@ export async function startGame(room: RoomRow, seed: string, seats: Seats, state
   return g;
 }
 
+/** The live table, with its bookkeeping parsed (table-state.ts), or null when the game has none. */
 export async function loadLive(gameId: string): Promise<LiveRow | null> {
-  const data = must(await db().from('live_state').select('version, state, claim_deadline, turn_deadline').eq('game_id', gameId).maybeSingle(), 'read the table');
+  const data = must(
+    await db().from('live_state').select('version, state, claim_deadline, turn_deadline, table_state, wake_at, acted_at, updated_at').eq('game_id', gameId).maybeSingle(),
+    'read the table',
+  );
   if (!data) return null;
-  const row = data as { version: number; state: HandState; claim_deadline: string | null; turn_deadline: string | null };
-  return { version: row.version, state: row.state, deadlines: { claim: fromIso(row.claim_deadline), turn: fromIso(row.turn_deadline) } };
+  const row = data as {
+    version: number;
+    state: HandState;
+    claim_deadline: string | null;
+    turn_deadline: string | null;
+    table_state: unknown;
+    wake_at: string | null;
+    acted_at: string;
+    updated_at: string;
+  };
+  const { table, legacy } = parseTableState(row.table_state);
+  const updatedAt = fromIso(row.updated_at) ?? 0;
+  return {
+    version: row.version,
+    state: row.state,
+    deadlines: { claim: fromIso(row.claim_deadline), turn: fromIso(row.turn_deadline) },
+    table,
+    legacy,
+    wakeAt: fromIso(row.wake_at),
+    actedAt: fromIso(row.acted_at) ?? updatedAt,
+    updatedAt,
+  };
 }
 
 /**
- * Write the next version only if nobody else has since we read. Returns false
- * on a lost race, in which case the caller reloads and retries or 409s.
+ * One request against the table, as one transaction (commit_table): the new
+ * state, the table's bookkeeping, its clocks and wake time, and every move
+ * the request made, appended to its hand's log with the hand's result once it
+ * has ended. All of it or none of it. Returns the new version, or null when
+ * someone else saved first, in which case nothing was written and the caller
+ * reads again. A failure throws, and nothing was written then either. This is
+ * the only write to a live table after the deal.
  */
-export async function saveLive(gameId: string, expectedVersion: number, state: HandState, deadlines: Deadlines): Promise<boolean> {
-  const data = must(
-    await db()
-      .from('live_state')
-      .update({ version: expectedVersion + 1, state, claim_deadline: toIso(deadlines.claim), turn_deadline: toIso(deadlines.turn), updated_at: new Date().toISOString() })
-      .eq('game_id', gameId)
-      .eq('version', expectedVersion)
-      .select('version'),
-    'save the table',
-  );
-  return (data?.length ?? 0) === 1;
-}
-
-/** Append one player action to the hand's log. Atomic on the database side. */
-export async function appendAction(gameId: string, handIndex: number, action: unknown): Promise<void> {
-  must(await db().rpc('append_hand_action', { p_game_id: gameId, p_hand_index: handIndex, p_action: action }), 'log the move');
-}
-
-export async function openHand(gameId: string, state: HandState): Promise<void> {
-  must(
-    await db()
-      .from('hands')
-      .upsert(
-        { game_id: gameId, hand_index: state.progress.handIndex, dealer: state.dealer, progress: state.progress },
-        { onConflict: 'game_id,hand_index', ignoreDuplicates: true },
-      ),
-    'open the hand',
-  );
+export async function commitTable(gameId: string, expectedVersion: number, w: TableWrite): Promise<number | null> {
+  const data = must(await db().rpc('commit_table', commitArgs(gameId, expectedVersion, w)), 'save the table');
+  return typeof data === 'number' ? data : null;
 }
 
 /*
- * Closing a hand is five writes, and actOnGame runs each as its own step
- * after the move is saved, in this order: settleScores, endHand,
- * recordResult, countHand, recordHand. Each throws if it fails, except the
- * players' tallies, which are best-effort; and one that fails does not stop
- * the rest, so a blip costs that one write, not the hand's whole record.
+ * When a hand ends, its result, its settlement and the running totals are
+ * already saved, by the commit that ended it. Two writes follow, each run by
+ * actOnGame as its own step after that commit: countHand, then recordHand.
+ * The first throws if it fails; the players' tallies are best-effort. One
+ * that fails does not stop the other.
  */
-
-/**
- * Add a won hand's transfers to the room's running totals, and return the
- * totals as written. A washout moves no points and writes nothing. The
- * write lands only while the room still holds this game, so a room the host
- * has already dealt again keeps its new game's totals. Null means nothing
- * was written: the caller keeps the totals it had.
- */
-export async function settleScores(gameId: string, room: RoomRow, state: HandState): Promise<readonly number[] | null> {
-  const result = state.result;
-  if (result?.type !== 'win') return null;
-  const ledger = [...(room.ledger.length === 4 ? room.ledger : [0, 0, 0, 0])];
-  for (const t of result.settlement.transfers) {
-    ledger[t.from]! -= t.amount;
-    ledger[t.to]! += t.amount;
-  }
-  const rows = must(
-    await db().from('rooms').update({ ledger, updated_at: new Date().toISOString() }).eq('id', room.id).eq('current_game_id', gameId).select('id'),
-    'settle the scores',
-  );
-  return rows?.length === 1 ? ledger : null;
-}
-
-/** Mark the hand's row as ended, with its result and settlement. */
-export async function endHand(gameId: string, state: HandState): Promise<void> {
-  const result = state.result;
-  must(
-    await db()
-      .from('hands')
-      .update({ result, settlement: result?.type === 'win' ? result.settlement : null, ended_at: new Date().toISOString() })
-      .eq('game_id', gameId)
-      .eq('hand_index', state.progress.handIndex),
-    'close the hand',
-  );
-}
-
-/** One row per hand in hand_results: the winner and pattern, or none for a washout. */
-export async function recordResult(gameId: string, state: HandState): Promise<void> {
-  const result = state.result;
-  const hand = { game_id: gameId, hand_index: state.progress.handIndex };
-  const row: Record<string, unknown> =
-    result?.type === 'win'
-      ? { ...hand, winner: result.winner, pattern_id: result.patternId, settlement: result.settlement }
-      : { ...hand, winner: null, pattern_id: null, settlement: {} };
-  must(await db().from('hand_results').insert(row), 'record the result');
-}
 
 /** Add one to the game's count of hands played. Atomic on the database side. */
 export async function countHand(gameId: string): Promise<void> {
@@ -250,18 +226,16 @@ export async function recordHand(seats: Seats, state: HandState): Promise<void> 
 }
 
 /**
- * The last hand is over. Three writes, ordered so that any one can fail and
- * be run again: the room first, so the lobby offers "Play again"; then the
- * clocks; the game's own status last. Until that last write lands the game
- * is still active, so the next "next hand" runs all three again. The room
- * is written only while it still holds this game: one the host has already
- * dealt again is left alone.
+ * The last hand is over. Two writes, ordered so that either can fail and be
+ * run again: the room first, so the lobby offers "Play again"; the game's own
+ * status last. Until that last write lands the game is still active, so the
+ * next "next hand" runs both again. The commit that ended the game has
+ * already stopped its clocks, and the sweep only looks at active games.
  */
 export async function finishGame(gameId: string, roomId: string): Promise<void> {
   const client = db();
   const now = new Date().toISOString();
   await closeRoom(client, gameId, roomId, now);
-  await clearDeadlines(client, gameId);
   must(await client.from('games').update({ status: 'finished', finished_at: now, ended_at: now }).eq('id', gameId), 'finish the game');
 }
 
@@ -269,24 +243,24 @@ export async function finishGame(gameId: string, roomId: string): Promise<void> 
  * The last human stood up: the game ends without a result and the room
  * closes. The same order as finishGame, so a leave that fails part way
  * leaves the game active with the leaver still in their seat, and leaving
- * again finishes the job.
+ * again finishes the job. Its clocks are left as they were: nothing reads a
+ * game that isn't active.
  */
 export async function abandonGame(gameId: string, roomId: string): Promise<void> {
   const client = db();
   const now = new Date().toISOString();
   await closeRoom(client, gameId, roomId, now);
-  await clearDeadlines(client, gameId);
   must(await client.from('games').update({ status: 'abandoned', ended_at: now }).eq('id', gameId), 'abandon the game');
 }
 
-/** The room's game is over: it goes back to the lobby's "finished", unless it has already moved on to another game. */
+/**
+ * The room's game is over: it goes back to the lobby's "finished". Only while
+ * the room still holds this game and is still playing it: one the host has
+ * dealt again keeps its new game, and a repeat finish writes nothing, so it
+ * never moves `updated_at` under a host who is about to tap Start.
+ */
 async function closeRoom(client: ReturnType<typeof db>, gameId: string, roomId: string, now: string): Promise<void> {
-  must(await client.from('rooms').update({ status: 'finished', updated_at: now }).eq('id', roomId).eq('current_game_id', gameId), 'close the room');
-}
-
-/** A game that is over waits on nobody: clear its clocks so the sweep has no reason to look at it. */
-async function clearDeadlines(client: ReturnType<typeof db>, gameId: string): Promise<void> {
-  must(await client.from('live_state').update({ claim_deadline: null, turn_deadline: null, updated_at: new Date().toISOString() }).eq('game_id', gameId), 'stop the clocks');
+  must(await client.from('rooms').update({ status: 'finished', updated_at: now }).eq('id', roomId).eq('current_game_id', gameId).eq('status', 'playing'), 'close the room');
 }
 
 /**

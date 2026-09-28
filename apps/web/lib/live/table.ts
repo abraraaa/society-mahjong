@@ -14,6 +14,8 @@ import {
   type Ruleset,
   type Seat,
 } from '@society/engine';
+import { addHandScores } from './lifecycle';
+import { NEW_TABLE, sameTableState, type TableState } from './table-state';
 import { isBot, isClientActionType, isHuman, type ClientAction, type Deadlines, type LiveGame, type Move, type PlayerMove, type Seats, type TimerPolicy } from './types';
 
 /**
@@ -211,7 +213,9 @@ export interface StepInput {
 }
 
 export interface StepResult extends LiveGame {
-  /** true when the state changed at all, so a sweep with nothing to do writes nothing */
+  /** the table's bookkeeping after this step: the input's, or a fresh table's, with a hand won in this step added to the running scores */
+  readonly tableState: TableState;
+  /** true when the state or the table's bookkeeping changed at all, or the game ended, so a sweep with nothing to do writes nothing */
   readonly changed: boolean;
   /** the hand ended and no next hand exists: the game is over */
   readonly gameOver: boolean;
@@ -235,10 +239,16 @@ export interface StepResult extends LiveGame {
  * hand's seed and its log replay to the same table (hand-log.ts replayHand).
  * A deal happens before any move in its step, and a finished hand has no
  * clock, so all of one step's moves belong to the hand it returns.
+ *
+ * The table's bookkeeping (`game.tableState`) comes back as `tableState`:
+ * the same document, unless a hand finished here, when a win's points are
+ * added to its running scores. A step finishes at most one hand, the one it
+ * returns: a deal needs the hand before it over, and it plays on from there.
  */
 export function step(input: StepInput): StepResult {
   const { ruleset, seats, policy, now } = input;
   const setup: TableSetup = input.bots ? { bots: input.bots } : {};
+  const tableBefore = input.game.tableState ?? NEW_TABLE;
   // A hand that ends inside this step, its clock run out, must be recorded as it closes, never dealt over. A finished
   // hand has no clock to resolve, so this refuses nothing the client offers.
   if (input.action?.type === 'nextHand' && input.game.state.phase !== 'finished') throw new IllegalAction('hand not finished');
@@ -290,11 +300,16 @@ export function step(input: StepInput): StepResult {
     }
   }
 
-  const deadlines = changed || gameOver ? deadlinesFor(s, ruleset, seats, policy, now) : input.game.deadlines;
   const dealt = s.progress.handIndex > before.progress.handIndex;
   // A dealt hand starts live, so a hand finished in the step that dealt it is newly finished too.
   const finishedHand = s.phase === 'finished' && (dealt || before.phase !== 'finished');
-  return { state: s, deadlines, changed, gameOver, moves, dealt, finishedHand, standIns: expired?.standIns ?? [] };
+  const scores = finishedHand ? addHandScores(tableBefore.scores ?? [0, 0, 0, 0], s) : tableBefore.scores;
+  const tableState = scores === tableBefore.scores ? tableBefore : { ...tableBefore, scores };
+  // Any action is already a change, as it always has been: a "next hand" on the finished last hand moves neither the hand
+  // nor the table, but it ends the game, and that end is saved. So is anything new in the table's bookkeeping.
+  if (!sameTableState(tableState, tableBefore)) changed = true;
+  const deadlines = changed || gameOver ? deadlinesFor(s, ruleset, seats, policy, now) : input.game.deadlines;
+  return { state: s, deadlines, tableState, changed, gameOver, moves, dealt, finishedHand, standIns: expired?.standIns ?? [] };
 }
 
 /** A fresh hand for a game, with bots already played up to the first human decision, and the moves they made. */
