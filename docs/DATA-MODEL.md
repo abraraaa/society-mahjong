@@ -104,16 +104,15 @@ change isn't additive.
 | Document | Shape (all keys optional unless noted) | Parser |
 |---|---|---|
 | `live_state.state` | the engine's `HandState` | engine |
-| `live_state.table_state` | `{ v, absence: [4 × { userId, misses, away, since, lastTap, played }], ready: { hand, userIds, dealAt }, scores: [4], over: { how, by, at, hands, scores, seats } }` | `table-state.ts` |
+| `live_state.table_state` | `{ v, absence: [4 × { userId, since, misses, away: 'clock' \| 'host' \| 'self' \| null, clockMoves, lastClockMove, lastTap, played: { turns, sets, exchanges, wins, hands } }], ready: { hand, userIds, dealAt }, scores: [4], over: { how, by, at, hands, scores, seats } }`. `ready` is there only while someone has tapped for the next hand. | `table-state.ts`, `absence.ts` |
 | `rooms.seats` | 4 × `null` \| `{ kind: 'human', userId, name, since?, seen? }` \| `{ kind: 'bot', name, heldFor?, kept? }` | `types.ts` |
 | `rooms.options` | `{ strict?, stakes?, tutorForGuests?, botStrength? }` | `validate.ts` |
 | `profiles.stats` | `{ hands, wins }` | `stage.ts` |
 | `hands.actions[]` | `{ v, by: 'player' \| 'bot' \| 'clock' \| 'away' \| 'table' \| 'host', seat?, userId?, a: Action }` | `hand-log.ts` |
-| `app_events.data` | per `type` | `events.ts`* |
+| `app_events.data` | per `type`: `room_made` `{ ruleset, guest }`; `seat_taken` `{ how, status }`; `game_dealt` `{ humans, bots, again, levels: { new, first_hand, learning, solid } \| null }` (null when the levels couldn't be read); `game_finished` `{ how, hands, humans }`; `game_abandoned` `{ hands }` | `events.ts` |
 
-\* Arrives with the code that first writes it. `table-state.ts` reads `scores`
-today and keeps every other key as it found it; the rest of that shape is
-filled in by the features that write it.
+`table-state.ts` keeps any key it doesn't read as it found it, so a newer
+phone's field survives an older phone's write.
 
 App vocabularies (`by`, `ended_how`, event types) have **no CHECK
 constraints**, so a new word is a code change. Only structure is constrained
