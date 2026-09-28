@@ -472,6 +472,13 @@ describe('the plan the player is already on', () => {
     expect(leader(E2, tiles, ctx, 'karachi.east.pungs.each.news')).toEqual({ id: 'karachi.east.dragonfly', away: 2 });
   });
 
+  it('never moves a complete hand off the name it will be announced under', () => {
+    const ctx: MatchCtx = { seatWind: 'S', roundWind: 'E' };
+    const tiles = T('s4 s5 s6 p2 p3 p4 m1 m2 m3 WN WN WN DR DR');
+    expect(leader(E2, tiles, ctx)).toEqual({ id: 'karachi.east.hoveringAngel', away: 0 });
+    expect(leader(E2, tiles, ctx, 'karachi.east.chows.each.pungPair')).toEqual({ id: 'karachi.east.hoveringAngel', away: 0 });
+  });
+
   it('never lets go of a tile the plan it keeps is counting on, over seeded play', { timeout: 120_000 }, () => {
     const rounds = [
       { roundWind: 'E', roundIndex: 0, handInRound: 0, handIndex: 0 },

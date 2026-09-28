@@ -97,7 +97,8 @@ export function analyseHand(
       // While a hand is being built, the round's general hand goes first when a named one is only as close.
       (a.away > 0 ? Number(!a.pattern.tags?.includes('general')) - Number(!b.pattern.tags?.includes('general')) : 0) ||
       // Then the plan the player is already on, so two equally close named hands (or two general ones) don't take turns.
-      (options.prefer ? Number(b.pattern.id === options.prefer) - Number(a.pattern.id === options.prefer) : 0) ||
+      // Only while building: a complete hand still leads with the name it will be announced under.
+      (options.prefer && a.away > 0 ? Number(b.pattern.id === options.prefer) - Number(a.pattern.id === options.prefer) : 0) ||
       a.index - b.index,
   );
 

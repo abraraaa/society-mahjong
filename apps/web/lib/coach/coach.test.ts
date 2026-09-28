@@ -870,8 +870,19 @@ describe('a plan that holds steady, and says when it switches', () => {
     expect(coachWith(theirs, markFor(theirs, { id: 'karachi.east.hoveringAngel', title: 'Hovering Angel' }, 12)).planSwitch).toBeNull();
   });
 
+  it('names the same hand in the strip as in the bubble on a winning turn, whatever plan the player was on', () => {
+    // Complete as Hovering Angel, which is how the win is announced; one tile earlier Chow + 5 Honours led.
+    const done: TileKind[] = ['s4', 's5', 's6', 'p2', 'p3', 'p4', 'm1', 'm2', 'm3', 'WN', 'WN', 'WN', 'DR', 'DR'];
+    const view = { ...at(20, done), legal: { discard: done, win: true } } as unknown as PrivatePlayerView;
+    const mark: PlanMark = { game: 'g', hand: view.progress.handIndex, patternId: 'karachi.east.chows.each.pungPair', title: 'Chow + 5 Honours', switched: null };
+    const coach = coachWith(view, mark, analyseFor(view, karachi, mark.patternId));
+    expect(textOf(coach.say)).toBe("That's Hovering Angel, complete. Call Mahjong!");
+    expect(coach.target?.title).toBe('Hovering Angel');
+    expect(coach.planSwitch).toBeNull();
+  });
+
   it('keeps each switch line within the bubble and names both hands, over seeded play with the plan held', { timeout: 120_000 }, () => {
-    const seen = { switches: 0, closer: 0, caughtUp: 0, gone: 0 };
+    const seen = { switches: 0, closer: 0, caughtUp: 0, gone: 0, wins: 0 };
     for (const [round, progress] of Object.entries(ROUNDS)) {
       if (round === 'E0' || round === 'W') continue;
       const spec = karachi.handSpec(progress);
@@ -884,6 +895,11 @@ describe('a plan that holds steady, and says when it switches', () => {
           onView: (view) => {
             const coach = tutor(view);
             const where = `${round} ${h} seq ${view.seq}: ${textOf(coach.say)}`;
+            // A self-drawn win: the strip names the hand the bubble announces, not the plan the player was on.
+            if (view.phase === 'turn' && view.turn === view.me && view.legal.win && coach.action.kind === 'win') {
+              seen.wins++;
+              expect(textOf(coach.say), where).toContain(`That's ${coach.target!.title}, complete`);
+            }
             if (!coach.planSwitch) {
               expect(textOf(coach.say), where).not.toContain('Switching');
               return;
@@ -909,5 +925,6 @@ describe('a plan that holds steady, and says when it switches', () => {
     }
     expect(seen.switches).toBeGreaterThan(0);
     expect(seen.closer + seen.caughtUp).toBeGreaterThan(0);
+    expect(seen.wins).toBeGreaterThan(0);
   });
 });
