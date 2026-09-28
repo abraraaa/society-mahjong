@@ -102,13 +102,19 @@ creates it, and the server does everything else with the service role.
    get in, and their check-in opens it again. Standing up from the lobby
    works before the first game and between games. A newcomer is seated, in
    this order: a bot keeping their own seat, an empty seat, a bot keeping
-   nobody's seat, a bot keeping someone else's, and last the seat of someone
-   seated who isn't here (below), the one seen longest ago first (nobody
-   seen before anyone seen), never the room's host's. Someone whose seat was
-   given away like that and comes back before the start is seated the same
-   way; only when every other seat is the host's or someone here's are they
-   told the table is full. Someone who opens the link once a game has
-   started is offered a bot's seat to take over instead (below).
+   nobody's seat, a bot keeping someone else's (never the host's), and last
+   the seat of someone seated who isn't here (below), the one seen longest
+   ago first (nobody seen before anyone seen), never the room's host's. So
+   a newcomer never takes the host's seat, kept or not. Someone whose seat
+   was given away like that and comes back before the start is seated the
+   same way; only when every other seat is the host's or someone here's are
+   they told the table is full. That includes someone who still has the
+   lobby open when it happens: its poll finds them unseated and sits them
+   down again, as opening the link would. Only what a newcomer's seat rests
+   on is read: who's been seen at the room only when its own writes say
+   it's been quiet for six weeks, and who's here only when every other seat
+   is a person's. Someone who opens the link once a game has started is
+   offered a bot's seat to take over instead (below).
 3. **Start.** Every empty seat gets a bot, and so does every seat whose
    person isn't here: that bot keeps the seat for them (`kept: 'late'`), and
    a bot already keeping someone's seat goes on keeping it. Nobody's seat is
@@ -200,11 +206,11 @@ server  session → seat
         respond with the actor's private view and version
 ```
 
-"I'm back" (`POST /api/games/:id/back`) and the host's "let a bot play"
-(`POST /api/games/:id/away`, `{ seat, sawAt, sawVersion }`) go the same
-way, as a change to who plays a seat instead of a move, through the same
-commit, and are tried again on a fresh read if another request saves first
-(three tries).
+"I'm back" (`POST /api/games/:id/back`), the host's "let a bot play"
+(`POST /api/games/:id/away`, `{ seat, sawAt, sawVersion }`) and "Take a
+break" (the same route, `{ self: true }`) go the same way, as a change to
+who plays a seat instead of a move, through the same commit, and are tried
+again on a fresh read if another request saves first (three tries).
 
 Implemented in `apps/web/lib/live/`: `table.ts` is the pure part (settle,
 deadlines, expiry, `step`), covered by tests that play whole hands through
@@ -386,9 +392,13 @@ here should have them, and the lobby says who that is ("Waiting for Ayesha
 to start."). A finished room also shows its last game ("Last game: Ayesha
 finished top on +14,504."), read from its latest finished game and that
 game's `game_players`: an abandoned game never hides the one before it.
+The finish closes the room before it writes the game's own row, so for a
+moment (or longer, if that last write fails) the room is between games
+while its game still reads active; the lobby then goes by the end saved on
+the live table, for who's here and for the last game.
 If who's been seen can't be read, the lobby tags nobody and its next poll
-tries again; Start and a newcomer's join fail instead, so nobody is dealt
-out or turned away on a guess.
+tries again; Start fails instead, and so does a newcomer's join that needs
+the answer, so nobody is dealt out, displaced or turned away on a guess.
 
 **Leaving.** Any seat can stand up from a live table (Leave, top right,
 with a confirmation that says opening the invite link again sits them back
@@ -399,11 +409,11 @@ and the seat's `game_players` row follows it. Everyone else's table says so the 
 is at the next move (the bot's own, if the seat owed one) or the slow
 poll: getting up changes the seats, not the table, so it pokes no game
 channel by itself. Every seat a bot plays is marked "Sana · bot", on its
-pill, in the result sheet's rows and on the final table. The host's Leave
-sheet has a third answer, "End the game for everyone", which asks again
-("End the game now?", saying the hand being played won't count) before
-ending it for the whole table. When the
-last human leaves, the game ends as `abandoned`, saved with the table like
+pill, in the result sheet's rows and on the final table. Both Leave sheets
+also offer "Take a break" (below), and the host's has one more answer,
+"End the game for everyone", which asks again ("End the game now?", saying
+the hand being played won't count) before ending it for the whole table.
+When the last human leaves, the game ends as `abandoned`, saved with the table like
 any other end (a hand cut short doesn't count), and the room goes back to
 `finished`; anyone still on the page sees "The table has closed". A Leave
 that lands just after the game's end is saved (the last hand scored, its
@@ -474,6 +484,18 @@ auto-discards, which would feel punitive at a friends' table: a room that
 opts into "strict" only gets the shorter clocks (7 s claims for everyone,
 30 s turns).
 
+**Take a break.** Anyone seated can step away on purpose: "Take a break",
+a quiet button in their Leave sheet, makes their seat away at once (reason
+`self`, noted in the hand's log as their own move), with no sheet of its
+own. Their table then shows the same panel, headed "You're taking a break,
+so a bot's playing your tiles for now.", and "I'm back" (or any move but a
+pass, or a Next hand tap) ends it; everyone else sees them away, as above.
+A break is not a tap: it stamps nothing the host's hand-over reads. It
+isn't offered to someone a bot is already playing for, and one that
+arrives for a seat already away changes nothing. Taken between hands, it
+means the next hand doesn't wait for them. While the host is on a break,
+their powers pass on, as for any away host.
+
 ### Reconnect and presence
 
 Reconnect = subscribe to both channels, then `GET /api/games/:id/view`,
@@ -525,8 +547,8 @@ changing either are in `docs/DATA-MODEL.md`. What a live table keeps:
   `{ v, by, seat?, userId?, a }`. `v` is the `live_state` version its
   request produced; `by` says who made it (`player`, `bot`, `clock`, `away`,
   `table` or `host`); `a` is the engine move, or a table note (a seat going
-  away, and why; someone back; the game ending), so a hand's log explains
-  every bot move in it.
+  away, and why: two missed clocks, the host, or a break; someone back; the
+  game ending), so a hand's log explains every bot move in it.
 - `rooms.seats`: who sits where now. A bot may be keeping the seat for
   someone (`heldFor`, their id; `keptName`, their name; `kept`: `left` or
   `late`), so the room can offer it back to them.

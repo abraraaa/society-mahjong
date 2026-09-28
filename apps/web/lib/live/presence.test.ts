@@ -64,6 +64,13 @@ describe('tableNews: someone takes a bot’s seat', () => {
     expect(tableNews(snap(FOUR, { me: null }), snap([AMNA, BILAL, ZARA, OMAR], { me: 2, version: 6 }))).toBeNull();
   });
 
+  it('tells someone on the take-over screen nothing, so nothing pops up over the table late once they sit down', () => {
+    // Zara reading, not seated: Bilal gets up and Amna steps away while she's deciding. Seated, that would be news.
+    const after: PublicSeats = [{ ...AMNA, presence: 'away' }, { kind: 'bot', name: 'Hamza', keptFor: 'Bilal' }, SANA, OMAR];
+    expect(tableNews(snap(FOUR, { me: null }), snap(after, { me: null, version: 7 }))).toBeNull();
+    expect(tableNews(snap(FOUR), snap(after, { version: 7 }))).toBe(LEFT_BILAL);
+  });
+
   it('comes with the rest of the news in seat order', () => {
     const next: PublicSeats = [AMNA, { kind: 'bot', name: 'Hamza', keptFor: 'Bilal' }, ZARA, OMAR];
     expect(tableNews(snap(FOUR), snap(next, { version: 8 }))).toBe(`${LEFT_BILAL} ${I('Zara')}'s taken over the seat ${I('Sana')} was playing.`);
@@ -227,6 +234,12 @@ describe('tableNews: away and back', () => {
   it('welcomes the reader back from being away', () => {
     expect(tableNews(snap(FOUR, { mine: own({ away: 'clock' }) }), snap(FOUR, { version: 6, mine: own() }))).toBe(WELCOME_BACK);
     expect(WELCOME_BACK).toBe('Welcome back.');
+  });
+
+  it('tells the reader nothing when they take a break, since the away note says it, and welcomes them back from one', () => {
+    const onBreak = snap(FOUR, { version: 6, mine: own({ away: 'self' }) });
+    expect(tableNews(snap(FOUR, { mine: own() }), onBreak)).toBeNull();
+    expect(tableNews(onBreak, snap(FOUR, { version: 7, mine: own() }))).toBe(WELCOME_BACK);
   });
 
   it('tells the reader what a clock did for them, whichever phone found it, once', () => {

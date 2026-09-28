@@ -262,6 +262,32 @@ describe('seatJoiner, knowing who’s here (R18)', () => {
     expect(seatJoiner([host, bilal, c, d], 'finished', zara, NOW, pick(afterGame))).toEqual([host, zaraSat, c, d]);
   });
 
+  it('never gives a newcomer the host’s own kept seat: someone else’s seat who isn’t here, or none', () => {
+    const keptForHost = { kind: 'bot', name: 'Sana', heldFor: 'u-host', keptName: 'Abrar', kept: 'left' } as const;
+    // Bilal was here last week, so his seat goes; the host's, kept by Sana, stays theirs.
+    expect(seatJoiner([keptForHost, bilal, c, d], 'finished', zara, NOW, pick(seen({ 'u-bilal': NOW - 7 * 24 * HOUR, 'u-c': NOW - HOUR, 'u-d': NOW - HOUR })))).toEqual([
+      keptForHost,
+      { kind: 'human', ...zara, since: SINCE },
+      c,
+      d,
+    ]);
+    // Everyone else here: the table is full to a newcomer.
+    expect(seatJoiner([keptForHost, bilal, c, d], 'finished', zara, NOW, pick(seen({ 'u-bilal': NOW - HOUR, 'u-c': NOW - HOUR, 'u-d': NOW - HOUR })))).toBeNull();
+    // Someone else's kept seat is still a newcomer's to take, and the host sits back down in their own.
+    expect(seatJoiner([keptForHost, keptForBilal, c, d], 'finished', zara, NOW, pick())).toEqual([keptForHost, zaraSat, c, d]);
+    expect(seatJoiner([keptForHost, zaraSat, c, d], 'finished', { userId: 'u-host', name: 'Abrar' }, NOW, pick())).toEqual([
+      { kind: 'human', userId: 'u-host', name: 'Abrar', since: SINCE },
+      zaraSat,
+      c,
+      d,
+    ]);
+  });
+
+  it('with who’s here not read yet, tries every step but the last, which needs it', () => {
+    expect(seatJoiner([host, keptForBilal, c, d], 'finished', zara, NOW, { hostId: 'u-host', circle: null })).toEqual([host, zaraSat, c, d]);
+    expect(seatJoiner([host, bilal, c, d], 'finished', zara, NOW, { hostId: 'u-host', circle: null })).toBeNull();
+  });
+
   it('seats nobody this way at a game in play', () => {
     expect(seatJoiner([host, bot, bot, bot], 'playing', zara, NOW, pick())).toBeNull();
   });

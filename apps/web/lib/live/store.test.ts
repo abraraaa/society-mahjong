@@ -85,6 +85,7 @@ import {
 } from './store';
 import { commitArgs, type TableWrite } from './hand-log';
 import { STALE_GAME_MS } from './lifecycle';
+import { SEEN_REFRESH_MS } from './seating';
 import { humanLevels, policyFor } from './policy';
 import type { GameOver } from './table-state';
 import type { LiveGame, LoggedMove, Seats } from './types';
@@ -1021,6 +1022,24 @@ describe('who has been at a room (room_members)', () => {
     expect(JSON.parse(spy.mock.calls[0]![0] as string)).toMatchObject({ event: 'member_touch_failed', roomId: 'r-1' });
     expect(spy.mock.calls[0]![0]).not.toContain('u-abrar');
     expect(ran()).toEqual(['room_members:upsert']);
+  });
+
+  it('doesn’t try again and again to check in someone with no profile row: it logs that once, and leaves them be for half an hour', async () => {
+    const spy = log();
+    supabase.answer = () => ({ data: null, error: { message: 'insert or update on table "room_members" violates foreign key constraint', code: '23503' } });
+    // Not u-abrar: this server remembers who it has given up on, and the other tests check him in.
+    expect(await touchMember('r-1', 'u-noprofile', T)).toBe(false);
+    expect(JSON.parse(spy.mock.calls[0]![0] as string)).toMatchObject({ event: 'profile_missing', roomId: 'r-1' });
+    expect(spy.mock.calls[0]![0]).not.toContain('u-noprofile');
+    // The lobby's next polls: nothing written, nothing logged.
+    expect(await touchMember('r-1', 'u-noprofile', T + 5_000)).toBe(false);
+    expect(await touchMember('r-2', 'u-noprofile', T + SEEN_REFRESH_MS - 1)).toBe(false);
+    expect(ran()).toEqual(['room_members:upsert']);
+    expect(spy).toHaveBeenCalledTimes(1);
+    // Half an hour on, it tries again (a profile made since would let it land).
+    answerAll();
+    expect(await touchMember('r-1', 'u-noprofile', T + SEEN_REFRESH_MS)).toBe(true);
+    expect(ran()).toEqual(['room_members:upsert', 'room_members:upsert']);
   });
 
   it('reads who has sat at the room and when each was last seen, throwing when it can’t', async () => {

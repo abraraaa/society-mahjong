@@ -2,9 +2,10 @@ import { expect, test } from '@playwright/test';
 import { SEATS } from '@society/engine';
 import { finalStandings } from '../lib/live/final';
 import { NOT_HERE_HINT, SHARE, hereCount, seatTag, startLabel, takeSeatCopy, topLine, waitingForHost } from '../lib/live/lifecycle-copy';
+import { plainError } from '../lib/live/plain';
 import type { RoomSnapshot } from '../lib/live/snapshot';
 import { fixtures } from './fixtures';
-import { GAME_ID } from './fixtures';
+import { GAME_ID, USER_NAME } from './fixtures';
 import { flush, openLobby, room } from './live';
 
 /**
@@ -83,6 +84,44 @@ test.describe('the lobby between games', () => {
     await expect(start).toHaveClass(/btn-ghost/);
     await expect(page.getByText('Last game', { exact: true })).toHaveCount(0);
     await expect(page.getByText(NOT_HERE_HINT)).toHaveCount(0);
+    expect(lobby.pageErrors).toEqual([]);
+  });
+});
+
+test.describe('someone whose seat goes to a newcomer between games', () => {
+  test('(c) is sat down again by the lobby’s next look, as opening the link would, and the lobby keeps looking', async ({ page }) => {
+    const { lobbyGuest } = fixtures();
+    // Zara took Amna's seat a moment before Amna's check-in landed; opening the link again puts her in Bilal's, who isn't here.
+    const moved: RoomSnapshot = {
+      ...lobbyGuest,
+      seats: [{ kind: 'human', name: 'Zara' }, { kind: 'human', name: USER_NAME }, lobbyGuest.seats[2]!, { kind: 'human', name: 'Omar' }],
+      me: 1,
+    };
+    const lobby = await openLobby(page, {
+      join: (n) => room(n === 1 ? lobbyGuest : moved),
+      room: (n) => (n === 1 ? { status: 403, body: { error: 'not at this table' } } : room(moved)),
+    });
+    await expect(page.locator('main .rounded-2xl').nth(0)).toContainText(USER_NAME);
+    await expect.poll(() => lobby.count('join'), { timeout: 10_000 }).toBe(2);
+    await expect(page.locator('main .rounded-2xl').nth(1)).toContainText(USER_NAME);
+    await expect(page.locator('main .rounded-2xl').nth(0)).toContainText('Zara');
+    // Seated again, so the lobby goes on looking.
+    await expect.poll(() => lobby.count('room'), { timeout: 10_000 }).toBeGreaterThan(1);
+    expect(lobby.count('join')).toBe(2);
+    expect(lobby.pageErrors).toEqual([]);
+  });
+
+  test('(c) the host, whose look shows the lobby without them, is sat down again too; with every seat taken, is told so with a way to check again', async ({ page }) => {
+    const { lobbyAgain } = fixtures();
+    const without: RoomSnapshot = { ...lobbyAgain, seats: [{ kind: 'human', name: 'Zara' }, ...lobbyAgain.seats.slice(1)], me: null, isHost: false };
+    const lobby = await openLobby(page, {
+      join: (n) => (n === 1 ? room(lobbyAgain) : { status: 409, body: { error: 'this table is full' } }),
+      room: () => room(without),
+    });
+    await expect(page.getByRole('button', { name: startLabel(lobbyAgain) })).toBeVisible();
+    await expect.poll(() => lobby.count('join'), { timeout: 10_000 }).toBe(2);
+    await expect(page.getByText(plainError({ status: 409, message: 'this table is full' }))).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Check again' })).toBeVisible();
     expect(lobby.pageErrors).toEqual([]);
   });
 });

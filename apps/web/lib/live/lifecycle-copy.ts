@@ -158,6 +158,12 @@ export const LEAVE = {
 } as const satisfies { title: string; body: string; confirmLabel: string; cancelLabel: string };
 
 /**
+ * The quiet button in both Leave sheets: a bot plays the reader's tiles until they tap "I'm back". It needs no sheet of its
+ * own, since the away note that follows says what's happening (presence.ts awayTitle).
+ */
+export const TAKE_A_BREAK = 'Take a break';
+
+/**
  * The take-over screen, for someone not seated at a game in play: their own
  * seat back (`left`), the seat kept for them since the deal (`late`), or a
  * bot's seat (`other`), with the running total they'd carry on with, unless

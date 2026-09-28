@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { finalPlayers, finalStandings, lastGameFrom, type LastGameRow } from './final';
+import { finalPlayers, finalStandings, lastGameFrom, lastGameFromOver, type LastGameRow } from './final';
 import type { GameOver } from './table-state';
 import type { Seats } from './types';
 
@@ -118,5 +118,22 @@ describe('lastGameFrom', () => {
 
   it('reads a finished game from before its end was recorded as played out', () => {
     expect(lastGameFrom({ ...row, how: null }, 'u-amna')!.how).toBe('complete');
+  });
+});
+
+describe('lastGameFromOver', () => {
+  const over: GameOver = { how: 'host', by: { userId: 'u-amna', name: 'Amna' }, at: 5_000, hands: 7, scores: [2000, 14504, -8000, -8504], seats: SEATS };
+
+  it('reads a game whose end is saved on its table as the finish will record it, so the lobby can show it before its row is written', () => {
+    const row = lastGameFromOver(over);
+    expect(row).toMatchObject({ status: 'finished', endedAt: 5_000, how: 'host', hands: 7 });
+    expect(row.players).toEqual(finalPlayers(over).map((p) => ({ seat: p.seat, userId: p.user_id, kind: p.kind, name: p.name, score: p.score, place: p.place })));
+    expect(lastGameFrom(row, 'u-bilal')).toMatchObject({ how: 'host', hands: 7, me: 1 });
+  });
+
+  it('reads an abandoned end as abandoned: no last game, but still the end who’s here is judged by', () => {
+    const row = lastGameFromOver({ ...over, how: 'abandoned', by: null });
+    expect(row).toMatchObject({ status: 'abandoned', endedAt: 5_000 });
+    expect(lastGameFrom(row, 'u-bilal')).toBeNull();
   });
 });

@@ -16,7 +16,7 @@ import { retryCanHelp } from '@/lib/front-door';
 import { ApiError, api, listen } from '@/lib/live/client';
 import { finalStandings } from '@/lib/live/final';
 import { handsPlayed } from '@/lib/live/lifecycle';
-import { HOST_LEAVE, LEAVE, endLine, endSheet, waitCopy } from '@/lib/live/lifecycle-copy';
+import { HOST_LEAVE, LEAVE, TAKE_A_BREAK, endLine, endSheet, waitCopy } from '@/lib/live/lifecycle-copy';
 import { plainError } from '@/lib/live/plain';
 import { IM_BACK, awaySummary, awayTitle, canLetBotPlay, letBotPlayLabel, letBotPlaySheet, seatMarks, tableNews } from '@/lib/live/presence';
 import { isPrivate, type GameSnapshot } from '@/lib/live/snapshot';
@@ -326,7 +326,9 @@ export function LiveTable({ gameId }: { gameId: string }) {
         setTakeError(null);
         try {
           await api.sit(snap.roomCode, offer.seat, name);
-          // Seated now: the channels are joined again as a seated player, and the table looked at again.
+          // Seated now: the channels are joined again as a seated player, and the table looked at again. Anything said while they
+          // were deciding is old by now, and mustn't pop up over the table they sit down at.
+          setNotice(null);
           setAttempt((n) => n + 1);
           await refetch();
         } catch (err) {
@@ -414,6 +416,20 @@ export function LiveTable({ gameId }: { gameId: string }) {
     }
   };
 
+  // "Take a break", from the Leave sheet: the sheet goes at once (its Leave button never reads "One moment…" for a break),
+  // and the away note that comes back with the table says what's happening, with "I'm back".
+  const takeBreak = () => {
+    setSheet(null);
+    api
+      .takeBreak(gameId)
+      .then(take)
+      .catch((err: unknown) => {
+        // Turned down with the table attached (the game ended, say): show it as it stands.
+        if (err instanceof ApiError && err.snapshot) take(err.snapshot);
+        setNotice(plainError(err));
+      });
+  };
+
   // "I'm back": the bot hands the reader's seat back; "Welcome back." comes with the table (tableNews).
   const comeBack = () => {
     setBacking(true);
@@ -464,6 +480,8 @@ export function LiveTable({ gameId }: { gameId: string }) {
   // played (a finished one has its result sheet), and never under another sheet.
   const away = snap.status === 'active' && view.phase !== 'finished' && !open ? snap.mine?.away : null;
   const awayNote = away ? <AwayNote title={awayTitle(away)} detail={awaySummary(snap.mine!.played)} actionLabel={IM_BACK} busy={backing} onAction={comeBack} /> : undefined;
+  // Both Leave sheets offer a break, first among their quieter answers, unless a bot is already playing for the reader.
+  const breakAnswer = snap.mine?.away ? [] : [{ label: TAKE_A_BREAK, onClick: takeBreak }];
   const botSheet = open?.kind === 'bot' ? open : null;
   const botName = botSheet ? (snap.seats[botSheet.seat]?.name ?? '') : '';
 
@@ -517,12 +535,12 @@ export function LiveTable({ gameId }: { gameId: string }) {
             confirmLabel={HOST_LEAVE.leave}
             cancelLabel={HOST_LEAVE.stay}
             busy={sheetBusy}
-            extras={[{ label: HOST_LEAVE.end, onClick: () => setSheet({ kind: 'end' }) }]}
+            extras={[...breakAnswer, { label: HOST_LEAVE.end, onClick: () => setSheet({ kind: 'end' }) }]}
             onConfirm={leave}
             onCancel={closeSheet}
           />
         ) : (
-          <ConfirmSheet {...LEAVE} busy={sheetBusy} onConfirm={leave} onCancel={closeSheet} />
+          <ConfirmSheet {...LEAVE} busy={sheetBusy} extras={breakAnswer} onConfirm={leave} onCancel={closeSheet} />
         ))}
       {open?.kind === 'end' && <ConfirmSheet {...endSheet(view.phase !== 'finished', handsPlayed(view))} busy={sheetBusy} onConfirm={endForEveryone} onCancel={closeSheet} />}
       {botSheet && (

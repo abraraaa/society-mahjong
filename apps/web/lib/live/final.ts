@@ -86,6 +86,24 @@ export interface LastGameRow {
   }[];
 }
 
+/**
+ * A game whose end is saved on its live table (`over`) as the lobby would
+ * read it once the finish has written it all: finished (or abandoned), at
+ * the end's moment, with the rows the finish writes (finalPlayers). For the
+ * moments between the room's close and the game's own row, and for as long as
+ * a finish that failed part way leaves the row reading active: the lobby then
+ * still judges who's here by this game's end and shows this game as the last.
+ */
+export function lastGameFromOver(over: GameOver): LastGameRow {
+  return {
+    status: over.how === 'abandoned' ? 'abandoned' : 'finished',
+    endedAt: over.at,
+    how: over.how,
+    hands: over.hands,
+    players: finalPlayers(over).map((p) => ({ seat: p.seat, userId: p.user_id, kind: p.kind, name: p.name, score: p.score, place: p.place })),
+  };
+}
+
 /** The lobby's "Last game": how the room's latest finished game ended, each seat's final score, and the reader's seat in it. Never an id. */
 export interface LastGame {
   readonly how: GameEndHow;

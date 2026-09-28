@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { finalStandings } from '../lib/live/final';
-import { HOST_LEAVE, LEAVE, NO_SEAT, endLine, endSheet, takeSeatCopy, waitCopy } from '../lib/live/lifecycle-copy';
+import { HOST_LEAVE, LEAVE, NO_SEAT, TAKE_A_BREAK, endLine, endSheet, takeSeatCopy, waitCopy } from '../lib/live/lifecycle-copy';
 import { plainError } from '../lib/live/plain';
 import type { GameSnapshot } from '../lib/live/snapshot';
 import { fixtures, serve } from './fixtures';
@@ -269,14 +269,14 @@ test.describe('the end of a game', () => {
     expect(t.pageErrors).toEqual([]);
   });
 
-  test('(e) mid-hand, the host’s Leave sheet offers to end the game for everyone, and asks first', async ({ page }) => {
+  test('(e) mid-hand, the host’s Leave sheet offers a break and to end the game for everyone, and asks before the end', async ({ page }) => {
     const fx = fixtures();
     const t = await openTable(page, { view: () => ok(fx.turn), end: () => ok(fx.endedByHost) });
     await t.stage().getByRole('button', { name: 'Leave' }).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByRole('heading', { name: HOST_LEAVE.title })).toBeVisible();
     await expect(dialog.getByText(HOST_LEAVE.body)).toBeVisible();
-    await expect(dialog.getByRole('button')).toHaveText([HOST_LEAVE.leave, HOST_LEAVE.end, HOST_LEAVE.stay]);
+    await expect(dialog.getByRole('button')).toHaveText([HOST_LEAVE.leave, TAKE_A_BREAK, HOST_LEAVE.end, HOST_LEAVE.stay]);
 
     await dialog.getByRole('button', { name: HOST_LEAVE.end }).click();
     // One hand has finished, and this one won't count.
@@ -299,7 +299,7 @@ test.describe('the end of a game', () => {
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByRole('heading', { name: LEAVE.title })).toBeVisible();
     await expect(dialog.getByText(LEAVE.body)).toBeVisible();
-    await expect(dialog.getByRole('button')).toHaveText([LEAVE.confirmLabel, LEAVE.cancelLabel]);
+    await expect(dialog.getByRole('button')).toHaveText([LEAVE.confirmLabel, TAKE_A_BREAK, LEAVE.cancelLabel]);
     expect(t.pageErrors).toEqual([]);
   });
 
@@ -356,7 +356,7 @@ test.describe('the end of a game', () => {
       await page.setViewportSize({ width, height });
       await t.stage().getByRole('button', { name: 'Leave' }).click();
       await expect(dialog.getByRole('heading', { name: HOST_LEAVE.title })).toBeVisible();
-      await whole([HOST_LEAVE.leave, HOST_LEAVE.end, HOST_LEAVE.stay]);
+      await whole([HOST_LEAVE.leave, TAKE_A_BREAK, HOST_LEAVE.end, HOST_LEAVE.stay]);
       await dialog.getByRole('button', { name: HOST_LEAVE.stay }).click();
       await expect(dialog).toHaveCount(0);
 
@@ -434,6 +434,75 @@ test.describe('someone who isn’t seated at a game in play', () => {
     await expect(page.locator('main').getByRole('alert')).toHaveText(plainError({ status: 409, message: 'that seat is taken' }));
     await expect.poll(() => t.count('view')).toBeGreaterThan(views);
     await expect(page.getByRole('button', { name: copy.confirmLabel })).toBeEnabled();
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(f) a refusal, and the next seat on offer, move nothing: the title and the button stay where they were', async ({ page }) => {
+    const fx = fixtures();
+    let refused = false;
+    // After the refusal, Omar's seat is on offer instead: words of the same length, so the button can be held to its place too.
+    const next = { ...fx.offer, version: fx.offer.version + 1, offer: { seat: 3 as const, botName: 'Omar', why: 'other' as const, score: -3000 } };
+    const t = await openTable(
+      page,
+      {
+        view: () => ok(refused ? next : fx.offer),
+        sit: () => {
+          refused = true;
+          return { status: 409, body: { error: 'that seat is taken' } };
+        },
+      },
+      { seated: false },
+    );
+    const heading = page.getByRole('heading', { level: 1 });
+    const button = page.locator('main').getByRole('button');
+    await expect(heading).toHaveText(takeSeatCopy(fx.offer.offer!).title);
+    const before = { heading: await heading.boundingBox(), button: await button.boundingBox() };
+    await button.click();
+    await expect(page.locator('main').getByRole('alert')).toHaveText(plainError({ status: 409, message: 'that seat is taken' }));
+    await expect(heading).toHaveText(takeSeatCopy(next.offer).title);
+    await expect(button).toHaveText(takeSeatCopy(next.offer).confirmLabel);
+    expect(await heading.boundingBox()).toEqual(before.heading);
+    expect(await button.boundingBox()).toEqual(before.button);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(f) news from the table while they decide isn’t kept for later: nothing pops up once they sit down', async ({ page }) => {
+    const fx = fixtures();
+    let stage: 'offer' | 'left' | 'seated' = 'offer';
+    // Bilal gets up while Amna is on the take-over screen (and Sana's seat has scored a little since, which the screen shows); once
+    // she sits, her table has him as a bot, as it has been for a while.
+    const bilalBot = { kind: 'bot' as const, name: 'Bilal' };
+    const left = {
+      ...fx.offer,
+      version: fx.offer.version + 1,
+      seats: [fx.offer.seats[0]!, bilalBot, fx.offer.seats[2]!, fx.offer.seats[3]!],
+      offer: { ...fx.offer.offer!, score: -2000 },
+    };
+    const seated = { ...fx.turn, version: fx.offer.version + 2, seats: [fx.turn.seats[0]!, bilalBot, fx.turn.seats[2]!, fx.turn.seats[3]!] };
+    const t = await openTable(
+      page,
+      {
+        view: () => ok(stage === 'offer' ? fx.offer : stage === 'left' ? left : seated),
+        sit: () => {
+          stage = 'seated';
+          return { status: 200, body: { ...fx.lobbySeated } };
+        },
+      },
+      { seated: false },
+    );
+    const copy = takeSeatCopy(fx.offer.offer!);
+    await expect(page.getByRole('heading', { name: copy.title })).toBeVisible();
+    stage = 'left';
+    // Back online: the page looks again, and finds Bilal gone.
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await expect(page.getByText(takeSeatCopy(left.offer).body)).toBeVisible();
+    await page.getByRole('button', { name: copy.confirmLabel }).click();
+    await expect(t.stage()).toBeVisible();
+    // Counted, not waited for: a line that did pop up would go by itself a few seconds later.
+    await flush(page);
+    expect(await t.toast().count()).toBe(0);
+    await page.waitForTimeout(500);
+    expect(await t.toast().count()).toBe(0);
     expect(t.pageErrors).toEqual([]);
   });
 

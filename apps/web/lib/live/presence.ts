@@ -60,9 +60,11 @@ export const WELCOME_BACK = 'Welcome back.';
  *    first time, with what they can do about it.
  * The reader's own seat is told only in 1 and 2, and nothing is told in a
  * game that's no longer in play, or from a snapshot older than the one before it.
+ * Nor to someone not seated: the take-over screen has no line to show it on,
+ * and it would only pop up over the table minutes late once they sat down.
  */
 export function tableNews(prev: GameSnapshot, next: GameSnapshot): string | null {
-  if (prev.gameId !== next.gameId || next.version < prev.version || next.status !== 'active') return null;
+  if (prev.gameId !== next.gameId || next.version < prev.version || next.status !== 'active' || next.me === null) return null;
   const lines: string[] = [];
   const mine = next.mine;
   if (mine && next.me !== null && prev.me === next.me) {

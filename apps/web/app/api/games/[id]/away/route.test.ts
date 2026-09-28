@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
 
 /**
- * The host's "Let a bot play": the route signs the caller in and hands the
- * game, the caller and the body's seat and sawAt, unchecked, to the service,
- * which checks them and decides everything else (changeSeat).
+ * The host's "Let a bot play", and a player's own "Take a break": the route
+ * signs the caller in and hands the game, the caller and the body's seat and
+ * sawAt (or, for a break, `self: true`), unchecked, to the service, which
+ * checks them and decides everything else (changeSeat).
  */
 const auth = vi.hoisted(() => ({ user: { id: 'u-abrar', name: 'Abrar', isGuest: true } as { id: string; name: string; isGuest: boolean } | null }));
 
@@ -54,6 +55,27 @@ describe('POST /api/games/[id]/away', () => {
     expect(service.changeSeat).toHaveBeenLastCalledWith(GAME, 'u-abrar', { type: 'letBotPlay', seat: 'one', sawAt: 'now' });
   });
 
+  it('takes a break for the caller on `self: true`, and only on exactly that', async () => {
+    const res = await away(JSON.stringify({ self: true }));
+    expect(res.status).toBe(200);
+    expect(service.changeSeat).toHaveBeenCalledTimes(1);
+    expect(service.changeSeat).toHaveBeenCalledWith(GAME, 'u-abrar', { type: 'break' });
+    expect(await res.json()).toEqual({ gameId: GAME, status: 'active' });
+    // A seat alongside it doesn't make it the host's hand-over: the break is always the caller's own seat.
+    await away(JSON.stringify({ self: true, seat: 2, sawAt: 5 }));
+    expect(service.changeSeat).toHaveBeenLastCalledWith(GAME, 'u-abrar', { type: 'break' });
+    // Anything else in `self` is the host's hand-over, checked as one.
+    await away(JSON.stringify({ self: 'true', seat: 1 }));
+    expect(service.changeSeat).toHaveBeenLastCalledWith(GAME, 'u-abrar', { type: 'letBotPlay', seat: 1, sawAt: undefined, sawVersion: undefined });
+  });
+
+  it('asks someone with no session to sign in before a break, too', async () => {
+    auth.user = null;
+    const res = await away(JSON.stringify({ self: true }));
+    expect(res.status).toBe(401);
+    expect(service.changeSeat).not.toHaveBeenCalled();
+  });
+
   it('passes the service’s refusal on, with the table when there is one', async () => {
     vi.mocked(service.changeSeat).mockRejectedValueOnce(new HttpError(403, 'only the host can hand a seat to a bot'));
     const res = await away(JSON.stringify({ seat: 1, sawAt: 5 }));
@@ -64,5 +86,10 @@ describe('POST /api/games/[id]/away', () => {
     const again = await away(JSON.stringify({ seat: 1, sawAt: 5 }));
     expect(again.status).toBe(409);
     expect(await again.json()).toEqual({ error: 'that player has just played', snapshot: { version: 9 } });
+
+    vi.mocked(service.changeSeat).mockRejectedValueOnce(new HttpError(403, 'not seated at this table'));
+    const unseated = await away(JSON.stringify({ self: true }));
+    expect(unseated.status).toBe(403);
+    expect(await unseated.json()).toEqual({ error: 'not seated at this table' });
   });
 });

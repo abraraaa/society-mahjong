@@ -129,6 +129,8 @@ export interface Fixtures {
   readonly awayTurn: GameSnapshot;
   /** The same, after her "I'm back". */
   readonly awayBack: GameSnapshot;
+  /** `turn`'s table after Amna took a break from the Leave sheet: a bot has played her turn for her. Bilal has the host's powers while she's away. */
+  readonly onBreak: GameSnapshot;
   /** Amna's turn, the host's table (hers), after she handed Bilal's seat to a bot. */
   readonly bilalAway: GameSnapshot;
   /** A West pass of three tiles: Bilal, host while she's away, handed Amna's seat to a bot, which passed her tiles at once; Bilal still owes his. */
@@ -252,6 +254,8 @@ function build(): Fixtures {
     const back = step({ game: r, ruleset: karachi, seats: SEATS, policy: POLICY, now: MADE_AT + 1, change: { type: 'back', seat: ME } });
     return { r, back };
   });
+  // On her turn at `turn`'s table she takes a break from the Leave sheet instead: her bot plays the turn at once.
+  const broke = step({ game: { ...live.t, tableState: NEW_TABLE }, ruleset: karachi, seats: SEATS, policy: POLICY, now: MADE_AT, change: { type: 'break', seat: ME } });
   // The host, Amna, hands Bilal's seat to a bot on her own turn: nobody was waiting on him, so her clock runs on.
   const handed = step({
     game: { ...live.t, tableState: NEW_TABLE },
@@ -319,6 +323,7 @@ function build(): Fixtures {
     timedOut,
     awayTurn: snapshot(away.r.state, 7, away.r.deadlines, 'active', { ...presence(away.r.tableState.absence), isHost: false }),
     awayBack: snapshot(away.back.state, 8, away.back.deadlines, 'active', presence(away.back.tableState.absence)),
+    onBreak: snapshot(broke.state, 6, broke.deadlines, 'active', { ...presence(broke.tableState.absence), isHost: false }),
     bilalAway: snapshot(handed.state, 6, handed.deadlines, 'active', presence(handed.tableState.absence)),
     awayWest: snapshot(westAway.state, 2, westAway.deadlines, 'active', { ...presence(westAway.tableState.absence), isHost: false }),
     notHost: { ...snapshot(live.t.state, 5, live.t.deadlines), isHost: false },
