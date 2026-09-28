@@ -66,7 +66,10 @@ scheduled clean-up migration a release later:
     `updated_at`. The Realtime policy reads the seats. Presence stamps and a
     bot keeping a seat for someone are optional keys on each entry.
 - **`room_members`**: the group behind a room, as rows, because "which rooms is
-  this person in" has to be a query.
+  this person in" has to be a query. `last_seen_at` moves on an invite-link
+  open, a room made, a Start, the lobby's refresh, and a game's end for those
+  still there; between games, "who's here" and who holds the host's powers are
+  read from it (seen in the last six hours, and since the last game ended).
 - **`games`**: one per game in a room.
   - The `seed` is never readable by a client: it reveals the wall.
   - Also its status and how it ended.
@@ -104,8 +107,8 @@ change isn't additive.
 | Document | Shape (all keys optional unless noted) | Parser |
 |---|---|---|
 | `live_state.state` | the engine's `HandState` | engine |
-| `live_state.table_state` | `{ v, absence: [4 × { userId, since, misses, away: 'clock' \| 'host' \| 'self' \| null, clockMoves, lastClockMove, lastTap, played: { turns, sets, exchanges, wins, hands } }], ready: { hand, userIds, dealAt }, scores: [4], over: { how, by, at, hands, scores, seats } }`. `ready` is there only while someone has tapped for the next hand. | `table-state.ts`, `absence.ts` |
-| `rooms.seats` | 4 × `null` \| `{ kind: 'human', userId, name, since?, seen? }` \| `{ kind: 'bot', name, heldFor?, kept? }` | `types.ts` |
+| `live_state.table_state` | `{ v, absence: [4 × { userId, since, misses, away: 'clock' \| 'host' \| 'self' \| null, clockMoves, lastClockMove, lastTap, tapVersion, played: { turns, sets, exchanges, wins, hands } }], ready: { hand, userIds, dealAt }, took: [4 × { userId, hand, seq }], scores: [4], over: { how, by, at, hands, scores, seats } }`. `ready` is there only while someone has tapped for the next hand; `took` only while someone has taken a seat over from a bot in the hand being played (what the tutor's first look reads, as the snapshot's `joinedAt`); `tapVersion` is the table version that saved `lastTap`. | `table-state.ts`, `absence.ts` |
+| `rooms.seats` | 4 × `null` \| `{ kind: 'human', userId, name, since?, seen? }` \| `{ kind: 'bot', name, heldFor?, keptName?, kept?: 'left' \| 'late' }` (a bot keeping a seat for someone who left, or wasn't here at the deal) | `types.ts` |
 | `rooms.options` | `{ strict?, stakes?, tutorForGuests?, botStrength? }` | `validate.ts` |
 | `profiles.stats` | `{ hands, wins }` | `stage.ts` |
 | `hands.actions[]` | `{ v, by: 'player' \| 'bot' \| 'clock' \| 'away' \| 'table' \| 'host', seat?, userId?, a: Action }` | `hand-log.ts` |
