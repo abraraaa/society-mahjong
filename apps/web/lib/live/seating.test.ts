@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Seat } from '@society/engine';
 import { EVERYONE_HERE, isAway, markAway, markPresent } from './absence';
-import { hostOf, seatJoiner, seatsBack, vacate } from './seating';
+import { HERE_FOR_MS, SEEN_REFRESH_MS, hostOf, isHere, seatJoiner, seatsBack, vacate, type Circle } from './seating';
 import type { Absence } from './table-state';
 import type { Seats } from './types';
 
@@ -144,5 +144,48 @@ describe('hostOf', () => {
     expect(hostOf('u-host', [null, null, null, null], everyone)).toBeNull();
     // A bot is never the host, even one named after someone.
     expect(hostOf('u-host', [{ kind: 'bot', name: 'Abrar' }, bilal, null, null], everyone)).toBe('u-bilal');
+  });
+});
+
+describe('isHere', () => {
+  const HOUR = 60 * 60 * 1000;
+  const circle = (seen: Record<string, number>, lastEndedAt: number | null = null): Circle => ({ seen: new Map(Object.entries(seen)), lastEndedAt });
+
+  it('holds someone here for six hours after they were last seen, and checks a lobby in again every half hour', () => {
+    expect(HERE_FOR_MS).toBe(6 * HOUR);
+    expect(SEEN_REFRESH_MS).toBe(30 * 60 * 1000);
+  });
+
+  it('calls nobody here who has no member row: a seat from before rooms kept them reads not here until its person opens the link', () => {
+    expect(isHere(host, circle({}), NOW)).toBe(false);
+    expect(isHere(host, circle({ 'u-bilal': NOW }), NOW)).toBe(false);
+  });
+
+  it('calls someone seen five hours ago here before the room’s first game, and someone seen seven hours ago not', () => {
+    expect(isHere(host, circle({ 'u-host': NOW - 5 * HOUR }), NOW)).toBe(true);
+    expect(isHere(host, circle({ 'u-host': NOW - HERE_FOR_MS }), NOW)).toBe(true);
+    expect(isHere(host, circle({ 'u-host': NOW - 7 * HOUR }), NOW)).toBe(false);
+  });
+
+  it('counts only a check-in since the last game ended: seen at exactly the end is here, seen before it is not', () => {
+    const end = NOW - HOUR;
+    expect(isHere(host, circle({ 'u-host': end }, end), NOW)).toBe(true);
+    expect(isHere(host, circle({ 'u-host': end - 1 }, end), NOW)).toBe(false);
+    expect(isHere(host, circle({ 'u-host': end + 10 * 60 * 1000 }, end), NOW)).toBe(true);
+    // At the end six hours ago and not since: gone.
+    expect(isHere(host, circle({ 'u-host': NOW - 7 * HOUR }, NOW - 7 * HOUR), NOW)).toBe(false);
+  });
+
+  it('never calls a bot or an empty seat here', () => {
+    expect(isHere(bot, circle({ Sana: NOW }), NOW)).toBe(false);
+    expect(isHere(null, circle({}), NOW)).toBe(false);
+  });
+
+  it('gives hostOf the host’s powers for whoever is here between games', () => {
+    const seats: Seats = [{ ...host, since: '2026-09-28T18:00:00Z' }, { ...bilal, since: '2026-09-28T18:30:00Z' }, bot, null];
+    const c = circle({ 'u-bilal': NOW - HOUR, 'u-host': NOW - 8 * HOUR });
+    expect(hostOf('u-host', seats, (seat) => isHere(seats[seat] ?? null, c, NOW))).toBe('u-bilal');
+    // Nobody here: the room's host, while seated.
+    expect(hostOf('u-host', seats, (seat) => isHere(seats[seat] ?? null, circle({}), NOW))).toBe('u-host');
   });
 });

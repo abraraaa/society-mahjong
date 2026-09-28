@@ -1,6 +1,6 @@
 'use client';
 import type { REALTIME_SUBSCRIBE_STATES, RealtimeChannel, SupabaseClient } from '@supabase/supabase-js';
-import type { GameSnapshot } from './snapshot';
+import type { GameSnapshot, RoomSnapshot } from './snapshot';
 import type { ClientAction } from './types';
 
 export class ApiError extends Error {
@@ -44,16 +44,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   }
 }
 
-export interface RoomSnapshot {
-  readonly id: string;
-  readonly code: string;
-  readonly rulesetId: string;
-  readonly status: 'lobby' | 'playing' | 'finished';
-  readonly seats: readonly ({ readonly kind: 'human' | 'bot'; readonly name: string } | null)[];
-  readonly me: number | null;
-  readonly isHost: boolean;
-  readonly gameId: string | null;
-}
+export type { RoomSnapshot };
 
 export const api = {
   createRoom: (rulesetId = 'karachi') => call<{ id: string; code: string }>('/api/rooms', { method: 'POST', body: JSON.stringify({ rulesetId }) }),

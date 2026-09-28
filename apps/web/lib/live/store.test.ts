@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { EVERYONE_HERE } from './absence';
+import { EVERYONE_HERE, markAway } from './absence';
 import type { HandState } from '@society/engine';
 
 /**
@@ -66,15 +66,20 @@ import {
   dueGames,
   finishGame,
   gameById,
+  lastFinishedGame,
+  lastGameOf,
   liveMeta,
   loadLive,
   recordHand,
+  recountMemberGames,
+  roomMembers,
   roomByCode,
   roomById,
   saveSeats,
   seatStages,
   stagesBySeat,
   startGame,
+  touchMember,
   type RoomRow,
 } from './store';
 import { commitArgs, type TableWrite } from './hand-log';
@@ -381,12 +386,6 @@ interface Write {
   readonly dropsGame?: boolean;
 }
 const WRITES: readonly Write[] = [
-  {
-    name: 'createRoom',
-    run: () => createRoom({ code: 'ABCD', hostId: 'u-abrar', hostName: 'Abrar', rulesetId: 'karachi', options: {} }),
-    labels: ['create the room'],
-    data: () => room,
-  },
   { name: 'saveSeats', run: () => saveSeats('r-1', seats, room.updated_at), labels: ['save the seats'], data: () => [{ updated_at: room.updated_at }] },
   { name: 'commitTable', run: () => commitTable(GAME, 3, write), labels: ['save the table'], data: () => 4 },
   {
@@ -396,7 +395,17 @@ const WRITES: readonly Write[] = [
     data: dealAnswers,
     dropsGame: true,
   },
-  { name: 'finishGame', run: () => finishGame(GAME, room, OVER), data: closing(seats), labels: ['record how everyone finished', 'close the room', 'finish the game'] },
+  {
+    name: 'finishGame',
+    run: () => finishGame(GAME, room, OVER, EVERYONE_HERE),
+    data: closing(seats),
+    labels: ['record how everyone finished', 'mark who was there', 'close the room', 'finish the game'],
+  },
+  {
+    name: 'recountMemberGames',
+    run: () => recountMemberGames('r-1', ['u-abrar', 'u-hana']),
+    labels: ['count the games played', 'count the games played', 'count the games played'],
+  },
   { name: 'countHand', run: () => countHand(GAME), labels: ['count the hand'] },
 ];
 
@@ -590,8 +599,8 @@ describe('finishing a game', () => {
   beforeEach(() => answerAll(undefined, closing(seats)));
 
   it('writes who finished where, closes the room, then marks the game, in that order, leaving the table itself alone', async () => {
-    await finishGame(GAME, room, OVER);
-    expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'games:update']);
+    await finishGame(GAME, room, OVER, EVERYONE_HERE);
+    expect(ran()).toEqual(['game_players:upsert', 'room_members:update', 'rooms:update', 'games:update']);
     const players = supabase.log.find(is('game_players', 'upsert'))!;
     expect(players.steps).toEqual([
       [
@@ -616,12 +625,12 @@ describe('finishing a game', () => {
   });
 
   it('records who ended it, when someone did', async () => {
-    await finishGame(GAME, room, { ...OVER, how: 'host', by: { userId: 'u-hana', name: 'Hana' }, hands: 7 });
+    await finishGame(GAME, room, { ...OVER, how: 'host', by: { userId: 'u-hana', name: 'Hana' }, hands: 7 }, EVERYONE_HERE);
     expect(wrote('games', 'update')).toMatchObject({ status: 'finished', ended_how: 'host', ended_by: 'u-hana', hands_played: 7 });
   });
 
   it('marks an abandoned game abandoned, with no finish time and nobody placed', async () => {
-    await finishGame(GAME, room, { ...OVER, how: 'abandoned', hands: 3 });
+    await finishGame(GAME, room, { ...OVER, how: 'abandoned', hands: 3 }, EVERYONE_HERE);
     expect((wrote('game_players', 'upsert') as { place: unknown }[]).map((r) => r.place)).toEqual([null, null, null, null]);
     const game = wrote('games', 'update');
     expect(game).toEqual({ status: 'abandoned', ended_at: '2026-09-24T22:00:00.000Z', ended_how: 'abandoned', ended_by: null, hands_played: 3 });
@@ -629,7 +638,7 @@ describe('finishing a game', () => {
   });
 
   it('closes the room only while it still holds this game and is playing it, so a repeat, or a room dealt again, doesn’t close it again', async () => {
-    await finishGame(GAME, room, OVER);
+    await finishGame(GAME, room, OVER, EVERYONE_HERE);
     const close = supabase.log.find(isClose)!;
     expect(close.steps).toContainEqual(['eq', ['id', 'r-1']]);
     expect(close.steps).toContainEqual(['eq', ['current_game_id', GAME]]);
@@ -640,8 +649,8 @@ describe('finishing a game', () => {
     // room is read instead, for the give-back, and this one has nothing to give back.
     supabase.log.length = 0;
     answerAll(undefined, (q) => (isClose(q) ? [] : is('rooms', 'select')(q) ? between(seats) : null));
-    await finishGame(GAME, room, OVER);
-    expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:select', 'games:update']);
+    await finishGame(GAME, room, OVER, EVERYONE_HERE);
+    expect(ran()).toEqual(['game_players:upsert', 'room_members:update', 'rooms:update', 'rooms:select', 'games:update']);
   });
 
   describe('someone leaving as the last hand is scored', () => {
@@ -670,8 +679,8 @@ describe('finishing a game', () => {
 
     it('gives the seat back once it has closed the room, on the time the close wrote, while the room is between games after this one', async () => {
       answerAll(undefined, closing(left));
-      await finishGame(GAME, room, OVER);
-      expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:update', 'games:update']);
+      await finishGame(GAME, room, OVER, EVERYONE_HERE);
+      expect(ran()).toEqual(['game_players:upsert', 'room_members:update', 'rooms:update', 'rooms:update', 'games:update']);
       const [back] = givenBack();
       expect(back!.steps[0]).toEqual(['update', [{ seats, updated_at: expect.any(String) }]]);
       expect(back!.steps).toContainEqual(['eq', ['id', 'r-1']]);
@@ -690,8 +699,8 @@ describe('finishing a game', () => {
         undefined,
         answers(losing(1), (q) => (isClose(q) ? [between(leftHers)] : undefined), reads(between(joined, { updated_at: LATER }))),
       );
-      await finishGame(GAME, room, { ...OVER, seats: atEnd });
-      expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:update', 'rooms:select', 'rooms:update', 'games:update']);
+      await finishGame(GAME, room, { ...OVER, seats: atEnd }, EVERYONE_HERE);
+      expect(ran()).toEqual(['game_players:upsert', 'room_members:update', 'rooms:update', 'rooms:update', 'rooms:select', 'rooms:update', 'games:update']);
       const [, again] = givenBack();
       // Worked out afresh from the room as it now is: Zara keeps the seat she took, and Hana gets hers back.
       expect(written(again!)).toEqual({ seats: [seats[0], zara, seats[1], seats[3]], updated_at: expect.any(String) });
@@ -700,14 +709,14 @@ describe('finishing a game', () => {
 
     it('never takes back a seat a person has taken since, and then writes nothing more', async () => {
       answerAll(undefined, answers(losing(1), reads(between([seats[0], zara, seats[2], seats[3]], { updated_at: LATER }))));
-      await finishGame(GAME, room, OVER);
-      expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:update', 'rooms:select', 'games:update']);
+      await finishGame(GAME, room, OVER, EVERYONE_HERE);
+      expect(ran()).toEqual(['game_players:upsert', 'room_members:update', 'rooms:update', 'rooms:update', 'rooms:select', 'games:update']);
     });
 
     it('gives up after three writes that lose, throwing so the game stays active and the next finish tries again', async () => {
       answerAll(undefined, answers(losing(3), reads(between(left, { updated_at: LATER }))));
-      expect(await thrown(finishGame(GAME, room, OVER))).toMatchObject({ message: 'could not give back the seats: the room kept changing' });
-      expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:update', 'rooms:select', 'rooms:update', 'rooms:select', 'rooms:update']);
+      expect(await thrown(finishGame(GAME, room, OVER, EVERYONE_HERE))).toMatchObject({ message: 'could not give back the seats: the room kept changing' });
+      expect(ran()).toEqual(['game_players:upsert', 'room_members:update', 'rooms:update', 'rooms:update', 'rooms:select', 'rooms:update', 'rooms:select', 'rooms:update']);
     });
 
     it('gives the seat back on a repeat finish, from the room as it reads, when a give-back before it failed', async () => {
@@ -715,8 +724,8 @@ describe('finishing a game', () => {
         undefined,
         answers((q) => (isClose(q) ? [] : undefined), reads(between(left, { updated_at: LATER }))),
       );
-      await finishGame(GAME, room, OVER);
-      expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:select', 'rooms:update', 'games:update']);
+      await finishGame(GAME, room, OVER, EVERYONE_HERE);
+      expect(ran()).toEqual(['game_players:upsert', 'room_members:update', 'rooms:update', 'rooms:select', 'rooms:update', 'games:update']);
       const [back] = givenBack();
       expect(written(back!)).toEqual({ seats, updated_at: expect.any(String) });
       expect(back!.steps).toContainEqual(['eq', ['updated_at', LATER]]);
@@ -729,36 +738,36 @@ describe('finishing a game', () => {
           undefined,
           answers((q) => (isClose(q) ? [] : undefined), reads(row)),
         );
-        await finishGame(GAME, room, OVER);
-        expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:select', 'games:update']);
+        await finishGame(GAME, room, OVER, EVERYONE_HERE);
+        expect(ran()).toEqual(['game_players:upsert', 'room_members:update', 'rooms:update', 'rooms:select', 'games:update']);
       }
     });
 
     it('writes nothing more when nobody left at the last moment', async () => {
-      await finishGame(GAME, room, OVER);
-      expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'games:update']);
+      await finishGame(GAME, room, OVER, EVERYONE_HERE);
+      expect(ran()).toEqual(['game_players:upsert', 'room_members:update', 'rooms:update', 'games:update']);
     });
 
     it('throws naming the give-back when it fails, leaving the game active', async () => {
       answerAll(isGiveBack, closing(left));
-      expect(await thrown(finishGame(GAME, room, OVER))).toMatchObject({ what: 'give back the seats' });
-      expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:update']);
+      expect(await thrown(finishGame(GAME, room, OVER, EVERYONE_HERE))).toMatchObject({ what: 'give back the seats' });
+      expect(ran()).toEqual(['game_players:upsert', 'room_members:update', 'rooms:update', 'rooms:update']);
     });
   });
 
   it('leaves the game active whichever write fails, so it can be run again from the start', async () => {
-    for (const i of [0, 1, 2]) {
+    for (const i of [0, 1, 2, 3]) {
       supabase.log.length = 0;
       failNth(i, closing(seats));
-      await expect(finishGame(GAME, room, OVER)).rejects.toBeInstanceOf(SupabaseError);
+      await expect(finishGame(GAME, room, OVER, EVERYONE_HERE)).rejects.toBeInstanceOf(SupabaseError);
       // The game's status is the last write: when anything before it fails it never runs, and when it fails it did not land.
       expect(supabase.log).toHaveLength(i + 1);
     }
     // Run again once the database is back, every write goes through, and writes the same.
     supabase.log.length = 0;
     answerAll(undefined, closing(seats));
-    await finishGame(GAME, room, OVER);
-    expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'games:update']);
+    await finishGame(GAME, room, OVER, EVERYONE_HERE);
+    expect(ran()).toEqual(['game_players:upsert', 'room_members:update', 'rooms:update', 'games:update']);
   });
 
   it('writes who finished where once more without ids when a person has no profile row, and logs it as profile_missing', async () => {
@@ -766,8 +775,8 @@ describe('finishing a game', () => {
     const noProfile = { message: 'insert or update on table "game_players" violates foreign key constraint "game_players_user_id_fkey"', code: '23503' };
     let tries = 0;
     supabase.answer = (q) => (is('game_players', 'upsert')(q) && tries++ === 0 ? { data: null, error: noProfile } : ok(closing(seats)(q)));
-    await finishGame(GAME, room, OVER);
-    expect(ran()).toEqual(['game_players:upsert', 'game_players:upsert', 'rooms:update', 'games:update']);
+    await finishGame(GAME, room, OVER, EVERYONE_HERE);
+    expect(ran()).toEqual(['game_players:upsert', 'game_players:upsert', 'room_members:update', 'rooms:update', 'games:update']);
     const [, again] = supabase.log.filter(is('game_players', 'upsert'));
     expect((again!.steps[0]![1][0] as { user_id: unknown }[]).map((r) => r.user_id)).toEqual([null, null, null, null]);
     expect(again!.steps[0]![1][1]).toEqual({ onConflict: 'game_id,seat' });
@@ -781,7 +790,7 @@ describe('finishing a game', () => {
     const noProfile = { message: 'insert or update on table "games" violates foreign key constraint "games_ended_by_fkey"', code: '23503' };
     let tries = 0;
     supabase.answer = (q) => (is('games', 'update')(q) && tries++ === 0 ? { data: null, error: noProfile } : ok());
-    await finishGame(GAME, room, { ...OVER, how: 'host', by: { userId: 'u-hana', name: 'Hana' } });
+    await finishGame(GAME, room, { ...OVER, how: 'host', by: { userId: 'u-hana', name: 'Hana' } }, EVERYONE_HERE);
     const games = supabase.log.filter(is('games', 'update'));
     expect(games.map((q) => (q.steps[0]![1][0] as { ended_by: unknown }).ended_by)).toEqual(['u-hana', null]);
     expect(games[1]!.steps[0]![1][0]).toMatchObject({ status: 'finished', ended_how: 'host', hands_played: 16 });
@@ -792,12 +801,15 @@ describe('finishing a game', () => {
   it('tries only once more, and only for a missing profile', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     supabase.answer = (q) => (is('games', 'update')(q) ? { data: null, error: { message: 'still no profile', code: '23503' } } : ok());
-    expect(await thrown(finishGame(GAME, room, { ...OVER, how: 'host', by: { userId: 'u-hana', name: 'Hana' } }))).toMatchObject({ what: 'finish the game', code: '23503' });
+    expect(await thrown(finishGame(GAME, room, { ...OVER, how: 'host', by: { userId: 'u-hana', name: 'Hana' } }, EVERYONE_HERE))).toMatchObject({
+      what: 'finish the game',
+      code: '23503',
+    });
     expect(supabase.log.filter(is('games', 'update'))).toHaveLength(2);
 
     // Nobody ended a game whose last hand was scored, so a 23503 there isn't a missing profile, and nothing is tried again.
     supabase.log.length = 0;
-    expect(await thrown(finishGame(GAME, room, OVER))).toMatchObject({ what: 'finish the game' });
+    expect(await thrown(finishGame(GAME, room, OVER, EVERYONE_HERE))).toMatchObject({ what: 'finish the game' });
     expect(supabase.log.filter(is('games', 'update'))).toHaveLength(1);
   });
 });
@@ -872,6 +884,11 @@ describe('saving the live table', () => {
       () => dueGames(0),
       () => stagesBySeat(seats),
       () => recordHand(seats, wonHand),
+      () => createRoom({ code: 'ABCD', hostId: 'u-abrar', hostName: 'Abrar', rulesetId: 'karachi', options: {} }),
+      () => touchMember('r-1', 'u-abrar', T),
+      () => roomMembers('r-1'),
+      () => lastGameOf(GAME),
+      () => lastFinishedGame('r-1'),
     ];
     for (const run of everything) {
       answerAll(undefined, (q) => (q.target === 'games' ? newGame : q.target === 'rooms' ? [{ id: 'r-1' }] : q.target === 'rpc:commit_table' ? 4 : null));
@@ -945,7 +962,171 @@ describe('after a hand ends', () => {
   });
 });
 
+describe('who has been at a room (room_members)', () => {
+  const log = () => vi.spyOn(console, 'error').mockImplementation(() => {});
+
+  it('checks someone in with exactly the room, the person and the moment, so their first visit and games played stay as they were', async () => {
+    expect(await touchMember('r-1', 'u-abrar', T)).toBe(true);
+    expect(supabase.log).toHaveLength(1);
+    expect(supabase.log[0]).toEqual({
+      target: 'room_members',
+      steps: [['upsert', [{ room_id: 'r-1', user_id: 'u-abrar', last_seen_at: '2026-09-24T20:00:00.000Z' }, { onConflict: 'room_id,user_id' }]]],
+    });
+  });
+
+  it('never fails the request for a check-in that didn’t land: it says so, logs it, and writes nothing to the room', async () => {
+    const spy = log();
+    answerAll(() => true);
+    expect(await touchMember('r-1', 'u-abrar', T)).toBe(false);
+    expect(JSON.parse(spy.mock.calls[0]![0] as string)).toMatchObject({ event: 'member_touch_failed', roomId: 'r-1' });
+    expect(spy.mock.calls[0]![0]).not.toContain('u-abrar');
+    expect(ran()).toEqual(['room_members:upsert']);
+  });
+
+  it('reads who has sat at the room and when each was last seen, throwing when it can’t', async () => {
+    answerAll(undefined, () => [
+      { user_id: 'u-abrar', last_seen_at: '2026-09-24T20:00:00+00:00' },
+      { user_id: 'u-hana', last_seen_at: 'not a time' },
+    ]);
+    expect(await roomMembers('r-1')).toEqual([{ userId: 'u-abrar', lastSeenAt: T }]);
+    expect(supabase.log[0]!.steps).toEqual([
+      ['select', ['user_id, last_seen_at']],
+      ['eq', ['room_id', 'r-1']],
+    ]);
+    answerAll(() => true);
+    expect(await thrown(roomMembers('r-1'))).toMatchObject({ what: 'read who has sat here' });
+  });
+
+  const players = [
+    { seat: 0, user_id: 'u-abrar', kind: 'human', name: 'Abrar', score: 2000, place: 2 },
+    { seat: 1, user_id: 'u-hana', kind: 'human', name: 'Hana', score: 14504, place: 1 },
+  ];
+  const gameRow = { status: 'finished', ended_at: '2026-09-24T22:00:00+00:00', ended_how: 'complete', hands_played: 16, game_players: players };
+
+  it('reads a game for the lobby: when and how it ended, and who finished where', async () => {
+    answerAll(undefined, () => gameRow);
+    expect(await lastGameOf(GAME)).toEqual({
+      status: 'finished',
+      endedAt: END,
+      how: 'complete',
+      hands: 16,
+      players: [
+        { seat: 0, userId: 'u-abrar', kind: 'human', name: 'Abrar', score: 2000, place: 2 },
+        { seat: 1, userId: 'u-hana', kind: 'human', name: 'Hana', score: 14504, place: 1 },
+      ],
+    });
+    expect(supabase.log[0]!.steps).toEqual([
+      ['select', ['status, ended_at, ended_how, hands_played, game_players(seat, user_id, kind, name, score, place)']],
+      ['eq', ['id', GAME]],
+      ['maybeSingle', []],
+    ]);
+    // Nothing there, a game from before it was ended this way, an id that can't be a game, and a failed read.
+    answerAll();
+    expect(await lastGameOf(GAME)).toBeNull();
+    answerAll(undefined, () => ({ status: 'active', ended_at: null, ended_how: null, hands_played: null, game_players: null }));
+    expect(await lastGameOf(GAME)).toEqual({ status: 'active', endedAt: null, how: null, hands: 0, players: [] });
+    supabase.log.length = 0;
+    expect(await lastGameOf('not-a-game')).toBeNull();
+    expect(supabase.log).toHaveLength(0);
+    answerAll(() => true);
+    expect(await thrown(lastGameOf(GAME))).toMatchObject({ what: 'read the last game' });
+  });
+
+  it('reads the room’s latest finished game: this room’s, finished, newest end first, one row', async () => {
+    answerAll(undefined, () => gameRow);
+    expect(await lastFinishedGame('r-1')).toMatchObject({ status: 'finished', how: 'complete', hands: 16 });
+    expect(supabase.log[0]!.steps).toEqual([
+      ['select', ['status, ended_at, ended_how, hands_played, game_players(seat, user_id, kind, name, score, place)']],
+      ['eq', ['room_id', 'r-1']],
+      ['eq', ['status', 'finished']],
+      ['order', ['ended_at', { ascending: false }]],
+      ['limit', [1]],
+      ['maybeSingle', []],
+    ]);
+    answerAll(() => true);
+    expect(await thrown(lastFinishedGame('r-1'))).toMatchObject({ what: 'read the last game' });
+  });
+
+  it('counts each person’s finished games at the room from one read, then sets each member row, never making one', async () => {
+    answerAll(undefined, (q) => (is('game_players', 'select')(q) ? [{ user_id: 'u-abrar' }, { user_id: 'u-abrar' }, { user_id: 'u-hana' }, { user_id: null }] : null));
+    await recountMemberGames('r-1', ['u-abrar', 'u-hana', 'u-zara', 'u-abrar']);
+    expect(ran()).toEqual(['game_players:select', 'room_members:update', 'room_members:update', 'room_members:update']);
+    expect(supabase.log[0]!.steps).toEqual([
+      ['select', ['user_id, games!inner(room_id, status)']],
+      ['in', ['user_id', ['u-abrar', 'u-hana', 'u-zara']]],
+      ['eq', ['games.room_id', 'r-1']],
+      ['eq', ['games.status', 'finished']],
+    ]);
+    expect(supabase.log.slice(1).map((q) => q.steps)).toEqual([
+      [
+        ['update', [{ games_played: 2 }]],
+        ['eq', ['room_id', 'r-1']],
+        ['eq', ['user_id', 'u-abrar']],
+      ],
+      [
+        ['update', [{ games_played: 1 }]],
+        ['eq', ['room_id', 'r-1']],
+        ['eq', ['user_id', 'u-hana']],
+      ],
+      [
+        ['update', [{ games_played: 0 }]],
+        ['eq', ['room_id', 'r-1']],
+        ['eq', ['user_id', 'u-zara']],
+      ],
+    ]);
+    // Nobody to count: nothing asked.
+    supabase.log.length = 0;
+    await recountMemberGames('r-1', []);
+    expect(supabase.log).toHaveLength(0);
+  });
+
+  describe('when a game ends', () => {
+    beforeEach(() => answerAll(undefined, closing(seats)));
+    const stamp = () => supabase.log.find(is('room_members', 'update'));
+
+    it('marks who was there seen at the end’s moment, never moving anyone back, before the room closes', async () => {
+      await finishGame(GAME, room, OVER, EVERYONE_HERE);
+      expect(ran()).toEqual(['game_players:upsert', 'room_members:update', 'rooms:update', 'games:update']);
+      expect(stamp()!.steps).toEqual([
+        ['update', [{ last_seen_at: '2026-09-24T22:00:00.000Z' }]],
+        ['eq', ['room_id', 'r-1']],
+        ['in', ['user_id', ['u-abrar', 'u-hana']]],
+        ['lt', ['last_seen_at', '2026-09-24T22:00:00.000Z']],
+      ]);
+    });
+
+    it('leaves out whoever a bot was playing for at the end, and marks nobody after an idle end or an abandon', async () => {
+      await finishGame(GAME, room, OVER, markAway(EVERYONE_HERE, seats, 1, 'clock'));
+      expect(stamp()!.steps).toContainEqual(['in', ['user_id', ['u-abrar']]]);
+      for (const how of ['idle', 'abandoned'] as const) {
+        supabase.log.length = 0;
+        await finishGame(GAME, room, { ...OVER, how }, EVERYONE_HERE);
+        expect(stamp(), how).toBeUndefined();
+      }
+    });
+  });
+});
+
 describe('createRoom', () => {
+  it('checks the host in as the room’s first member, and still makes the room when that doesn’t land', async () => {
+    answerAll(undefined, () => room);
+    await createRoom({ code: 'ABCD', hostId: 'u-abrar', hostName: 'Abrar', rulesetId: 'karachi', options: {} });
+    expect(ran()).toEqual(['rooms:insert', 'room_members:upsert']);
+    expect(supabase.log[1]!.steps[0]![1][0]).toMatchObject({ room_id: 'r-1', user_id: 'u-abrar' });
+
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    supabase.log.length = 0;
+    answerAll(is('room_members'), () => room);
+    expect(await createRoom({ code: 'ABCD', hostId: 'u-abrar', hostName: 'Abrar', rulesetId: 'karachi', options: {} })).toBe(room);
+    expect(JSON.parse(spy.mock.calls[0]![0] as string)).toMatchObject({ event: 'member_touch_failed' });
+
+    // The room itself not made: it throws, and nobody is checked in.
+    supabase.log.length = 0;
+    answerAll(is('rooms'));
+    expect(await thrown(createRoom({ code: 'ABCD', hostId: 'u-abrar', hostName: 'Abrar', rulesetId: 'karachi', options: {} }))).toMatchObject({ what: 'create the room' });
+    expect(ran()).toEqual(['rooms:insert']);
+  });
+
   it('seats the host with when they sat down, so the host’s powers pass to whoever has sat longest after them', async () => {
     answerAll(undefined, () => room);
     const before = Date.now();

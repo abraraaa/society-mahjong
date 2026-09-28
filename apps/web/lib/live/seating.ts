@@ -49,6 +49,47 @@ export function seatsBack(room: Seats, atEnd: Seats): Seats | null {
   return given ? (seats as unknown as Seats) : null;
 }
 
+/**
+ * How long someone stays "here" between games after they were last seen at
+ * the room (R17): opening the invite link, sitting down, starting a game, or
+ * being at the table when a game ended.
+ */
+export const HERE_FOR_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * How stale a seated person's check-in may get while they have the lobby
+ * open before its poll checks them in again: at most two writes an hour
+ * each, and someone who sits in the lobby for hours stays here.
+ */
+export const SEEN_REFRESH_MS = 30 * 60 * 1000;
+
+/**
+ * Who's been seen at a room, from room_members (user id to `last_seen_at`,
+ * epoch ms), and when the room's last game ended (null unless the room is
+ * between games after one). Read afresh for each request, never stamped on
+ * the seats.
+ */
+export interface Circle {
+  readonly seen: ReadonlyMap<string, number>;
+  readonly lastEndedAt: number | null;
+}
+
+/**
+ * Whether the person in a seat is here between games (R17): a human with a
+ * member row whose `last_seen_at` is within HERE_FOR_MS and no earlier than
+ * the end of the room's last game. So whoever was at the table when a game
+ * ended stays here for six hours, someone a bot was playing for at the end
+ * (or everyone, after an idle end or an abandon) isn't until they open the
+ * link, and a seat with no member row (from before rooms kept them) isn't
+ * either. A bot or an empty seat is never here.
+ */
+export function isHere(entry: SeatEntry, circle: Circle, now: number): boolean {
+  if (entry?.kind !== 'human') return false;
+  const seen = circle.seen.get(entry.userId);
+  if (seen === undefined || now - seen > HERE_FOR_MS) return false;
+  return circle.lastEndedAt === null || seen >= circle.lastEndedAt;
+}
+
 /** When a person sat down, for who has sat longest: a seat with no readable `since` counts as the longest held. */
 function sittingSince(entry: SeatEntry): number {
   const at = entry?.kind === 'human' && typeof entry.since === 'string' ? Date.parse(entry.since) : Number.NaN;
@@ -64,9 +105,9 @@ function sittingSince(entry: SeatEntry): number {
  *    seat without one counts as earliest; ties by seat order);
  * 3. otherwise the room's host, if seated;
  * 4. otherwise nobody.
- * `present` says whether the person in a seat is here (at a game in play,
- * not away: service.ts); anyone not seated is never the answer, whatever
- * their id.
+ * `present` says whether the person in a seat is here: at a game in play,
+ * not away (service.ts); between games, seen lately (isHere, rooms.ts).
+ * Anyone not seated is never the answer, whatever their id.
  */
 export function hostOf(hostId: string, seats: Seats, present: (seat: Seat) => boolean): string | null {
   const people = seats.flatMap((entry, i) => (entry?.kind === 'human' ? [{ seat: i as Seat, entry }] : []));

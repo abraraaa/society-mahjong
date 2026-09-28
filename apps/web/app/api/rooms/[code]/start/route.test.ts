@@ -13,7 +13,17 @@ import type { GameOver } from '../../../../../lib/live/table-state';
  * host's powers: the room's host while seated, else whoever has sat longest.
  * A deal is one of the funnel's moments, counted once the room points at it.
  */
-const db = vi.hoisted(() => ({ room: null as unknown, game: null as unknown, meta: null as unknown, after: null as unknown, live: null as unknown, user: 'u-abrar' }));
+const db = vi.hoisted(() => ({
+  room: null as unknown,
+  game: null as unknown,
+  meta: null as unknown,
+  after: null as unknown,
+  live: null as unknown,
+  user: 'u-abrar',
+  /** who has been seen at the room; null means everyone seated, a moment ago */
+  members: null as { userId: string; lastSeenAt: number }[] | null,
+  lastGame: null as unknown,
+}));
 
 vi.mock('server-only', () => ({}));
 vi.mock('../../../../../lib/live/auth', () => ({ currentUser: vi.fn(async () => ({ id: db.user, name: 'Someone', isGuest: true })) }));
@@ -43,6 +53,17 @@ vi.mock('../../../../../lib/live/store', () => ({
   stagesBySeat: vi.fn(async (seats: readonly ({ kind: string } | null)[]) => seats.map((s) => (s?.kind === 'human' ? 'new' : null))),
   seatStages: vi.fn(async (seats: readonly ({ kind: string } | null)[]) => ({ levels: seats.map((s) => (s?.kind === 'human' ? 'new' : null)), read: true })),
   startGame: vi.fn(async () => ({ id: NEXT, room_id: 'r-1', seed: 'seed', status: 'active', hands_played: 0 })),
+  roomMembers: vi.fn(
+    async () =>
+      db.members ??
+      (db.room as { seats: ({ kind: string; userId?: string } | null)[] }).seats.flatMap((s) =>
+        s?.kind === 'human' ? [{ userId: s.userId!, lastSeenAt: Date.now() - 60_000 }] : [],
+      ),
+  ),
+  touchMember: vi.fn(async () => true),
+  lastGameOf: vi.fn(async () => db.lastGame),
+  lastFinishedGame: vi.fn(async () => null),
+  recountMemberGames: vi.fn(async () => {}),
 }));
 
 import { karachi } from '@society/engine';
@@ -82,6 +103,8 @@ beforeEach(() => {
   db.after = null;
   db.live = null;
   db.user = 'u-abrar';
+  db.members = null;
+  db.lastGame = null;
 });
 
 describe('POST /api/rooms/[code]/start', () => {
@@ -128,7 +151,7 @@ describe('POST /api/rooms/[code]/start', () => {
     db.after = { ...room, status: 'finished', updated_at: '2026-09-24T00:05:00Z' };
     const res = await start();
     expect(res.status).toBe(201);
-    expect(store.finishGame).toHaveBeenCalledWith(GAME, room, over);
+    expect(store.finishGame).toHaveBeenCalledWith(GAME, room, over, expect.anything());
     const order = [store.finishGame, store.startGame].map((fn) => vi.mocked(fn).mock.invocationCallOrder[0]!);
     expect(order[0]).toBeLessThan(order[1]!);
     expect(vi.mocked(store.startGame).mock.calls[0]![0]).toMatchObject({ status: 'finished', updated_at: '2026-09-24T00:05:00Z' });
@@ -252,6 +275,89 @@ describe('POST /api/rooms/[code]/start, who may', () => {
     expect((await start()).status).toBe(201);
     db.user = 'u-bilal';
     expect((await start()).status).toBe(403);
+  });
+});
+
+describe('POST /api/rooms/[code]/start, who’s here', () => {
+  const HOUR = 60 * 60 * 1000;
+  const bilal = { kind: 'human', userId: 'u-bilal', name: 'Bilal', since: '2026-09-21T19:05:00Z' } as const;
+  const hana = { kind: 'human', userId: 'u-hana', name: 'Hana', since: '2026-09-21T19:10:00Z' } as const;
+  const finished = (): RoomRow => ({ ...room, status: 'finished', seats: [{ ...room.seats[0]!, since: '2026-09-21T19:00:00Z' } as RoomRow['seats'][number], bilal, hana, null] });
+
+  it('passes the host’s powers to whoever here has sat longest while the room’s host hasn’t opened the link tonight', async () => {
+    db.room = finished();
+    db.game = game('finished');
+    db.members = [
+      { userId: 'u-abrar', lastSeenAt: Date.now() - 7 * 24 * HOUR },
+      { userId: 'u-bilal', lastSeenAt: Date.now() - HOUR },
+      { userId: 'u-hana', lastSeenAt: Date.now() - HOUR },
+    ];
+    // Bilal has sat longer than Hana, and both are here: Bilal has the powers.
+    db.user = 'u-hana';
+    const res = await start();
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'only the host can start' });
+    db.user = 'u-bilal';
+    expect((await start()).status).toBe(201);
+    // Tapping Start is being here, so the room's host, checked in by it, has their powers back.
+    db.user = 'u-abrar';
+    expect((await start()).status).toBe(201);
+  });
+
+  it('checks the starter in, and counts them here even when that check-in doesn’t land', async () => {
+    db.room = finished();
+    db.game = game('finished');
+    // The host's lobby has been open for hours: last seen long ago, and the check-in fails.
+    db.members = [
+      { userId: 'u-abrar', lastSeenAt: Date.now() - 9 * HOUR },
+      { userId: 'u-hana', lastSeenAt: Date.now() - HOUR },
+    ];
+    vi.mocked(store.touchMember).mockResolvedValueOnce(false);
+    expect((await start()).status).toBe(201);
+    expect(store.touchMember).toHaveBeenCalledWith('r-1', 'u-abrar', expect.any(Number));
+  });
+
+  it('judges who’s here against the end of the room’s last game', async () => {
+    db.room = finished();
+    db.game = game('finished');
+    const endedAt = Date.now() - HOUR;
+    db.lastGame = { status: 'finished', endedAt, how: 'complete', hands: 16, players: [] };
+    // Bilal, who has sat longer, was last seen before the game ended (a bot was playing for him at the end): not here, so the
+    // powers are Hana's, who was at the table at the end.
+    db.members = [
+      { userId: 'u-bilal', lastSeenAt: endedAt - 60_000 },
+      { userId: 'u-hana', lastSeenAt: endedAt },
+    ];
+    db.user = 'u-hana';
+    expect((await start()).status).toBe(201);
+    expect(store.lastGameOf).toHaveBeenCalledWith(GAME);
+    // Seen since the end, he's here, and they're his.
+    db.members = [
+      { userId: 'u-bilal', lastSeenAt: endedAt + 60_000 },
+      { userId: 'u-hana', lastSeenAt: endedAt },
+    ];
+    expect((await start()).status).toBe(403);
+  });
+
+  it('deals nobody out on a guess: when who’s here can’t be read, the start fails and can be tried again', async () => {
+    db.room = finished();
+    db.game = game('finished');
+    vi.mocked(store.roomMembers).mockRejectedValueOnce(new Error('fetch failed'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect((await start()).status).toBe(500);
+    expect(store.startGame).not.toHaveBeenCalled();
+  });
+
+  it('checks nobody in, and reads nobody, for a room whose game is in play or for someone not seated', async () => {
+    db.room = room;
+    db.game = game('active');
+    expect((await start()).status).toBe(409);
+    db.room = finished();
+    db.game = game('finished');
+    db.user = 'u-zed';
+    expect((await start()).status).toBe(403);
+    expect(store.touchMember).not.toHaveBeenCalled();
+    expect(store.roomMembers).not.toHaveBeenCalled();
   });
 });
 

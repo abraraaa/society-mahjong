@@ -9,7 +9,8 @@ import { HttpError, settleRoomGame } from '../../../../../lib/live/service';
 import { cleanDisplayName } from '../../../../../lib/live/validate';
 
 /**
- * A room code is enough to sit down. Idempotent: a returning player gets their seat back. A room whose game has ended,
+ * A room code is enough to sit down. Idempotent: a returning player gets their seat back, and opening the link checks them in,
+ * so the lobby knows they're here (R17). A room whose game has ended,
  * but whose end isn't all recorded yet, is finished first (settleRoomGame), so a friend arriving after the last hand
  * finds the room between games rather than "already started".
  */
@@ -20,8 +21,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ code: stri
     const { code } = await ctx.params;
     const body = (await req.json().catch(() => null)) as { name?: unknown } | null;
     const name = cleanDisplayName(body?.name) ?? user.name;
-    const { room, seated } = await joinRoom(await settleRoomGame(await requireRoom(code)), user.id, name);
-    const snap = roomSnapshot(room, user.id);
+    const now = Date.now();
+    const { room, seated, circle } = await joinRoom(await settleRoomGame(await requireRoom(code), now), user.id, name, now);
+    const snap = roomSnapshot(room, user.id, now, circle);
     if (seated) {
       await broadcast([roomPoke(room.id, 'seats', { seats: snap.seats })]);
       // Only a new seat counts: someone coming back to the seat they already had took nothing. The status says whether they sat

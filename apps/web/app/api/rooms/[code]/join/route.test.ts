@@ -10,7 +10,7 @@ import type { GameOver } from '../../../../../lib/live/table-state';
  * the last hand finds it between games rather than "already started". A new
  * seat is one of the funnel's moments; coming back to one's own seat isn't.
  */
-const db = vi.hoisted(() => ({ room: null as unknown, game: null as unknown, meta: null as unknown, after: null as unknown }));
+const db = vi.hoisted(() => ({ room: null as unknown, game: null as unknown, meta: null as unknown, after: null as unknown, members: [] as unknown[], lastGame: null as unknown }));
 
 vi.mock('server-only', () => ({}));
 vi.mock('../../../../../lib/live/auth', () => ({ currentUser: vi.fn(async () => ({ id: 'u-zara', name: 'Zara', isGuest: true })) }));
@@ -27,6 +27,11 @@ vi.mock('../../../../../lib/live/store', () => ({
   liveMeta: vi.fn(async () => db.meta),
   finishGame: vi.fn(async () => {}),
   saveSeats: vi.fn(async () => '2026-09-24T00:06:00Z'),
+  roomMembers: vi.fn(async () => db.members),
+  touchMember: vi.fn(async () => true),
+  lastGameOf: vi.fn(async () => db.lastGame),
+  lastFinishedGame: vi.fn(async () => null),
+  recountMemberGames: vi.fn(async () => {}),
 }));
 
 import { POST } from './route';
@@ -79,6 +84,8 @@ beforeEach(() => {
   db.game = active;
   db.meta = null;
   db.after = null;
+  db.members = [];
+  db.lastGame = null;
 });
 
 describe('POST /api/rooms/[code]/join', () => {
@@ -87,7 +94,7 @@ describe('POST /api/rooms/[code]/join', () => {
     db.after = { ...room, status: 'finished', updated_at: CLOSED_AT };
     const res = await join();
     expect(res.status).toBe(200);
-    expect(store.finishGame).toHaveBeenCalledWith(GAME, room, over);
+    expect(store.finishGame).toHaveBeenCalledWith(GAME, room, over, expect.anything());
     const order = [store.finishGame, store.saveSeats].map((fn) => vi.mocked(fn).mock.invocationCallOrder[0]!);
     expect(order[0]).toBeLessThan(order[1]!);
     // Seated in the room as the finish left it: a bot's seat, between games.
@@ -126,7 +133,7 @@ describe('POST /api/rooms/[code]/join', () => {
     db.after = { ...closed, seats: [room.seats[0], bilal, room.seats[2], room.seats[3]], updated_at: CLOSED_AT };
     const res = await join();
     expect(res.status).toBe(200);
-    expect(store.finishGame).toHaveBeenCalledWith(GAME, closed, expect.objectContaining({ how: 'complete' }));
+    expect(store.finishGame).toHaveBeenCalledWith(GAME, closed, expect.objectContaining({ how: 'complete' }), expect.anything());
     // Zara takes the first bot's seat of the room as the finish left it: Sana's, not the one given back to Bilal.
     expect(vi.mocked(store.saveSeats).mock.calls[0]![2]).toBe(CLOSED_AT);
     expect(await res.json()).toMatchObject({ status: 'finished', me: 2 });
@@ -174,5 +181,47 @@ describe('POST /api/rooms/[code]/join, counted for the funnel', () => {
     expect(await lost.json()).toEqual({ error: 'that seat was just taken; try again' });
     expect(store.saveSeats).toHaveBeenCalledTimes(SEAT_ATTEMPTS);
     expect(events.recordEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/rooms/[code]/join, who’s here', () => {
+  const lastGame = {
+    status: 'finished',
+    endedAt: Date.now() - 60 * 60_000,
+    how: 'complete',
+    hands: 16,
+    players: [
+      { seat: 0, userId: 'u-abrar', kind: 'human', name: 'Abrar', score: -3, place: 2 },
+      { seat: 1, userId: 'u-zara', kind: 'human', name: 'Zara', score: 9, place: 1 },
+      { seat: 2, userId: null, kind: 'bot', name: 'Sana', score: -3, place: 2 },
+      { seat: 3, userId: null, kind: 'bot', name: 'Omar', score: -3, place: 2 },
+    ],
+  };
+
+  it('answers with the room as the lobby shows it: who isn’t here yet, who has the powers, and the last game, with Zara checked in', async () => {
+    const zara = { kind: 'human', userId: 'u-zara', name: 'Zara' } as const;
+    db.room = { ...room, status: 'finished', seats: [room.seats[0], zara, room.seats[2], room.seats[3]] };
+    db.game = { ...active, status: 'finished' };
+    db.lastGame = lastGame;
+    // Abrar hosts, but was last seen before that game ended.
+    db.members = [{ userId: 'u-abrar', lastSeenAt: Date.now() - 2 * 60 * 60_000 }];
+    const res = await join();
+    expect(res.status).toBe(200);
+    expect(store.touchMember).toHaveBeenCalledWith('r-1', 'u-zara', expect.any(Number));
+    const snap = await res.json();
+    expect(snap).toMatchObject({
+      me: 1,
+      isHost: true,
+      hostSeat: 1,
+      seats: [
+        { kind: 'human', name: 'Abrar', notHere: true },
+        { kind: 'human', name: 'Zara' },
+        { kind: 'bot', name: 'Sana' },
+        { kind: 'bot', name: 'Omar' },
+      ],
+      lastGame: { how: 'complete', hands: 16, me: 1 },
+    });
+    expect(JSON.stringify(snap)).not.toContain('u-');
+    expect(store.saveSeats).not.toHaveBeenCalled();
   });
 });

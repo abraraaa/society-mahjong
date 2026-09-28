@@ -14,7 +14,22 @@ import { STALE_GAME_MS, VOTE_ATTEMPTS, isStale, nextHandWait, presentAtEnd, publ
 import { logError } from './log';
 import { emptySeatBots, policyFor, presentLevels } from './policy';
 import { SEAT_ATTEMPTS, hostOf, vacate } from './seating';
-import { commitTable, countHand, finishGame, gameById, liveMeta, loadLive, recordHand, roomById, saveSeats, stagesBySeat, type GameRow, type LiveRow, type RoomRow } from './store';
+import {
+  commitTable,
+  countHand,
+  finishGame,
+  gameById,
+  liveMeta,
+  loadLive,
+  recordHand,
+  recountMemberGames,
+  roomById,
+  saveSeats,
+  stagesBySeat,
+  type GameRow,
+  type LiveRow,
+  type RoomRow,
+} from './store';
 import { JustPlayed, rejectionStatus, step } from './table';
 import { TABLE_STATE_V, lastActed, wakeAt, withLegacyScores, type Absence, type GameOver, type TableState } from './table-state';
 import { isHuman, seatOf, type ClientAction, type Deadlines, type GameEnd, type SeatChange } from './types';
@@ -119,22 +134,39 @@ function snapshot(c: Caller, shown: Shown, now: number): GameSnapshot {
 }
 
 /**
+ * The bookkeeping after a game's end, as steps after its commit: the finish
+ * (store.ts finishGame, with who was there at the end marked seen), then,
+ * for a game that finished, each person's count of games played at the room,
+ * worked out again after the game's status is written so this game counts (a
+ * recount, so running it twice counts nothing twice). An abandoned game
+ * counts for nobody, so it changes no count.
+ */
+function finishSteps(gameId: string, room: RoomRow, over: GameOver, absence: Absence): CommitStep[] {
+  const finish: CommitStep = { what: 'finish the game', run: () => finishGame(gameId, room, over, absence) };
+  if (over.how === 'abandoned') return [finish];
+  const people = over.seats.flatMap((s) => (s?.kind === 'human' ? [s.userId] : []));
+  return [finish, { what: "count the members' games", run: () => recountMemberGames(room.id, people) }];
+}
+
+/**
  * A game whose end is saved (table_state.over) but whose bookkeeping isn't
  * all written yet, because the finish after that commit failed part way: the
  * game still reads active. Any request that finds one runs the finish again
- * from `over` alone (R12), at most once per request. It's safe to repeat
- * (store.ts finishGame), a failure is only logged, as after the commit, and
- * the next request tries again. The poke carries the version the table is
- * already at, so pages that have it look no further, and the room hears
- * too, for a lobby open on it. A heal never counts as the game's end: the
- * request that ended the game did that.
+ * from `over` alone (R12), at most once per request, and recounts the
+ * members' games. It's safe to repeat (store.ts finishGame), a failure is
+ * only logged, as after the commit, and the next request tries again. The
+ * poke carries the version the table is already at, so pages that have it
+ * look no further, and the room hears too, for a lobby open on it. A heal
+ * never counts as the game's end: the request that ended the game did that.
  */
-async function healFinish(gameId: string, room: RoomRow, over: GameOver, version: number): Promise<void> {
-  await afterCommit(
-    [{ what: 'finish the game', run: () => finishGame(gameId, room, over) }],
-    () => broadcast([gamePoke(gameId, version, { gameOver: true }), roomPoke(room.id, 'seats', {})]),
-    { gameId, version, heal: true },
-  );
+async function healFinish(gameId: string, room: RoomRow, table: TableState, version: number): Promise<void> {
+  const over = table.over;
+  if (!over) return;
+  await afterCommit(finishSteps(gameId, room, over, table.absence), () => broadcast([gamePoke(gameId, version, { gameOver: true }), roomPoke(room.id, 'seats', {})]), {
+    gameId,
+    version,
+    heal: true,
+  });
 }
 
 /**
@@ -160,7 +192,7 @@ export async function settleRoomGame(room: RoomRow, now = Date.now()): Promise<R
   if (room.status !== 'playing' || gameId === null) return room;
   const meta = await liveMeta(gameId);
   if (!meta) return room;
-  if (meta.table.over) await healFinish(gameId, room, meta.table.over, meta.version);
+  if (meta.table.over) await healFinish(gameId, room, meta.table, meta.version);
   // Stale by this quick read; endIfStale reads the table again, and does nothing if someone has just played.
   else if (!isStale(lastActed(meta), now) || !(await endIfStale(gameId, now))) return room;
   const fresh = (await roomById(room.id)) ?? room;
@@ -173,7 +205,7 @@ async function finishClosedRoomGame(room: RoomRow, gameId: string): Promise<Room
   if (game?.status !== 'active') return room;
   const meta = await liveMeta(gameId);
   if (!meta?.table.over) return room;
-  await healFinish(gameId, room, meta.table.over, meta.version);
+  await healFinish(gameId, room, meta.table, meta.version);
   return (await roomById(room.id)) ?? room;
 }
 
@@ -184,7 +216,7 @@ export async function viewGame(gameId: string, userId: string, now = Date.now())
   if (me === null && room.host_id !== userId) throw new HttpError(403, 'not at this table');
   const [live, levels] = await Promise.all([loadLive(gameId), stagesBySeat(room.seats)]);
   if (!live) throw new HttpError(404, 'game has no live state');
-  if (live.table.over && game.status === 'active') await healFinish(gameId, room, live.table.over, live.version);
+  if (live.table.over && game.status === 'active') await healFinish(gameId, room, live.table, live.version);
   return snapshot({ game, room, me, userId, levels }, shownOf(live, room), now);
 }
 
@@ -262,7 +294,7 @@ async function actOnce(
   const caller: Caller = { game, room, me, userId, levels };
   const over = live.table.over;
   if (over) {
-    await healFinish(game.id, room, over, live.version);
+    await healFinish(game.id, room, live.table, live.version);
     const snap = snapshot(caller, shownOf(live, room), now);
     if (action) throw new HttpError(409, 'game is over', snap);
     return { kind: 'done', snap };
@@ -358,7 +390,7 @@ async function applyStep(
   if (result.gameOver && over) {
     // The game's own status is finishGame's last write, so a finish that fails part way leaves the game active, and the next
     // request that looks at it finishes it again (healFinish). The game is over either way: its end is committed.
-    steps.push({ what: 'finish the game', run: () => finishGame(game.id, room, over) });
+    steps.push(...finishSteps(game.id, room, over, result.tableState.absence));
     // Counted here, by the request that ended the game, whether or not its finish landed, and never by a heal: each end once.
     // recordEvent never throws; a failed write is its own event_write_failed line.
     steps.push({ what: 'count the end', run: () => recordEvent(gameEnded({ roomId: room.id, gameId: game.id, over, leaver: userId })) });
@@ -413,7 +445,7 @@ export async function endGame(gameId: string, userId: string, now = Date.now()):
     if (!live) throw new HttpError(404, 'game has no live state');
     const caller: Caller = { game, room, me, userId, levels };
     if (live.table.over) {
-      await healFinish(gameId, room, live.table.over, live.version);
+      await healFinish(gameId, room, live.table, live.version);
       return snapshot(caller, shownOf(live, room), now);
     }
     if (powersAt(room, null, tableOf(live, room).absence) !== userId) throw new HttpError(403, 'only the host can end the game');
@@ -437,7 +469,7 @@ async function idleEnd(gameId: string, now: number): Promise<'ended' | 'healed' 
     const live = await loadLive(gameId);
     if (!live) return null;
     if (live.table.over) {
-      await healFinish(gameId, room, live.table.over, live.version);
+      await healFinish(gameId, room, live.table, live.version);
       return 'healed';
     }
     if (!isStale(lastActed(live), now)) return null;
@@ -479,7 +511,7 @@ export async function changeSeat(gameId: string, userId: string, request: SeatCh
     const caller: Caller = { game, room, me, userId, levels };
     if (live.table.over) {
       // Ended, its bookkeeping not all written: write it, and say the game's over.
-      await healFinish(gameId, room, live.table.over, live.version);
+      await healFinish(gameId, room, live.table, live.version);
       throw new HttpError(409, 'game is over', snapshot(caller, shownOf(live, room), now));
     }
     const seat = me!;
@@ -525,7 +557,7 @@ export async function leaveGame(gameId: string, userId: string, now = Date.now()
       if (!live) throw new HttpError(404, 'game has no live state');
       // Already over, its end not all recorded: record it, rather than end it twice.
       if (live.table.over) {
-        await healFinish(gameId, room, live.table.over, live.version);
+        await healFinish(gameId, room, live.table, live.version);
         return { abandoned: live.table.over.how === 'abandoned' };
       }
       // The leaver keeps their seat in the room: the game they're leaving is over, and the room is between games.
@@ -538,7 +570,7 @@ export async function leaveGame(gameId: string, userId: string, now = Date.now()
     // then there's no game left to leave, and the seat stays theirs for the host's next deal. Record the end instead.
     const meta = await liveMeta(gameId);
     if (meta?.table.over) {
-      await healFinish(gameId, room, meta.table.over, meta.version);
+      await healFinish(gameId, room, meta.table, meta.version);
       return { abandoned: meta.table.over.how === 'abandoned' };
     }
     const seats = withBots(vacated);

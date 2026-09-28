@@ -1,7 +1,7 @@
 import { analysisBot, karachi, startHand, viewFor, type GameProgress, type HandState, type Seat, type TileKind } from '@society/engine';
 import { EVERYONE_HERE, noteClockMove, presentHumans } from '../lib/live/absence';
 import { nextHandWait, publicGameOver } from '../lib/live/lifecycle';
-import { ownAbsence, publicSeats, type GameSnapshot } from '../lib/live/snapshot';
+import { ownAbsence, publicSeats, type GameSnapshot, type RoomSnapshot } from '../lib/live/snapshot';
 import { deadlinesFor, settle, step, type StepResult } from '../lib/live/table';
 import { NEW_TABLE, type Absence, type TableState } from '../lib/live/table-state';
 import type { ClientAction, Deadlines, Seats, TimerPolicy } from '../lib/live/types';
@@ -161,7 +161,40 @@ export interface Fixtures {
   readonly westLanded: GameSnapshot;
   /** The first three tiles in Amna's hand, the ones the tests pick in the exchange sheet. */
   readonly westTiles: readonly TileKind[];
+  /** The lobby a week after the last game, for Amna, the host: Bilal hasn't opened the link tonight, and he finished top last time. */
+  readonly lobbyAgain: RoomSnapshot;
+  /** The same lobby for Amna when Hana is the host. */
+  readonly lobbyGuest: RoomSnapshot;
 }
+
+/** The room between games: four people, Bilal not here yet, and the last game, which Bilal won. */
+const LOBBY_AGAIN: RoomSnapshot = {
+  id: ROOM_ID,
+  code: ROOM_CODE,
+  rulesetId: karachi.id,
+  status: 'finished',
+  seats: [
+    { kind: 'human', name: USER_NAME },
+    { kind: 'human', name: 'Bilal', notHere: true },
+    { kind: 'human', name: 'Hana' },
+    { kind: 'human', name: 'Zara' },
+  ],
+  me: ME,
+  isHost: true,
+  hostSeat: ME,
+  gameId: GAME_ID,
+  lastGame: {
+    how: 'complete',
+    hands: 16,
+    rows: [
+      { seat: 0, name: USER_NAME, bot: false, score: 2000 },
+      { seat: 1, name: 'Bilal', bot: false, score: 14504 },
+      { seat: 2, name: 'Hana', bot: false, score: -8000 },
+      { seat: 3, name: 'Zara', bot: false, score: -8504 },
+    ],
+    me: ME,
+  },
+};
 
 function build(): Fixtures {
   const live = search('a turn that passes to Bilal and a hand that finishes', (seed) => {
@@ -273,6 +306,8 @@ function build(): Fixtures {
     westConflict: snapshot(west.conflict.state, 2, west.conflict.deadlines),
     westLanded: snapshot(west.landed.state, 3, west.landed.deadlines),
     westTiles: west.tiles,
+    lobbyAgain: LOBBY_AGAIN,
+    lobbyGuest: { ...LOBBY_AGAIN, isHost: false, hostSeat: 2 },
   };
 }
 

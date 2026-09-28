@@ -224,6 +224,67 @@ begin
 end
 $$;
 
+-- room_members: who has sat at a room and when they were last there, as the server checks people in (store.ts touchMember),
+-- marks who was at the table when a game ended (finishGame) and recounts their games (recountMemberGames).
+do $$
+declare
+  u uuid := gen_random_uuid();
+  w uuid := gen_random_uuid();
+  r uuid;
+  g uuid;
+  a uuid;
+  first_seen timestamptz;
+  ended timestamptz := now() - interval '1 hour';
+begin
+  insert into auth.users (id, is_anonymous) values (u, true), (w, true);
+  insert into public.rooms (code, host_id, ruleset_id) values ('KHI-TEST6', u, 'karachi') returning id into r;
+
+  -- A check-in upserts last_seen_at only: first_seen_at and games_played stay. This is the statement PostgREST makes of
+  -- touchMember's upsert, provided the payload holds only room_id, user_id and last_seen_at, which store.test pins.
+  insert into public.room_members (room_id, user_id, first_seen_at, last_seen_at, games_played) values (r, u, now() - interval '7 days', now() - interval '7 days', 3);
+  first_seen := (select first_seen_at from public.room_members where room_id = r and user_id = u);
+  insert into public.room_members (room_id, user_id, last_seen_at) values (r, u, now()) on conflict (room_id, user_id) do update set last_seen_at = excluded.last_seen_at;
+  assert (select first_seen_at = first_seen and games_played = 3 and last_seen_at > first_seen from public.room_members where room_id = r and user_id = u), 'a check-in moves only last_seen_at';
+  -- A first visit makes the row, with the defaults for the rest.
+  insert into public.room_members (room_id, user_id, last_seen_at) values (r, w, ended - interval '1 day') on conflict (room_id, user_id) do update set last_seen_at = excluded.last_seen_at;
+  assert (select games_played = 0 and first_seen_at is not null from public.room_members where room_id = r and user_id = w), 'a first check-in makes the row';
+
+  -- A person with no profile row is refused as 23503; the check-in is best-effort, so it's only logged.
+  begin
+    insert into public.room_members (room_id, user_id, last_seen_at) values (r, gen_random_uuid(), now());
+    raise exception 'a member with no profile was accepted';
+  exception when foreign_key_violation then null;
+  end;
+
+  -- The finish marks who was at the table at the end seen at the end's moment, and never moves anyone back: u checked in
+  -- after the end, w not since the day before.
+  update public.room_members set last_seen_at = ended where room_id = r and user_id in (u, w) and last_seen_at < ended;
+  assert (select last_seen_at > ended from public.room_members where room_id = r and user_id = u), 'a later check-in is never moved back';
+  assert (select last_seen_at = ended from public.room_members where room_id = r and user_id = w), 'whoever was there is seen at the end';
+
+  -- The recount: finished games the person sat at the end of, in this room; an abandoned one doesn't count.
+  insert into public.games (room_id, seed, status) values (r, 'seed', 'finished') returning id into g;
+  insert into public.games (room_id, seed, status) values (r, 'seed', 'abandoned') returning id into a;
+  insert into public.game_players (game_id, seat, user_id, kind, name) values (g, 0, u, 'human', 'Amna'), (g, 1, w, 'human', 'Zara'), (a, 0, u, 'human', 'Amna');
+  update public.room_members m set games_played = (
+    select count(*) from public.game_players p join public.games x on x.id = p.game_id where p.user_id = m.user_id and x.room_id = r and x.status = 'finished'
+  ) where m.room_id = r;
+  assert (select games_played = 1 from public.room_members where room_id = r and user_id = u), 'an abandoned game counts for nobody';
+  -- An update never makes a row: someone without one stays without one.
+  update public.room_members set games_played = 5 where room_id = r and user_id = gen_random_uuid();
+  assert (select count(*) = 2 from public.room_members where room_id = r), 'the recount makes no rows';
+
+  -- A person deleted: their memberships go.
+  delete from auth.users where id = w;
+  assert not exists (select 1 from public.room_members where user_id = w), 'memberships go with their person';
+
+  -- A room deleted: its members go with it.
+  delete from public.rooms where id = r;
+  assert not exists (select 1 from public.room_members where room_id = r), 'members go with their room';
+  delete from auth.users where id = u;
+end
+$$;
+
 -- The sweep's first question (wake_at <= now) has its partial index. Its second (no wake_at) scans, which is fine at
 -- one row per game; the first never waits behind it (dueGames asks them in turn).
 do $$

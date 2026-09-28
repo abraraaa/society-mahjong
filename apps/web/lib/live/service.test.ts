@@ -75,6 +75,7 @@ vi.mock('./store', () => ({
   countHand: vi.fn(async () => {}),
   recordHand: vi.fn(async () => {}),
   finishGame: vi.fn(async () => {}),
+  recountMemberGames: vi.fn(async () => {}),
   saveSeats: vi.fn(async () => null),
   roomByCode: vi.fn(async () => null),
 }));
@@ -778,7 +779,7 @@ describe('when the database fails after the table has moved', () => {
     const seen = await viewGame(GAME, 'u-abrar', T0 + 2000);
     expect(seen).toMatchObject({ status: 'finished', version: 8 });
     expect(store.finishGame).toHaveBeenCalledTimes(2);
-    expect(store.finishGame).toHaveBeenLastCalledWith(GAME, db.room, over);
+    expect(store.finishGame).toHaveBeenLastCalledWith(GAME, db.room, over, expect.anything());
     expect(store.commitTable).toHaveBeenCalledTimes(1);
     expect(broadcaster.gamePoke).toHaveBeenCalledWith(GAME, 8, { gameOver: true });
     expect(broadcaster.roomPoke).toHaveBeenCalledWith('r-1', 'seats', {});
@@ -833,7 +834,7 @@ describe('standing up from a live table', () => {
     expect(hand).toMatchObject({ hand: 0, ended: false, result: null });
     expect(hand.moves).toEqual([{ v: live.version + 1, by: 'table', a: { type: 'endGame', how: 'abandoned' } }]);
     expect(afterSteps()).toEqual([['finish the game', 'count the end']]);
-    expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, w.table.over);
+    expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, w.table.over, expect.anything());
     expect(broadcaster.gamePoke).toHaveBeenCalledWith(GAME, live.version + 1, expect.objectContaining({ abandoned: true, gameOver: true }));
     // The seat isn't given up: the game it was for is over.
     expect(store.saveSeats).not.toHaveBeenCalled();
@@ -870,7 +871,7 @@ describe('standing up from a live table', () => {
     // No bot takes the seat, so the host's Play again deals Abrar in.
     expect(store.saveSeats).not.toHaveBeenCalled();
     expect(store.finishGame).toHaveBeenCalledTimes(1);
-    expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, over);
+    expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, over, expect.anything());
     expect(store.commitTable).not.toHaveBeenCalled();
     expect(broadcaster.gamePoke).toHaveBeenCalledWith(GAME, 30, { gameOver: true });
   });
@@ -892,7 +893,7 @@ describe('standing up from a live table', () => {
     // One write, which lost; then the second look finds the game over, and the finish runs again rather than a bot sitting down.
     expect(store.saveSeats).toHaveBeenCalledTimes(1);
     expect(store.finishGame).toHaveBeenCalledTimes(1);
-    expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, over);
+    expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, over, expect.anything());
     expect(store.commitTable).not.toHaveBeenCalled();
   });
 
@@ -994,9 +995,9 @@ describe('the end of the game', () => {
     expect(w.deadlines).toEqual({ claim: null, turn: null });
     expect(w.wakeAt).toBeNull();
     // The finish writes the game's hand count itself, so the hand isn't counted on top of it.
-    expect(afterSteps()).toEqual([['tally the players', 'finish the game', 'count the end']]);
+    expect(afterSteps()).toEqual([['tally the players', 'finish the game', "count the members' games", 'count the end']]);
     expect(store.countHand).not.toHaveBeenCalled();
-    expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, w.table.over);
+    expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, w.table.over, expect.anything());
     const order = [store.commitTable, store.finishGame, broadcaster.broadcast].map((fn) => vi.mocked(fn).mock.invocationCallOrder[0]!);
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(broadcaster.gamePoke).toHaveBeenCalledWith(GAME, live.version + 1, expect.objectContaining({ gameOver: true }));
@@ -1069,7 +1070,7 @@ describe('the end of the game', () => {
     db.game = { ...(db.game as GameRow), status: 'active' };
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(await sweepGames([GAME], T0)).toEqual({ [GAME]: 'ok' });
-    expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, OVER);
+    expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, OVER, expect.anything());
     expect(store.commitTable).not.toHaveBeenCalled();
     expect(log).not.toHaveBeenCalled();
   });
@@ -1083,6 +1084,36 @@ describe('the end of the game', () => {
     expect(logged(log)).toEqual([expect.objectContaining({ event: 'after_commit_failed', step: 'finish the game', gameId: GAME, version: 30, heal: true })]);
   });
 
+  it('hands the finish who was away at the end, then recounts the people’s games once the game’s own row is written', async () => {
+    const { late } = lastHandDecision();
+    // Abrar's clock ran out twice before the end: a bot was playing for him when the last hand was scored.
+    const live = db.live as LiveRow;
+    const away = markAway(live.table.absence, seats, 0, 'clock');
+    db.live = { ...live, table: { ...live.table, absence: away } };
+    await actOnGame(GAME, 'u-hana', null, null, late);
+    const { w } = theCommit();
+    expect(w.table.over).not.toBeNull();
+    expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, w.table.over, w.table.absence);
+    expect(w.table.absence[0].away).toBe('clock');
+    expect(store.recountMemberGames).toHaveBeenCalledWith('r-1', ['u-abrar']);
+    const order = [store.finishGame, store.recountMemberGames, broadcaster.broadcast].map((fn) => vi.mocked(fn).mock.invocationCallOrder[0]!);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  it('recounts the people’s games in a heal too, after the finish, and logs a recount that fails without stopping anything', async () => {
+    ended(OVER);
+    db.game = { ...(db.game as GameRow), status: 'active' };
+    await viewGame(GAME, 'u-abrar', T0);
+    expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, OVER, EVERYONE_HERE);
+    expect(store.recountMemberGames).toHaveBeenCalledWith('r-1', ['u-abrar']);
+    expect(vi.mocked(store.finishGame).mock.invocationCallOrder[0]!).toBeLessThan(vi.mocked(store.recountMemberGames).mock.invocationCallOrder[0]!);
+
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(store.recountMemberGames).mockRejectedValueOnce(DOWN());
+    expect(await viewGame(GAME, 'u-abrar', T0)).toMatchObject({ status: 'finished' });
+    expect(logged(log)).toEqual([expect.objectContaining({ event: 'after_commit_failed', step: "count the members' games", heal: true })]);
+  });
+
   describe('a room whose game has ended', () => {
     it('finishes the game before the room is joined or dealt again, and gives the room as that left it', async () => {
       ended(OVER);
@@ -1091,7 +1122,7 @@ describe('the end of the game', () => {
       vi.mocked(store.roomById).mockResolvedValueOnce({ ...playing, status: 'finished', updated_at: '2026-09-24T01:00:00Z' });
       expect(await settleRoomGame(playing)).toMatchObject({ status: 'finished', updated_at: '2026-09-24T01:00:00Z' });
       expect(store.liveMeta).toHaveBeenCalledWith(GAME);
-      expect(store.finishGame).toHaveBeenCalledWith(GAME, playing, OVER);
+      expect(store.finishGame).toHaveBeenCalledWith(GAME, playing, OVER, expect.anything());
       expect(broadcaster.gamePoke).toHaveBeenCalledWith(GAME, 30, { gameOver: true });
     });
 
@@ -1130,7 +1161,7 @@ describe('the end of the game', () => {
       const back: RoomRow = { ...closed, updated_at: '2026-09-24T02:00:00Z' };
       vi.mocked(store.roomById).mockResolvedValueOnce(back);
       expect(await settleRoomGame(closed)).toBe(back);
-      expect(store.finishGame).toHaveBeenCalledWith(GAME, closed, OVER);
+      expect(store.finishGame).toHaveBeenCalledWith(GAME, closed, OVER, expect.anything());
       expect(broadcaster.roomPoke).toHaveBeenCalledWith('r-1', 'seats', {});
     });
   });
@@ -1160,8 +1191,8 @@ describe('ending a game early', () => {
       expect(w.wakeAt).toBeNull();
       expect(hand).toMatchObject({ hand: 0, ended: false, result: null });
       expect(hand.moves).toEqual([{ v: live.version + 1, by: 'host', userId: 'u-hana', a: { type: 'endGame', how: 'host' } }]);
-      expect(afterSteps()).toEqual([['finish the game', 'count the end']]);
-      expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, w.table.over);
+      expect(afterSteps()).toEqual([['finish the game', "count the members' games", 'count the end']]);
+      expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, w.table.over, expect.anything());
       expect(broadcaster.gamePoke).toHaveBeenCalledWith(GAME, live.version + 1, expect.objectContaining({ gameOver: true }));
       expect(snap).toMatchObject({ status: 'finished', me: 1, isHost: true, ended: { how: 'host', hands: 0, byName: 'Hana', byMe: true } });
     });
@@ -1251,7 +1282,7 @@ describe('ending a game early', () => {
       // The clock that ran out long ago is played first, as any request would, then the end.
       expect(hand.moves.at(-1)).toEqual({ v: live.version + 1, by: 'table', a: { type: 'endGame', how: 'idle' } });
       expect(hand.moves.slice(0, -1).some((m) => m.by === 'clock')).toBe(true);
-      expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, w.table.over);
+      expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, w.table.over, expect.anything());
     });
 
     it('reads a legacy table’s last save as its last move, as older code kept no other', async () => {
@@ -1286,7 +1317,7 @@ describe('ending a game early', () => {
       db.live = { ...live, table: { ...FRESH, over } };
       expect(await endIfStale(GAME, STALE)).toBe(true);
       expect(store.commitTable).not.toHaveBeenCalled();
-      expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, over);
+      expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, over, expect.anything());
     });
 
     it('is ended by the sweep before anything else, reported as "ended", and not settled again', async () => {

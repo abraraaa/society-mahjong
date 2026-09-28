@@ -1,9 +1,10 @@
 import { SEATS, type PrivatePlayerView, type PublicGameView, type Seat } from '@society/engine';
 import type { CoachStage } from '../coach/types';
 import { reconcileAbsence } from './absence';
+import type { LastGame } from './final';
 import type { NextHandWait, PublicGameOver } from './lifecycle';
 import type { Absence, AwayPlayed } from './table-state';
-import type { AwayReason, Deadlines, Move, Seats } from './types';
+import type { AwayReason, Deadlines, Move, RoomStatus, Seats } from './types';
 
 /**
  * A seat as everyone at the table sees it: who plays it, by name, and for a
@@ -60,6 +61,29 @@ export interface GameSnapshot {
   readonly ended?: PublicGameOver | null;
   /** on a finished hand of a game in play, who here has tapped Next hand, who hasn't, and when the next hand starts regardless (NextHandWait); null otherwise */
   readonly nextHand?: NextHandWait | null;
+}
+
+/**
+ * What the lobby shows (rooms.ts roomSnapshot): who sits where, by name, and
+ * between games who isn't here yet; who has the host's powers; and the room's
+ * last game. Shared by the server and the browser, like GameSnapshot. User
+ * ids stay on the server.
+ */
+export interface RoomSnapshot {
+  readonly id: string;
+  readonly code: string;
+  readonly rulesetId: string;
+  readonly status: RoomStatus;
+  /** `notHere` marks a person seated between games who hasn't opened the link lately (seating.ts isHere) */
+  readonly seats: readonly ({ readonly kind: 'human' | 'bot'; readonly name: string; readonly notHere?: true } | null)[];
+  readonly me: number | null;
+  /** the caller has the host's powers (seating.ts hostOf): the room's host while seated and here, else whoever here has sat longest */
+  readonly isHost: boolean;
+  /** the seat of whoever has the host's powers, or null when nobody does */
+  readonly hostSeat: number | null;
+  readonly gameId: string | null;
+  /** between games, how the room's latest finished game ended (final.ts lastGameFrom); null otherwise */
+  readonly lastGame?: LastGame | null;
 }
 
 /** The seats as the table shows them to everyone (PublicSeat), each absence first matched to who sits there now. */

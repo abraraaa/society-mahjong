@@ -4,12 +4,13 @@ import type { CoachStage } from '@/lib/coach';
 // Relative rather than '@/': vitest runs without the path alias, and the tests load this.
 import { createServiceClient } from '../supabase/service';
 import { HttpError, must, SupabaseError, type SupabaseFailure } from './errors';
-import { finalPlayers } from './final';
+import { finalPlayers, type LastGameRow } from './final';
 import { commitArgs, type TableWrite } from './hand-log';
+import { presentAtEnd } from './lifecycle';
 import { SEAT_ATTEMPTS, seatsBack } from './seating';
 import { stageFromStats, tallyHand, type ProfileStats } from './stage';
-import { NEW_TABLE, parseTableState, tableStateJson, wakeAt, type GameOver, type TableState } from './table-state';
-import type { Deadlines, LiveGame, LoggedMove, RoomStatus, Seats } from './types';
+import { NEW_TABLE, parseTableState, tableStateJson, wakeAt, type Absence, type GameOver, type TableState } from './table-state';
+import type { Deadlines, GameEndHow, LiveGame, LoggedMove, RoomStatus, Seats } from './types';
 import { logError } from './log';
 import { cleanDisplayName, isUuid } from './validate';
 
@@ -83,12 +84,112 @@ export async function roomById(id: string): Promise<RoomRow | null> {
 
 export async function createRoom(input: { code: string; hostId: string; hostName: string; rulesetId: RulesetId; options: Record<string, unknown> }): Promise<RoomRow> {
   // The host's name is capped where it enters the room, whoever the caller is; `since` says they've sat there from the start.
-  const seats: Seats = [{ kind: 'human', userId: input.hostId, name: cleanDisplayName(input.hostName) ?? 'Guest', since: new Date().toISOString() }, null, null, null];
+  const now = Date.now();
+  const seats: Seats = [{ kind: 'human', userId: input.hostId, name: cleanDisplayName(input.hostName) ?? 'Guest', since: new Date(now).toISOString() }, null, null, null];
   const data = must(
     await db().from('rooms').insert({ code: input.code, host_id: input.hostId, ruleset_id: input.rulesetId, options: input.options, seats }).select(ROOM_COLUMNS).single(),
     'create the room',
   );
-  return data as RoomRow;
+  const room = data as RoomRow;
+  // The host is the room's first member, and here from the start. Best-effort: the lobby's poll checks them in otherwise.
+  await touchMember(room.id, input.hostId, now);
+  return room;
+}
+
+/**
+ * Someone has been at the room just now (R17): they opened the invite link,
+ * sat down, started a game, or have had the lobby open a while. Their member
+ * row's `last_seen_at` moves to `at`, and a first visit makes the row. The
+ * upsert sends exactly these three columns, so an existing row keeps its
+ * `first_seen_at` and `games_played` (PostgREST updates only what's sent).
+ * Never writes `rooms`, so it can't move `updated_at` under a host tapping
+ * Start. Best-effort: a failure is logged as member_touch_failed and gives
+ * false, and the lobby's next poll tries again; true when it wrote.
+ */
+export async function touchMember(roomId: string, userId: string, at: number): Promise<boolean> {
+  try {
+    must(
+      await db()
+        .from('room_members')
+        .upsert({ room_id: roomId, user_id: userId, last_seen_at: new Date(at).toISOString() }, { onConflict: 'room_id,user_id' }),
+      'check in at the room',
+    );
+    return true;
+  } catch (err) {
+    logError('member_touch_failed', err, { roomId });
+    return false;
+  }
+}
+
+/** Everyone who has sat at the room, and when each was last seen there (room_members). A failed read throws. */
+export async function roomMembers(roomId: string): Promise<{ userId: string; lastSeenAt: number }[]> {
+  const data = must(await db().from('room_members').select('user_id, last_seen_at').eq('room_id', roomId), 'read who has sat here');
+  return ((data ?? []) as { user_id: string; last_seen_at: string }[]).flatMap((r) => {
+    const at = fromIso(r.last_seen_at);
+    return at === null ? [] : [{ userId: r.user_id, lastSeenAt: at }];
+  });
+}
+
+/** What the lobby reads of a game: when and how it ended, and who finished where. */
+const LAST_GAME_COLUMNS = 'status, ended_at, ended_how, hands_played, game_players(seat, user_id, kind, name, score, place)';
+const GAME_END_HOWS: readonly GameEndHow[] = ['complete', 'host', 'idle', 'abandoned'];
+
+function lastGameRow(data: unknown): LastGameRow | null {
+  if (!data) return null;
+  const row = data as { status: LastGameRow['status']; ended_at: string | null; ended_how: string | null; hands_played: number | null; game_players: unknown };
+  const players = Array.isArray(row.game_players)
+    ? (row.game_players as { seat: number; user_id: string | null; kind: string; name: string; score: number | null; place: number | null }[])
+    : [];
+  return {
+    status: row.status,
+    endedAt: fromIso(row.ended_at),
+    how: GAME_END_HOWS.includes(row.ended_how as GameEndHow) ? (row.ended_how as GameEndHow) : null,
+    hands: typeof row.hands_played === 'number' ? row.hands_played : 0,
+    players: players.map((p) => ({ seat: p.seat, userId: p.user_id ?? null, kind: p.kind, name: p.name, score: p.score ?? null, place: p.place ?? null })),
+  };
+}
+
+/** A game as the lobby reads it (LastGameRow), or null when there's no such game. A failed read throws. */
+export async function lastGameOf(gameId: string): Promise<LastGameRow | null> {
+  if (!isUuid(gameId)) return null;
+  return lastGameRow(must(await db().from('games').select(LAST_GAME_COLUMNS).eq('id', gameId).maybeSingle(), 'read the last game'));
+}
+
+/**
+ * The room's latest finished game (LastGameRow), or null when it has none:
+ * asked only when its current game didn't finish (an abandon), so the lobby's
+ * "Last game" is still the last real result. games has no index on room_id,
+ * so this scans it, which is fine at this size and this rarely.
+ */
+export async function lastFinishedGame(roomId: string): Promise<LastGameRow | null> {
+  return lastGameRow(
+    must(
+      await db().from('games').select(LAST_GAME_COLUMNS).eq('room_id', roomId).eq('status', 'finished').order('ended_at', { ascending: false }).limit(1).maybeSingle(),
+      'read the last game',
+    ),
+  );
+}
+
+/**
+ * Each member's count of games played at the room (room_members.games_played),
+ * worked out again from game_players: the finished games (complete, ended by
+ * the host or idle; never abandoned) they sat at the end of. A recount rather
+ * than an increment, so a finish run again counts nothing twice. One read,
+ * then one update per person; a member row that doesn't exist isn't made.
+ */
+export async function recountMemberGames(roomId: string, userIds: readonly string[]): Promise<void> {
+  const ids = [...new Set(userIds)];
+  if (ids.length === 0) return;
+  const client = db();
+  const data = must(
+    await client.from('game_players').select('user_id, games!inner(room_id, status)').in('user_id', ids).eq('games.room_id', roomId).eq('games.status', 'finished'),
+    'count the games played',
+  );
+  const counts = new Map(ids.map((id) => [id, 0]));
+  for (const r of (data ?? []) as { user_id: string | null }[]) if (r.user_id !== null && counts.has(r.user_id)) counts.set(r.user_id, counts.get(r.user_id)! + 1);
+  for (const [userId, n] of counts) {
+    must(await client.from('room_members').update({ games_played: n }).eq('room_id', roomId).eq('user_id', userId), 'count the games played');
+  }
 }
 
 /**
@@ -328,11 +429,15 @@ export async function recordHand(seats: Seats, state: HandState, away: readonly 
  * takes: every write sets values and never adds to them.
  *   1. who finished where (game_players: every seat's final score and place),
  *      one row per seat, overwriting the rows the deal wrote;
- *   2. the room, back to the lobby's "finished", only while it still holds
+ *   2. who was there at the end (presentAtEnd: seated then, and not away in
+ *      `absence`; nobody after an idle end or an abandon): their member rows'
+ *      `last_seen_at` moves to the end's moment, never back, so the lobby
+ *      has them here for the next six hours (seating.ts isHere);
+ *   3. the room, back to the lobby's "finished", only while it still holds
  *      this game and is playing it; then, while it's between games after
  *      this one, the seat given back to anyone who left as the last hand was
  *      scored, on a repeat finish too (closeRoom);
- *   3. the game's own row: its status, when and how it ended, who ended it,
+ *   4. the game's own row: its status, when and how it ended, who ended it,
  *      and how many hands were played.
  * The game's status is last because it's what tells a later request the job
  * is done: until it lands the game reads active, and the next request that
@@ -340,7 +445,7 @@ export async function recordHand(seats: Seats, state: HandState, away: readonly 
  * after it runs until then. A person with no profile row can't stop it: the
  * rows are written again without ids (profile_missing), as the deal does.
  */
-export async function finishGame(gameId: string, room: Pick<RoomRow, 'id'>, over: GameOver): Promise<void> {
+export async function finishGame(gameId: string, room: Pick<RoomRow, 'id'>, over: GameOver, absence: Absence | undefined): Promise<void> {
   const client = db();
   const endedAt = new Date(over.at).toISOString();
   const rows = finalPlayers(over).map((p) => ({ game_id: gameId, ...p }));
@@ -351,6 +456,10 @@ export async function finishGame(gameId: string, room: Pick<RoomRow, 'id'>, over
       logError('profile_missing', new SupabaseError('record how everyone finished', res.error), { gameId });
       must(await players(rows.map((r) => ({ ...r, user_id: null }))), 'record how everyone finished');
     } else must(res, 'record how everyone finished');
+  }
+  const there = presentAtEnd(over, absence);
+  if (there.length > 0) {
+    must(await client.from('room_members').update({ last_seen_at: endedAt }).eq('room_id', room.id).in('user_id', there).lt('last_seen_at', endedAt), 'mark who was there');
   }
   await closeRoom(client, gameId, room.id, over.seats, new Date().toISOString());
   const finished = over.how !== 'abandoned';

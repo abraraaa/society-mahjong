@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { finalStandings } from './final';
-import { HOST_LEAVE, countdown, endLine, endSheet, topLine, waitCopy } from './lifecycle-copy';
+import { HOST_LEAVE, SHARE, countdown, endLine, endSheet, hereCount, seatTag, startLabel, topLine, waitCopy, waitingForHost } from './lifecycle-copy';
+import type { RoomSnapshot } from './snapshot';
 import type { PublicGameOver } from './lifecycle';
 
 /**
@@ -189,5 +190,73 @@ describe('waitCopy', () => {
   it('keeps to the plain line when whoever tapped first is no longer here, and to Next hand with nobody left to wait for', () => {
     expect(waitCopy(at([], [0, 1]), 0, names, 5_000)).toEqual({ button: 'Next hand', line: "The next hand starts in 0:05, or as soon as everyone's ready.", ready: false });
     expect(waitCopy(at([0], []), 0, names, 5_000)).toMatchObject({ button: 'Next hand', ready: true });
+  });
+});
+
+describe('the lobby', () => {
+  /** Amna hosts; Bilal hasn't opened the link tonight; Sana is a bot; the last seat is empty. */
+  const lobby = (extra: Partial<RoomSnapshot> = {}): RoomSnapshot => ({
+    id: 'r-1',
+    code: 'KHI-4287Q',
+    rulesetId: 'karachi',
+    status: 'finished',
+    seats: [{ kind: 'human', name: 'Amna' }, { kind: 'human', name: 'Bilal', notHere: true }, { kind: 'bot', name: 'Sana' }, null],
+    me: 0,
+    isHost: true,
+    hostSeat: 0,
+    gameId: 'g-1',
+    lastGame: null,
+    ...extra,
+  });
+  const full = [
+    { kind: 'human', name: 'Amna' },
+    { kind: 'human', name: 'Bilal' },
+    { kind: 'human', name: 'Hana' },
+    { kind: 'human', name: 'Zara' },
+  ] as const;
+
+  it('invites with a line and a button that says when the link went to the clipboard', () => {
+    expect(SHARE).toEqual({ line: 'Send your friends the link, or read them the code.', button: 'Send link', copied: 'Link copied' });
+  });
+
+  it('labels the host’s button by the bots that will sit down, counting empty seats and bots', () => {
+    expect(startLabel(lobby({ status: 'lobby', seats: full }))).toBe('Start');
+    expect(startLabel(lobby({ status: 'lobby', seats: [full[0], null, null, null] }))).toBe('Start, with three bots');
+    expect(startLabel(lobby({ status: 'lobby', seats: [full[0], full[1], full[2], { kind: 'bot', name: 'Sana' }] }))).toBe('Start, with one bot');
+    expect(startLabel(lobby({ seats: full }))).toBe('Play again, same seats');
+    expect(startLabel(lobby())).toBe('Play again, with two bots');
+    // Someone not here yet is still in their seat until kept seats arrive: no bot for them yet.
+    expect(startLabel(lobby({ seats: [full[0], { ...full[1], notHere: true }, full[2], full[3]] }))).toBe('Play again, same seats');
+  });
+
+  it('tags each seat: the reader’s own, a bot, someone not here yet, and whoever has the host’s powers', () => {
+    const r = lobby({ me: 2, seats: [full[0], { kind: 'human', name: 'Bilal', notHere: true }, full[2], { kind: 'bot', name: 'Sana' }] });
+    expect([0, 1, 2, 3].map((i) => seatTag(r, i))).toEqual(['host', 'not here yet', 'you', 'bot']);
+    expect(seatTag(lobby(), 0)).toBe('you');
+    expect(seatTag(lobby(), 3)).toBe('');
+    // The powers passed to Hana, who's here, while the room's host isn't.
+    const passed = lobby({ me: 1, hostSeat: 2, seats: [{ kind: 'human', name: 'Amna', notHere: true }, full[1], full[2], null] });
+    expect([0, 1, 2, 3].map((i) => seatTag(passed, i))).toEqual(['not here yet', 'you', 'host', '']);
+  });
+
+  it('tells everyone else who they’re waiting for, before the first game and between games', () => {
+    expect(waitingForHost(lobby({ status: 'lobby', me: 1, isHost: false }))).toBe(`Waiting for ${I('Amna')} to start.`);
+    expect(waitingForHost(lobby({ me: 1, isHost: false }))).toBe(`That game's over. Waiting for ${I('Amna')} to start the next one.`);
+    expect(waitingForHost(lobby({ status: 'lobby', hostSeat: null, isHost: false }))).toBe('Waiting for the host to start.');
+    expect(waitingForHost(lobby({ hostSeat: null, isHost: false }))).toBe("That game's over. Waiting for the host to start the next one.");
+  });
+
+  it('counts the people here, as a tally, leaving out bots and anyone not here yet', () => {
+    expect(hereCount(lobby(), 'Karachi rules')).toBe('1 of 4 here · Karachi rules');
+    expect(hereCount(lobby({ seats: full }), 'Karachi rules')).toBe('4 of 4 here · Karachi rules');
+    expect(hereCount(lobby({ seats: [null, null, null, null] }), 'Karachi rules')).toBe('0 of 4 here · Karachi rules');
+  });
+
+  it('says how the last game went, looking back', () => {
+    expect(topLine(table([2000, 14504, -8000, -8504]), null, 'then')).toBe(`${I('Bilal')} finished top on +14,504.`);
+    expect(topLine(table([2000, 14504, -8000, -8504]), 1, 'then')).toBe('You finished top on +14,504.');
+    expect(topLine(table([-9000, -8000, 25000, -8000]), null, 'then')).toBe(`${I('Sana')}, a bot, finished top on +25,000.`);
+    expect(topLine(table([9000, 9000, -9000, -9000]), 1, 'then')).toBe(`You and ${I('Amna')} tied for top on +9,000.`);
+    expect(topLine(table([0, 0, 0, 0]), 0, 'then')).toBe('Nobody won a hand.');
   });
 });

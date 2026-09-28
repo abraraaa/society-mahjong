@@ -91,7 +91,16 @@ creates it, and the server does everything else with the service role.
    tries, then a 409 asking for another tap), and nobody lands in someone
    else's seat. Standing up and Start carry the same condition: a friend
    who sits down while the host is dealing is not quietly replaced by a
-   bot; the host is asked to start again.
+   bot; the host is asked to start again. Opening the link also checks the
+   person in: their `room_members` row's `last_seen_at` moves to now (the
+   row is made on their first visit), and so does the host's when the room
+   is made or they tap Start. A check-in never writes `rooms`, so it can't
+   make a host's Start meet "the seats changed". A room that isn't playing
+   and has been quiet for six weeks (nothing written to it, and nobody it
+   knows seen there) turns newcomers away, at the invite link and at the
+   join; its own people (anyone seated there, or who ever has been) still
+   get in, and their check-in opens it again. Standing up from the lobby
+   works before the first game and between games.
 3. **Start.** Server creates `games` (seed generated server-side, never
    sent to clients while any hand is live), then the first hand's row with
    the moves the bots made at the deal, then `game_players` (who sat
@@ -327,7 +336,8 @@ hand there is no next hand: the game has already ended.
 **The host's powers** (starting a game, ending one, and letting a bot play
 for someone who's stepped away) are worked out, never stored (`seating.ts`
 `hostOf`): the room's host while they're seated and here (at a game in
-play, not away); otherwise whoever here has sat longest (a seat with no
+play, not away; between games, seen at the room lately, below); otherwise
+whoever here has sat longest (a seat with no
 record of when it was taken counts as longest, then seat order; each seat
 is stamped with when its person sat down); nobody who isn't seated. So a
 room whose host has stood up, or stepped away, isn't stuck: the table, the
@@ -344,6 +354,26 @@ deals a fresh game for the same seats with the scores back at nought. A
 finished game's page keeps showing its own final table, seats and scores,
 whatever the room does next. Anyone still on the old table follows the
 room channel's `started` message to the new one.
+
+**Who's here, between games** is read from `room_members`, never stamped
+on the seats (`seating.ts` `isHere`). A seated person is here when their
+`last_seen_at` is within the last six hours and no earlier than the end of
+the room's last game. It moves when they open the invite link, sit down or
+tap Start; the lobby's five-second poll also moves it for a seated person
+with no row yet, or one last seen over half an hour ago, so someone with the
+lobby open all evening stays here; and when a game ends it moves to the
+end's moment for everyone at the table then who wasn't away. So after a
+game, the people who finished it stay here for six hours. Someone a bot was
+playing for at the end, everyone after a game that ended idle or was
+abandoned, and last week's people who haven't opened the link tonight read
+"not here yet" in the lobby until they do. The host's powers go to whoever
+here should have them, and the lobby says who that is ("Waiting for Ayesha
+to start."). A finished room also shows its last game ("Last game: Ayesha
+finished top on +14,504."), read from its latest finished game and that
+game's `game_players`: an abandoned game never hides the one before it.
+If who's been seen can't be read, the lobby tags nobody and its next poll
+tries again; Start and a newcomer's join fail instead, so nobody is dealt
+out or turned away on a guess.
 
 **Leaving.** Any seat can stand up from a live table (Leave, top right,
 with a confirmation). A bot takes the seat for the rest of the game so the
@@ -457,6 +487,12 @@ changing either are in `docs/DATA-MODEL.md`. What a live table keeps:
   place (ties share a place; nobody is placed in an abandoned game). (If a
   seated person has no profile row, that game's rows are written without
   ids.)
+- `room_members`, one row per person who has sat at a room: when they were
+  first and last seen there (`last_seen_at`, which says who's here between
+  games, above) and how many games they've played there (`games_played`:
+  finished games, complete, ended by the host or idle, that they were
+  seated at the end of; worked out again from `game_players` after each
+  finish, so a finish run twice counts nothing twice).
 - `games.ended_how` (`complete`, `host`, `idle` or `abandoned`), `ended_by`
   (the host who ended it, if one did), `ended_at` and `hands_played` say
   how the game ended, for the funnel.

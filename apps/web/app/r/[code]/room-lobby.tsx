@@ -30,6 +30,8 @@ export function RoomLobby({ code }: { code: string }) {
   const [retryLabel, setRetryLabel] = useState('Try again');
   const [attempt, setAttempt] = useState(0);
   const [starting, setStarting] = useState(false);
+  // The link went to the clipboard, on a phone with no share sheet: the button says so.
+  const [copied, setCopied] = useState(false);
   const supabaseRef = useRef<SupabaseClient | null>(null);
 
   const goToGame = useCallback((gameId: string) => router.replace(`/g/${gameId}`), [router]);
@@ -125,7 +127,10 @@ export function RoomLobby({ code }: { code: string }) {
     const url = `${window.location.origin}/r/${code}`;
     try {
       if (navigator.share) await navigator.share({ title: 'Mahjong?', text: `Join my table: ${code}`, url });
-      else await navigator.clipboard.writeText(url);
+      else {
+        await navigator.clipboard.writeText(url);
+        setCopied(true);
+      }
     } catch {
       // the user dismissed the share sheet
     }
@@ -135,7 +140,7 @@ export function RoomLobby({ code }: { code: string }) {
     try {
       await api.leaveRoom(code);
     } catch {
-      // not seated, or the table already started: either way, home is right
+      // not seated, or a game started meanwhile: either way, home is right
     }
     router.replace('/');
   };
@@ -159,15 +164,12 @@ export function RoomLobby({ code }: { code: string }) {
 
   return (
     <RoomWaiting
-      code={code}
-      seats={room.seats}
-      me={room.me}
+      room={room}
       ruleset={RULESET_NAMES[room.rulesetId] ?? room.rulesetId}
-      isHost={room.isHost}
-      again={room.status === 'finished'}
       onLeave={leave}
       starting={starting}
       error={error}
+      copied={copied}
       onStart={start}
       onShare={share}
     />

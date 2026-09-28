@@ -38,8 +38,8 @@ describe('plainError: the lines the copy calls for', () => {
     expect(api(409, 'that seat was just taken; try again')).toBe('Someone took that seat just as you did. Try again for another.');
   });
 
-  it('any 410 is a closed table, whatever the words', () => {
-    const line = 'This table has closed. Ask the host for a new link.';
+  it('any 410 is a closed table, whatever the words, and says who can open it again', () => {
+    const line = "This table's been quiet for a while, so it's closed to new players. Ask someone who plays at this table to open the link, then try again.";
     expect(api(410, 'this table has closed')).toBe(line);
     expect(api(410, 'gone')).toBe(line);
     expect(api(410, '')).toBe(line);
@@ -116,7 +116,7 @@ describe('plainError: the rest of what the server can say', () => {
   });
 
   it('the host-only and in-progress refusals at the start', () => {
-    expect(api(403, 'only the host can start')).toBe('Only the host can start the game.');
+    expect(api(403, 'only the host can start')).toBe('Only the host can start the game. Give them a nudge.');
     expect(api(409, 'a game is in progress')).toBe("There's already a game going at this table.");
     expect(api(409, 'the seats changed; start again')).toBe('Someone sat down or got up just then. Check the seats and start again.');
     expect(api(409, 'the table has started; leave it from the game')).toBe("The game's started, so leave from the table instead.");

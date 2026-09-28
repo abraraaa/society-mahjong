@@ -3,6 +3,7 @@ import type { Seat } from '@society/engine';
 import { signed } from '../ledger';
 import type { Standing } from './final';
 import type { NextHandWait, PublicGameOver } from './lifecycle';
+import type { RoomSnapshot } from './snapshot';
 import { countOf, isolate, nameList } from './words';
 
 /**
@@ -107,3 +108,45 @@ export const HOST_LEAVE = {
   end: 'End the game for everyone',
   stay: 'Stay',
 } as const satisfies { title: string; body: string; leave: string; end: string; stay: string };
+
+/**
+ * The host's button in the lobby. Before the first game it's Start, and
+ * between games Play again; either says how many bots will sit down with
+ * everyone, counting every seat that's empty or a bot's. ("Dealing…", while
+ * the start is on its way, is the lobby's own.)
+ */
+export function startLabel(r: Pick<RoomSnapshot, 'status' | 'seats'>): string {
+  const bots = r.seats.filter((s) => s === null || s.kind === 'bot').length;
+  if (r.status === 'finished') return bots === 0 ? 'Play again, same seats' : `Play again, with ${countOf(bots, 'bot')}`;
+  return bots === 0 ? 'Start' : `Start, with ${countOf(bots, 'bot')}`;
+}
+
+/** The small word beside a seat in the lobby: the reader's own, a bot's, someone not here yet, or whoever has the host's powers. */
+export function seatTag(r: RoomSnapshot, seat: number): string {
+  const s = r.seats[seat] ?? null;
+  if (s === null) return '';
+  if (seat === r.me) return 'you';
+  if (s.kind === 'bot') return 'bot';
+  if (s.notHere) return 'not here yet';
+  return seat === r.hostSeat ? 'host' : '';
+}
+
+/** What everyone but the host reads in place of the start button, naming whoever has the host's powers. */
+export function waitingForHost(r: RoomSnapshot): string {
+  const host = r.hostSeat === null ? null : (r.seats[r.hostSeat] ?? null);
+  const who = host ? isolate(host.name) : 'the host';
+  return r.status === 'finished' ? `That game's over. Waiting for ${who} to start the next one.` : `Waiting for ${who} to start.`;
+}
+
+/** The lobby's tally line: how many people are here, of the four seats, and the rules. Digits, as a count line has always had. */
+export function hereCount(r: RoomSnapshot, ruleset: string): string {
+  const here = r.seats.filter((s) => s?.kind === 'human' && !s.notHere).length;
+  return `${here} of 4 here · ${ruleset}`;
+}
+
+/** The lobby's invitation: a line, and a button that shares the link, or copies it where a phone can't share. */
+export const SHARE = {
+  line: 'Send your friends the link, or read them the code.',
+  button: 'Send link',
+  copied: 'Link copied',
+} as const satisfies { line: string; button: string; copied: string };
