@@ -1,10 +1,11 @@
 'use client';
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { CoachHandRef, CoachSegment, CoachStage, CoachState, CoachTarget } from '@/lib/coach';
+import { stepsAside, type CardClock } from '@/lib/coach/clock';
 import { GLOSSARY, TERMS, annotate, termsIn, type Term } from '@/lib/coach/glossary';
 import { resolveHandRef } from '@/lib/coach/hand-card';
 import { planCount } from '@/lib/coach/words';
-import { HandCard } from './hand-card';
+import { ClockLine, HandCard } from './hand-card';
 import { Tile } from './tile';
 
 /**
@@ -273,31 +274,34 @@ export function CoachLine({ say, origin }: { say: readonly CoachSegment[]; origi
  * Whichever tutor sheet is open, drawn above every other sheet. A `yours` card
  * follows the player's hand as it changes; "Got it" on a card opened from
  * "Hands this round" goes back to the list.
+ *
+ * `clock` is what the sheet says about the clock under it: a claim held on the
+ * bots, or a live clock still running. With a few seconds left on a live clock
+ * the sheet closes itself, and won't open, so the player can still act in time.
  */
-export function TutorSheet({
-  coach,
-}: {
-  coach: CoachState;
-  /** the table's clock, for the card to show; null until cards show clocks */
-  clock: null;
-}) {
+export function TutorSheet({ coach, clock }: { coach: CoachState; clock: CardClock }) {
   const { open, close, current } = useTutorSheet();
-  if (!current) return null;
-  if (current.kind === 'term') return <TermSheet term={current.term} onClose={() => close()} />;
+  const aside = stepsAside(clock);
+  useEffect(() => {
+    if (aside && current) close();
+  }, [aside, current, close]);
+  if (!current || aside) return null;
+  if (current.kind === 'term') return <TermSheet term={current.term} clock={clock} onClose={() => close()} />;
   if (current.kind === 'hand') {
     const back = current.back;
-    return <HandCard card={resolveHandRef(coach, current.ref)} onClose={() => (back ? open(back) : close())} />;
+    return <HandCard card={resolveHandRef(coach, current.ref)} clock={clock} onClose={() => (back ? open(back) : close())} />;
   }
-  return <HandsAndWords hands={coach.goal.hands} onHand={(ref) => open({ kind: 'hand', ref, origin: 'list', back: current })} onClose={() => close()} />;
+  return <HandsAndWords hands={coach.goal.hands} clock={clock} onHand={(ref) => open({ kind: 'hand', ref, origin: 'list', back: current })} onClose={() => close()} />;
 }
 
 /** One term explained. Sits above any other sheet. */
-function TermSheet({ term, onClose }: { term: Term; onClose: () => void }) {
+function TermSheet({ term, clock, onClose }: { term: Term; clock: CardClock; onClose: () => void }) {
   return (
     <>
       <div className="scrim scrim-top" onClick={onClose} />
       <div className="sheet sheet-top" role="dialog" aria-label={GLOSSARY[term].label} data-sheet="term">
         <div className="grabber" />
+        <ClockLine clock={clock} />
         <div className="glossary">
           <Entry term={term} />
         </div>
@@ -310,12 +314,13 @@ function TermSheet({ term, onClose }: { term: Term; onClose: () => void }) {
 }
 
 /** The ? sheet: every hand the round allows, each opening its card, then the words at the table. */
-function HandsAndWords({ hands, onHand, onClose }: { hands: readonly CoachHandRef[]; onHand: (ref: CoachHandRef) => void; onClose: () => void }) {
+function HandsAndWords({ hands, clock, onHand, onClose }: { hands: readonly CoachHandRef[]; clock: CardClock; onHand: (ref: CoachHandRef) => void; onClose: () => void }) {
   return (
     <>
       <div className="scrim scrim-top" onClick={onClose} />
       <div className="sheet sheet-top" role="dialog" aria-label="Glossary" data-sheet="list">
         <div className="grabber" />
+        <ClockLine clock={clock} />
         {hands.length > 0 && (
           <>
             <h2 className="font-display text-xl">Hands this round</h2>

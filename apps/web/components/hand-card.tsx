@@ -1,6 +1,7 @@
 'use client';
 import type { LayoutGroup } from '@society/engine';
 import type { CoachHandRef } from '@/lib/coach';
+import { cardClockLine, type CardClock } from '@/lib/coach/clock';
 import { cardCaption, cardTileSize } from '@/lib/coach/hand-card';
 import { heldOf, stripGroups } from '@/lib/coach/strip';
 import { capitalise } from '@/lib/coach/words';
@@ -25,6 +26,12 @@ export function HandGroups({ layout, className, size = '2xs' }: { layout: readon
   );
 }
 
+/** The first line of a tutor sheet opened over a clock: the claim held, or how long a live clock has left. */
+export function ClockLine({ clock }: { clock: CardClock }) {
+  const line = cardClockLine(clock);
+  return line ? <p className="clock">{line}</p> : null;
+}
+
 /** For a screen reader, which can't see which tiles are lit. */
 function summary(card: CoachHandRef): string {
   const { held, total } = heldOf(stripGroups(card.layout));
@@ -34,9 +41,10 @@ function summary(card: CoachHandRef): string {
 /**
  * A hand, big enough to read: its name, what it is in words, the tiles in their
  * sets, and whose they are. The same card wherever the tutor names a hand, in
- * the bubble, the plan strip, a sheet's line or "Hands this round".
+ * the bubble, the plan strip, a sheet's line or "Hands this round". Over a
+ * clock, its first line says whether the clock is held or still running.
  */
-export function HandCard({ card, onClose }: { card: CoachHandRef; onClose: () => void }) {
+export function HandCard({ card, clock, onClose }: { card: CoachHandRef; clock: CardClock; onClose: () => void }) {
   const caption = cardCaption(card);
   const open = stripGroups(card.layout).some((g) => g.open);
   return (
@@ -44,6 +52,7 @@ export function HandCard({ card, onClose }: { card: CoachHandRef; onClose: () =>
       <div className="scrim scrim-top" onClick={onClose} />
       <div className="sheet sheet-top hand-card" role="dialog" aria-label={card.title} data-sheet="card" data-whose={card.whose}>
         <div className="grabber" />
+        <ClockLine clock={clock} />
         <h2 className="font-display text-xl">{card.title}</h2>
         {card.shape && <p className="text-ivory-100/80 mt-1 text-sm">{capitalise(card.shape)}.</p>}
         {card.layout.length > 0 && <HandGroups layout={card.layout} className="card-row" size={cardTileSize(card)} />}

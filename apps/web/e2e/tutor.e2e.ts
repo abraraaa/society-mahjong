@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { ALL_TILE_KINDS, isBonusTile, karachi, tileName, type GameProgress } from '@society/engine';
+import { cardClockLine } from '../lib/coach/clock';
 import { howWon, shortOfLine, washoutLine, winnerLine } from '../lib/coach/coach';
 import { titleOf } from '../lib/coach/shape';
 import { LONG_NAME } from '../lib/coach/test-games';
@@ -321,5 +322,97 @@ test("(t-result) the result line's hand name opens its card: the winning hand, e
     await expect(card).toBeHidden();
   }
   expect(checked, 'a result line named a hand, and its card was checked').toBeGreaterThan(0);
+  expect(errors).toEqual([]);
+});
+
+/** The claim sheet, if one's up: whether it has a countdown, and which tappable words its line has. */
+function claimScene(page: Page) {
+  return page.evaluate(() => {
+    const sheet = document.querySelector('[data-sheet="claim"]');
+    return { timed: !!sheet?.querySelector('.timer'), hand: !!sheet?.querySelector('.term.hand'), word: !!sheet?.querySelector('.term:not(.hand)') };
+  });
+}
+
+test('(t-claim) on the bots, a card or a word opened over a claim holds its countdown, which runs on from there once it closes', async ({ page }) => {
+  test.setTimeout(300_000);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  await stayLocal(page);
+  await page.clock.install();
+  const stage = page.locator('.table-stage');
+  const claim = page.locator('[data-sheet="claim"]');
+  const pass = claim.getByRole('button', { name: 'Pass', exact: true });
+  const next = page.locator('.sheet').getByRole('button', { name: 'Next hand' });
+  // First a hand's name, then a word, each opened over a claim of its own.
+  const todo = [
+    { has: 'hand' as const, tap: claim.locator('.term.hand'), opened: page.locator('[data-sheet="card"]') },
+    { has: 'word' as const, tap: claim.locator('.term:not(.hand)'), opened: page.locator('[data-sheet="term"]') },
+  ];
+
+  // The deal is random per visit: up to three hands a visit, and three visits, to find a timed claim whose line has each.
+  for (let visit = 0; visit < 3 && todo.length > 0; visit++) {
+    await page.clock.resume();
+    await page.goto('/play/solo');
+    const first = stage.locator('.hand-tray button.tile').first();
+    await tapUntilLifted(first);
+    await first.click();
+    await pauseClock(page);
+    await page.clock.runFor(SETTLE_MS + 100);
+
+    for (let hand = 0; hand < 3 && todo.length > 0; hand++) {
+      for (let i = 0; todo.length > 0; i++) {
+        expect(i, 'the hand ends').toBeLessThan(800);
+        const c = await claimScene(page);
+        const want = todo[0]!;
+        if (c.timed && c[want.has]) {
+          // This window's sheet: a claim that passes goes, and a later window's is another sheet.
+          const sheet = await claim.elementHandle();
+          const up = () => sheet!.evaluate((e) => e.isConnected);
+          // Part of the countdown spent: 8 s at most were left when the sheet was seen.
+          await page.clock.runFor(2_500);
+          await want.tap.first().click();
+          await expect(want.opened).toBeVisible();
+          await expect(claim.locator('.timer')).toHaveAttribute('data-paused', 'true');
+          await expect(want.opened.locator('.clock')).toHaveText(cardClockLine({ kind: 'paused' })!);
+          // Reading costs nothing: the bots wait, and the claim with them.
+          await page.clock.runFor(20_000);
+          expect(await up(), 'the claim still up after twenty seconds of reading').toBe(true);
+          await expect(pass).toBeVisible();
+
+          // Closed, the countdown runs on from where it stopped: about 5 to 5.5 s. One started again (8 s) would
+          // still be up after 6 s.
+          await want.opened.getByRole('button', { name: 'Got it' }).click();
+          await expect(want.opened).toBeHidden();
+          await expect(claim.locator('.timer')).not.toHaveAttribute('data-paused', 'true');
+          await page.clock.runFor(4_000);
+          expect(await up(), 'the claim still up 4 s after closing').toBe(true);
+          await page.clock.runFor(2_000);
+          await expect.poll(up, { message: 'the claim passed 6 s after closing' }).toBe(false);
+          todo.shift();
+          continue;
+        }
+        const s = await scene(page);
+        if (s.over) break;
+        // A claim with a win offered has no countdown, and one without the word wanted is let go.
+        if (s.pass) await page.locator('.sheet').getByRole('button', { name: 'Pass', exact: true }).click();
+        else if (s.win) await stage.locator('.action-row').getByRole('button', { name: 'Mahjong!' }).click();
+        else if (s.discard)
+          await stage
+            .locator('.action-row')
+            .getByRole('button', { name: /^Discard / })
+            .click();
+        await page.clock.runFor(500);
+      }
+      if (todo.length === 0 || !(await next.isVisible())) break;
+      // The table lets a tap go for a moment after a hand ends, and again after the next is dealt.
+      await page.clock.runFor(SETTLE_MS + 100);
+      await next.click();
+      await page.clock.runFor(SETTLE_MS + 100);
+    }
+  }
+  expect(
+    todo.map((t) => t.has),
+    'a timed claim whose line had a hand name, and then one with a word',
+  ).toEqual([]);
   expect(errors).toEqual([]);
 });

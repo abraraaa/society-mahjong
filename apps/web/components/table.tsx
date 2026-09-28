@@ -11,6 +11,8 @@ import { riverOrder } from '@/lib/river';
 import { NO_SCORES, handDeltas, signed, standings, type Scores } from '@/lib/ledger';
 import { LIFT_SETTLE_MS, discardOffer, handBoundary, heldSelection, selectTile, settling, type Selection } from '@/lib/table-flow';
 import type { CoachState } from '@/lib/coach';
+import { cardClockFor, claimSheetClock } from '@/lib/coach/clock';
+import { CLAIM_PASS_MARGIN_MS } from '@/lib/live/timing';
 
 /** A player's name inside a sentence, isolated so a right-to-left name can't reorder the words and clock around it. */
 const isolate = (name: string | undefined): string => `\u2068${name ?? ''}\u2069`;
@@ -306,6 +308,19 @@ function TableInner({
   );
 
   const claimOpen = view.phase === 'claim' && !!legal.claims && legal.claims.length > 0 && !!view.lastDiscard;
+  // In a claim window the live table always passes claimMs (0 in the window's
+  // last moments, so never test it for truth), and solo never does. What a card
+  // or a word opened now says about the clock under it: the bots' claim held,
+  // or a live clock still running.
+  const live = claimMs != null;
+  const cardClock = cardClockFor({
+    claimOpen,
+    soloClaimTimed: claimOpen && !live && !legal.claims?.some((c) => c.type === 'win'),
+    clock: clock ?? null,
+    myTurn,
+    exchange: !!legal.exchange,
+    passMarginMs: CLAIM_PASS_MARGIN_MS,
+  });
 
   // The line above the hand that says whose clock is running, when it is
   // mine or when I am waiting on someone else's claim. A bot's clock never
@@ -399,7 +414,7 @@ function TableInner({
           onClaim={(claim) => act({ type: 'claim', seat: ME, claim })}
           onPass={() => act({ type: 'pass', seat: ME })}
           busy={busy}
-          {...(claimMs ? { claimMs: Math.max(1000, claimMs), clock: 'server' as const } : {})}
+          {...claimSheetClock(claimMs)}
         />
       )}
 
@@ -432,7 +447,7 @@ function TableInner({
         />
       )}
 
-      <TutorSheet coach={coach} clock={null} />
+      <TutorSheet coach={coach} clock={cardClock} />
     </>
   );
 }

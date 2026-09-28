@@ -179,12 +179,17 @@ function offered(s: HandState): boolean {
 /** The tutor's line at a claim names a hand, so there's a card to open from it. */
 const namesAHand = (snap: GameSnapshot) => liveCoach(snap).say.some((x) => x.hand);
 
+/** A claim window's clock short enough that a test sees it run out before the page's 12 s poll: 8.5 s before the sheet passes for Amna. */
+const SHORT_CLAIM = { claimMs: 10_000, turnMs: HOUR } as const;
+
 export interface TutorFixtures {
   /** A finished East hand won by one of the bots, for a first-timer: the result line names the winner's hand. */
   readonly otherWin: GameSnapshot;
+  /** Amna asked about a discard she could pung, not a win, on a short clock (`SHORT_CLAIM`). The tutor's line names a hand. */
+  readonly claim: GameSnapshot;
   /**
-   * Two claim windows for Amna, the second the table's reply to her pass on the first: the claim sheet stays up
-   * between them. The first window's clock is short (8.5 s before the sheet passes for her), the second's an hour.
+   * Two claim windows for Amna, the second the table's answer once she's passed on the first (from her other phone,
+   * say): the claim sheet stays up between them. Both clocks are an hour, so nothing runs out under an open card.
    */
   readonly claimAgain: { readonly first: GameSnapshot; readonly next: GameSnapshot };
 }
@@ -196,6 +201,19 @@ function build(): TutorFixtures {
     const snap = snapshot(end, 9, 'new');
     return liveCoach(snap).outcome?.hand?.ref.whose === 'winner' ? snap : null;
   });
+  const claim = search('a claim window where Amna could pung, whose line names a hand', (seed) => {
+    let s = settle(startHand(karachi, { seed, progress: EAST_HONOUR, dealer: 0 }));
+    for (let i = 0; i < 400 && s.phase !== 'finished'; i++) {
+      if (offered(s) && legalActions(s, karachi, ME).claims?.some((c) => c.type === 'pung')) {
+        const snap = snapshot(s, 9, 'new', 'active', deadlines(s, SHORT_CLAIM));
+        if (namesAHand(snap)) return snap;
+      }
+      const seat = pending(s)[0];
+      if (seat === undefined) return null;
+      s = settle(reduce(s, personMove(s, seat), karachi));
+    }
+    return null;
+  });
   // Back-to-back windows are rare: tutor-51 is the first seed that gives them today, so the search starts there
   // rather than playing out fifty hands first. An engine change that moves the deal still searches on from it.
   const claimAgain = search(
@@ -206,7 +224,7 @@ function build(): TutorFixtures {
         if (offered(s)) {
           const after = settle(reduce(s, { type: 'pass', seat: ME }, karachi));
           if (offered(after) && after.discardCount !== s.discardCount) {
-            const first = snapshot(s, 9, 'new', 'active', deadlines(s, { claimMs: 10_000, turnMs: HOUR }));
+            const first = snapshot(s, 9, 'new');
             const next = snapshot(after, 10, 'new');
             if (namesAHand(first) && namesAHand(next)) return { first, next };
           }
@@ -219,7 +237,7 @@ function build(): TutorFixtures {
     },
     51,
   );
-  return { otherWin, claimAgain };
+  return { otherWin, claim, claimAgain };
 }
 
 let built: TutorFixtures | null = null;
