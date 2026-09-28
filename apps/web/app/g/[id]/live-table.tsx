@@ -48,8 +48,10 @@ export function LiveTable({ gameId }: { gameId: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const clearNotice = useCallback(() => setNotice(null), []);
   // One sheet over the table at a time: Leave, the host's End, or the host handing a seat to a bot (with the server's clock on
-  // the table they were looking at when they tapped the name).
-  const [sheet, setSheet] = useState<{ readonly kind: 'leave' | 'end' } | { readonly kind: 'bot'; readonly seat: Seat; readonly sawAt: number } | null>(null);
+  // the table they were looking at when they tapped the name, and its version).
+  const [sheet, setSheet] = useState<
+    { readonly kind: 'leave' | 'end' } | { readonly kind: 'bot'; readonly seat: Seat; readonly sawAt: number; readonly sawVersion: number } | null
+  >(null);
   // A sheet's answer is on its way: its buttons wait for it.
   const [sheetBusy, setSheetBusy] = useState(false);
   // "I'm back" is on its way.
@@ -236,15 +238,16 @@ export function LiveTable({ gameId }: { gameId: string }) {
     });
     return out;
   }, [snap]);
-  // The host can tap the name of anyone at the table who's still here, to let a bot play for them. The sheet keeps the server's
-  // clock on the table the host was looking at when they tapped (sawAt), so a tap of that person's since then turns it down (R8).
+  // The host can tap the name of anyone at the table who's still here, to let a bot play for them. The sheet keeps the version of
+  // the table the host was looking at when they tapped, and the server's clock on it (sawVersion, sawAt), so a tap of that person's
+  // since then turns it down (R8).
   // Worked out once per table, not per render: it's that table's clock the handlers must carry, so seats alone won't do.
   const seatActions = useMemo(() => {
     const out: Partial<Record<Seat, { label: string; onTap: () => void }>> = {};
     if (!snap) return out;
     for (const seat of [0, 1, 2, 3] as const) {
       const s = snap.seats[seat];
-      if (s && canLetBotPlay(snap, seat)) out[seat] = { label: letBotPlayLabel(s.name), onTap: () => setSheet({ kind: 'bot', seat, sawAt: snap.now }) };
+      if (s && canLetBotPlay(snap, seat)) out[seat] = { label: letBotPlayLabel(s.name), onTap: () => setSheet({ kind: 'bot', seat, sawAt: snap.now, sawVersion: snap.version }) };
     }
     return out;
   }, [snap]);
@@ -369,10 +372,10 @@ export function LiveTable({ gameId }: { gameId: string }) {
 
   // The host hands someone's seat to a bot. Whatever comes back, the sheet goes: the table (or the refusal's copy of it) shows
   // how things stand, and why, if it didn't happen.
-  const letBotPlay = async (seat: Seat, sawAt: number) => {
+  const letBotPlay = async (seat: Seat, sawAt: number, sawVersion: number) => {
     setSheetBusy(true);
     try {
-      take(await api.letBotPlay(gameId, seat, sawAt));
+      take(await api.letBotPlay(gameId, seat, sawAt, sawVersion));
     } catch (err) {
       if (err instanceof ApiError && err.snapshot) take(err.snapshot);
       setNotice(plainError(err));
@@ -500,7 +503,9 @@ export function LiveTable({ gameId }: { gameId: string }) {
           />
         ))}
       {open?.kind === 'end' && <ConfirmSheet {...endSheet(view.phase !== 'finished', handsPlayed(view))} busy={sheetBusy} onConfirm={endForEveryone} onCancel={closeSheet} />}
-      {botSheet && <ConfirmSheet {...letBotPlaySheet(botName)} busy={sheetBusy} onConfirm={() => void letBotPlay(botSheet.seat, botSheet.sawAt)} onCancel={closeSheet} />}
+      {botSheet && (
+        <ConfirmSheet {...letBotPlaySheet(botName)} busy={sheetBusy} onConfirm={() => void letBotPlay(botSheet.seat, botSheet.sawAt, botSheet.sawVersion)} onCancel={closeSheet} />
+      )}
     </>
   );
 }

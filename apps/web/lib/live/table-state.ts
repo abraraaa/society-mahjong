@@ -54,8 +54,9 @@ export interface AwayPlayed {
  * One seat's absence (absence.ts): whose it is (the person's id, and the
  * `since` of the sitting), how many clocks in a row have run out on them,
  * whether a bot is playing their tiles and why, the clock moves made for
- * them (a count, and the last, for the notice), when they last tapped (for
- * the host's hand-over, R8), and what the bot has played for them while away.
+ * them (a count, and the last, for the notice), when they last tapped and
+ * which save of the table carried it (for the host's hand-over, R8), and what
+ * the bot has played for them while away.
  */
 export interface SeatAbsence {
   readonly userId: string | null;
@@ -66,6 +67,11 @@ export interface SeatAbsence {
   /** unstamped: the notice needs the move, not its version; it can hold the tiles passed, so only its own person ever sees it */
   readonly lastClockMove: Move | null;
   readonly lastTap: number | null;
+  /**
+   * the version of the table the last tap was saved as: the host's hand-over is judged by it, against the version of the table the
+   * host was looking at, since a tap's time is when its request began, not when it landed; null for a tap saved before it was kept
+   */
+  readonly tapVersion: number | null;
   readonly played: AwayPlayed;
 }
 

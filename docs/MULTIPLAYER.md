@@ -170,7 +170,8 @@ server  session → seat
           passes) appended to the hand's log, with its result once it ends
         then, when a hand ended, count it (unless it ended the game) and
           tally the players; when the game ended, finish it (who finished
-          where, the room, the game's row) and count its end for the funnel.
+          where, the room, the game's row) and count its end for the funnel,
+          and poke the room's channel too, for a lobby open on it.
           A failure here is logged, and the move still counts; a finish that
           failed is written again by the next request that touches the game
           (which never counts the end a second time)
@@ -179,10 +180,10 @@ server  session → seat
 ```
 
 "I'm back" (`POST /api/games/:id/back`) and the host's "let a bot play"
-(`POST /api/games/:id/away`, `{ seat, sawAt }`) go the same way, as a
-change to who plays a seat instead of a move, through the same commit, and
-are tried again on a fresh read if another request saves first (three
-tries).
+(`POST /api/games/:id/away`, `{ seat, sawAt, sawVersion }`) go the same
+way, as a change to who plays a seat instead of a move, through the same
+commit, and are tried again on a fresh read if another request saves first
+(three tries).
 
 Implemented in `apps/web/lib/live/`: `table.ts` is the pure part (settle,
 deadlines, expiry, `step`), covered by tests that play whole hands through
@@ -317,6 +318,8 @@ tried again on a fresh read (five tries, `VOTE_ATTEMPTS`), so four people
 tapping together while their phones tick never bounce off each other. A
 tap on a hand that has already started does nothing, except bring its
 person back like any tap; one from a phone on the same person counts once.
+Either is still saved, for its moment: it's a tap, so the host can't hand
+that seat to a bot straight after it.
 A page loaded before votes sends no hand: its tap is checked against the
 version it saw, as any move is, and then counts as a vote. After the last
 hand there is no next hand: the game has already ended.
@@ -360,8 +363,13 @@ that lands just after the game's end is saved (the last hand scored, its
 finish not yet written) gives nothing up: the finish is written instead,
 and the seat stays theirs for the host's next deal. So does one that lands
 a moment after that end, before its finish closes the room: the final table
-has them seated, so closing the room hands the bot's seat back to them. In
-the lobby, leaving simply empties the seat.
+has them seated, so once the room is closed the bot's seat is handed back
+to them, worked out afresh from the room as it reads then (a newcomer who
+has sat in another seat meanwhile doesn't stop it; one who has taken that
+very seat keeps it), and the lobby is poked. If the room keeps changing
+under it, or the write fails, the game's own row isn't written yet, so the
+next request that touches the game finishes it again, give-back and all.
+In the lobby, leaving simply empties the seat.
 
 **Someone who's stepped away.** Turn limits nudge at 20 seconds
 remaining. A turn, or a pass of tiles, whose clock runs out on someone is a
@@ -374,10 +382,16 @@ the people still here. Everyone sees "Sana's away, so a bot's playing their
 tiles for now." and her pill reads "Sana · away". The host (whoever has the
 host's powers, below) can also tap a person's name to let a bot play for
 them straight away; that's refused, with the table, if that person has
-tapped something since the host's table was sent. While away, a panel at
-the bottom of their own table says why and what the bot has done for them
-so far, and "I'm back" hands the seat back ("Welcome back."). Any move of
-their own but a pass, or a Next hand tap, brings them back too. A late tap,
+tapped something since the host's table was sent. That's judged by
+versions: each tap is saved with the version of the table that carries it,
+and the host's request says which version they were looking at, since a
+tap that began before the host's table was read can still land after it.
+(A page loaded before versions were sent, or a tap saved before they were
+kept, is judged by the server's clock on the host's table instead.) While
+away, a panel at the bottom of their own table says why and what the bot
+has done for them so far, and "I'm back" hands the seat back ("Welcome
+back."). Any move of their own but a pass, or a Next hand tap, brings them
+back too. A late tap,
 sent after their own clock had run out and the bot had moved for them, is
 let go rather than refused, and isn't counted as a miss. Someone away when a
 hand ends keeps its points, but the hand isn't tallied on their profile.

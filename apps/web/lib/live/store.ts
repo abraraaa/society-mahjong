@@ -6,7 +6,7 @@ import { createServiceClient } from '../supabase/service';
 import { HttpError, must, SupabaseError, type SupabaseFailure } from './errors';
 import { finalPlayers } from './final';
 import { commitArgs, type TableWrite } from './hand-log';
-import { seatsBack } from './seating';
+import { SEAT_ATTEMPTS, seatsBack } from './seating';
 import { stageFromStats, tallyHand, type ProfileStats } from './stage';
 import { NEW_TABLE, parseTableState, tableStateJson, wakeAt, type GameOver, type TableState } from './table-state';
 import type { Deadlines, LiveGame, LoggedMove, RoomStatus, Seats } from './types';
@@ -329,8 +329,9 @@ export async function recordHand(seats: Seats, state: HandState, away: readonly 
  *   1. who finished where (game_players: every seat's final score and place),
  *      one row per seat, overwriting the rows the deal wrote;
  *   2. the room, back to the lobby's "finished", only while it still holds
- *      this game and is playing it, with the seat given back to anyone who
- *      left as the last hand was scored (closeRoom);
+ *      this game and is playing it; then, while it's between games after
+ *      this one, the seat given back to anyone who left as the last hand was
+ *      scored, on a repeat finish too (closeRoom);
  *   3. the game's own row: its status, when and how it ended, who ended it,
  *      and how many hands were played.
  * The game's status is last because it's what tells a later request the job
@@ -375,28 +376,68 @@ export async function finishGame(gameId: string, room: Pick<RoomRow, 'id'>, over
 /**
  * The room's game is over: it goes back to the lobby's "finished". Only while
  * the room still holds this game and is still playing it: one the host has
- * dealt again keeps its new game, and a repeat finish writes nothing, so it
- * never moves `updated_at` under a host who is about to tap Start.
+ * dealt again keeps its new game, and a repeat finish doesn't close it again,
+ * so it never moves `updated_at` under a host who is about to tap Start.
  *
  * Then anyone who left as the last hand was scored gets their seat back
- * (seating.ts seatsBack, against `atEnd`, the game's final seats). A leave
- * reads the table, then saves the seats on the room's `updated_at`, and the
- * commit that ends the game doesn't touch the room, so a leave can land after
- * the end and give the seat to a bot. Closing moves `updated_at`, so a leave
- * that hasn't landed by then loses, reads again and finds the game over; one
- * that has landed is in the seats the close hands back, and is undone here,
- * on the `updated_at` the close wrote. A lost race there (someone sat down in
- * the lobby first) or a room that wasn't closed just now writes nothing.
+ * (giveSeatsBack). A leave reads the table, then saves the seats on the
+ * room's `updated_at`, and the commit that ends the game doesn't touch the
+ * room, so a leave can land after the end and give the seat to a bot.
+ * Closing moves `updated_at`, so a leave that hasn't landed by then loses,
+ * reads again and finds the game over; one that has landed is in the seats
+ * the close reads back, and is undone there.
  */
 async function closeRoom(client: ReturnType<typeof db>, gameId: string, roomId: string, atEnd: Seats, now: string): Promise<void> {
   const closed = must(
-    await client.from('rooms').update({ status: 'finished', updated_at: now }).eq('id', roomId).eq('current_game_id', gameId).eq('status', 'playing').select('seats, updated_at'),
+    await client.from('rooms').update({ status: 'finished', updated_at: now }).eq('id', roomId).eq('current_game_id', gameId).eq('status', 'playing').select(BETWEEN_GAMES),
     'close the room',
   );
-  const row = (closed as { seats: Seats; updated_at: string }[] | null)?.[0];
-  const seats = row ? seatsBack(row.seats, atEnd) : null;
-  if (!row || !seats) return;
-  must(await client.from('rooms').update({ seats, updated_at: new Date().toISOString() }).eq('id', roomId).eq('updated_at', row.updated_at), 'give back the seats');
+  await giveSeatsBack(client, gameId, roomId, atEnd, (closed as BetweenGames[] | null)?.[0] ?? null);
+}
+
+/** What giveSeatsBack reads of the room: whether it's still between games after this one, its seats, and its last write. */
+const BETWEEN_GAMES = 'status, current_game_id, seats, updated_at';
+type BetweenGames = Pick<RoomRow, 'status' | 'current_game_id' | 'seats' | 'updated_at'>;
+
+/**
+ * Anyone the game ended with (`atEnd`, its final seats) whose room seat has
+ * gone to a bot since gets it back (seating.ts seatsBack). Worked out afresh
+ * from each read of the room, and written on that read's `updated_at`, so a
+ * write the give-back loses to (someone sitting in another seat, say) only
+ * means reading again: the seat a person has taken since stays theirs, and
+ * the rest is still given back. Up to SEAT_ATTEMPTS reads; the last loss
+ * throws, like any failed write, so the game's own row isn't written yet and
+ * the next request that finishes it tries again.
+ *
+ * Only while the room is between games after this one (finished, and still
+ * pointed at it), so a room dealt again is never touched. That's also what
+ * makes it safe on a repeat finish, when `closed` is null (the room was
+ * closed before) and the room is read here instead: between games nothing
+ * but a leave that lost to the end puts a bot where the final table has a
+ * person, so a finish run again recovers a give-back that failed.
+ */
+async function giveSeatsBack(client: ReturnType<typeof db>, gameId: string, roomId: string, atEnd: Seats, closed: BetweenGames | null): Promise<void> {
+  let row = closed;
+  for (let attempt = 1; ; attempt++) {
+    row ??= must(await client.from('rooms').select(BETWEEN_GAMES).eq('id', roomId).maybeSingle(), 'read the room') as BetweenGames | null;
+    if (!row || row.status !== 'finished' || row.current_game_id !== gameId) return;
+    const seats = seatsBack(row.seats, atEnd);
+    if (!seats) return;
+    const wrote = must(
+      await client
+        .from('rooms')
+        .update({ seats, updated_at: new Date().toISOString() })
+        .eq('id', roomId)
+        .eq('current_game_id', gameId)
+        .eq('status', 'finished')
+        .eq('updated_at', row.updated_at)
+        .select('id'),
+      'give back the seats',
+    );
+    if (wrote?.length === 1) return;
+    if (attempt >= SEAT_ATTEMPTS) throw new Error('could not give back the seats: the room kept changing');
+    row = null;
+  }
 }
 
 /**

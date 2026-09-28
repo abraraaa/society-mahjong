@@ -28,7 +28,7 @@ export const AWAY_AFTER_MISSES = 2;
 const NOTHING_PLAYED: AwayPlayed = { turns: 0, sets: 0, exchanges: 0, wins: 0, hands: 0 };
 
 /** A seat nobody has missed a turn in, with nothing to tell: whose it is doesn't matter yet. */
-const FRESH: SeatAbsence = { userId: null, since: null, misses: 0, away: null, clockMoves: 0, lastClockMove: null, lastTap: null, played: NOTHING_PLAYED };
+const FRESH: SeatAbsence = { userId: null, since: null, misses: 0, away: null, clockMoves: 0, lastClockMove: null, lastTap: null, tapVersion: null, played: NOTHING_PLAYED };
 
 /** Everyone here, as a game starts. */
 export const EVERYONE_HERE: Absence = [FRESH, FRESH, FRESH, FRESH];
@@ -69,6 +69,7 @@ function entry(x: unknown): SeatAbsence {
     clockMoves: count(x['clockMoves']),
     lastClockMove: clockMove(x['lastClockMove']),
     lastTap: typeof lastTap === 'number' && Number.isFinite(lastTap) ? lastTap : null,
+    tapVersion: count(x['tapVersion']) || null,
     played: played(x['played']),
   };
 }
@@ -117,7 +118,7 @@ export function sameAbsence(a: Absence, b: Absence): boolean {
 
 /** An entry that's nobody's and says nothing, as a fresh table's are: it goes with any seat. */
 function isBlank(e: SeatAbsence): boolean {
-  return isFresh(e) && e.userId === null && e.since === null && e.lastTap === null;
+  return isFresh(e) && e.userId === null && e.since === null && e.lastTap === null && e.tapVersion === null;
 }
 
 /** Whether an entry is this seat's person's, for this sitting. */
@@ -184,14 +185,15 @@ export function awaySeats(seats: Seats, a: Absence | undefined): boolean[] {
 
 /**
  * The seat's person tapped something at the table (R4): no misses, not away,
- * nothing to tell them about what the bot did, and the moment noted, so the
+ * nothing to tell them about what the bot did, and the moment noted, with
+ * the version of the table that saves it (`version`, when known), so the
  * host's hand-over can't overrule a tap it never saw (R8). How many clock
  * moves they've had stays, so a notice is never shown twice. A seat without
  * a person is left as it is.
  */
-export function markPresent(a: Absence, seats: Seats, seat: Seat, now: number): Absence {
+export function markPresent(a: Absence, seats: Seats, seat: Seat, now: number, version: number | null = null): Absence {
   if (!isHuman(seats, seat)) return a;
-  return withEntry(a, seat, { ...own(a, seats, seat), misses: 0, away: null, lastTap: now, played: NOTHING_PLAYED });
+  return withEntry(a, seat, { ...own(a, seats, seat), misses: 0, away: null, lastTap: now, tapVersion: version, played: NOTHING_PLAYED });
 }
 
 /** A bot plays the seat for its person from now, for `reason`, with nothing played for them yet. Nothing changes for a seat already away, or one without a person. */

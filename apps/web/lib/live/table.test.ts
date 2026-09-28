@@ -907,8 +907,9 @@ describe('away seats', () => {
     const tick = step({ game: g, ruleset: karachi, seats, policy, now: T0 + 1 });
     expect(tick.changed).toBe(false);
     expect(tick.tableState.absence[ME].misses).toBe(1);
-    const r = step({ game: g, ruleset: karachi, seats, policy, now: T0 + 5, action: choice(g, ME), actor: ME });
-    expect(r.tableState.absence[ME]).toMatchObject({ misses: 0, away: null, lastTap: T0 + 5 });
+    const r = step({ game: g, ruleset: karachi, seats, policy, now: T0 + 5, action: choice(g, ME), actor: ME, version: 12 });
+    // Noted with the version this step saves the table as, for the host's hand-over (R8).
+    expect(r.tableState.absence[ME]).toMatchObject({ misses: 0, away: null, lastTap: T0 + 5, tapVersion: 12 });
   });
 
   it('changes nothing in the passer’s own entry for a pass: no miss cleared, not brought back, no tap noted', { timeout: 60_000 }, () => {
@@ -972,6 +973,34 @@ describe('away seats', () => {
         ME,
       ),
     ).toBe(true);
+  });
+
+  it('judges the host’s hand-over by versions when both sides have one, and by the clock only when either hasn’t', { timeout: 60_000 }, () => {
+    const g = first(SEEDS, (seed) => driveTo(seed, two, bilalsTurn));
+    const handOver = (game: LiveGame, sawAt: number | null, sawVersion?: number | null) => () =>
+      step({
+        game,
+        ruleset: karachi,
+        seats: two,
+        policy,
+        now: T0 + 50,
+        version: 9,
+        change: { type: 'letBotPlay', seat: ME, bySeat: 1, sawAt, ...(sawVersion !== undefined ? { sawVersion } : {}) },
+      });
+    // My tap's request began at T0 + 5, before the host's table was read at T0 + 10, but it landed after that read, as version 8.
+    const tapped: LiveGame = { ...g, tableState: { ...NEW_TABLE, absence: markPresent(EVERYONE_HERE, two, ME, T0 + 5, 8) } };
+    expect(handOver(tapped, T0 + 10, 7)).toThrow(JustPlayed);
+    // A host's table of version 8 or later had the tap in it, whatever its clock said.
+    expect(isAway(handOver(tapped, T0 + 1, 8)().tableState.absence, two, ME)).toBe(true);
+    // A page that sends no version is judged by the clock, as before.
+    expect(isAway(handOver(tapped, T0 + 10)().tableState.absence, two, ME)).toBe(true);
+    expect(handOver(tapped, T0 + 1, null)).toThrow(JustPlayed);
+    // So is a tap saved before versions were kept.
+    const before: LiveGame = { ...g, tableState: { ...NEW_TABLE, absence: markPresent(EVERYONE_HERE, two, ME, T0 + 5) } };
+    expect(handOver(before, T0 + 1, 20)).toThrow(JustPlayed);
+    expect(isAway(handOver(before, T0 + 10, 3)().tableState.absence, two, ME)).toBe(true);
+    // The host's own tap is noted with the version this step saves as.
+    expect(handOver(tapped, T0 + 1, 8)().tableState.absence[1]).toMatchObject({ lastTap: T0 + 50, tapVersion: 9 });
   });
 
   it('plays a seat handed over on its own turn at once, and starts a clock for whoever is next', { timeout: 60_000 }, () => {

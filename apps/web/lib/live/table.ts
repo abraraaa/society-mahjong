@@ -285,6 +285,8 @@ export interface StepInput {
   readonly change?: SeatChange;
   /** end the game here, before its last hand is scored: the host ending it, nobody playing it for hours, or the last person leaving; never with an action */
   readonly end?: GameEnd;
+  /** the version this step saves the table as, once committed (the one read, plus one): noted with each tap it counts, so the host's hand-over can tell a tap the host saw from one they didn't (R8) */
+  readonly version?: number;
 }
 
 export interface StepResult extends LiveGame {
@@ -331,7 +333,8 @@ export interface StepResult extends LiveGame {
  * (R4), and so does "I'm back" (`change: back`). A move that arrives after
  * its own clock ran out in this same step isn't played, nor counted as a miss
  * (`dropped`, R5). The host's `change: letBotPlay` hands another person's
- * seat to a bot, unless they've tapped since the host's table was sent. When
+ * seat to a bot, unless they've tapped since the host's table was sent
+ * (judged by `version`, when given, against the host's `sawVersion`). When
  * the table still waits on the same decision, for no new person, its clock
  * keeps running (R7).
  *
@@ -342,7 +345,8 @@ export interface StepResult extends LiveGame {
  * or going away during the wait never holds it up. That start time is the
  * finished hand's turn clock, so the page's tick and the sweep come for it.
  * A tap names the hand it was made on; one for a hand that has already
- * started does nothing but bring its person back (R4).
+ * started does nothing but bring its person back (R4). Every tap is saved,
+ * even one that adds no vote, for its moment (R8).
  *
  * The game ends in the step that ends it (R12), with `tableState.over` set:
  * when its last hand is scored, however that happened (a move, a clock, the
@@ -389,7 +393,8 @@ export function step(input: StepInput): StepResult {
   const { action, actor } = input;
   const isMove = !!action && action.type !== 'nextHand';
   // A tap is presence (R4): any action of a person's own, but letting a tile go, which is what their clock would have done.
-  if (action && action.type !== 'pass' && actor !== undefined) absence = markPresent(absence, seats, actor, now);
+  const saving = input.version ?? null;
+  if (action && action.type !== 'pass' && actor !== undefined) absence = markPresent(absence, seats, actor, now, saving);
 
   const settleNow = (from: HandState) => {
     const settled = settleLogged(from, ruleset, seats, { ...(input.bots ? { bots: input.bots } : {}), absence });
@@ -436,16 +441,21 @@ export function step(input: StepInput): StepResult {
     const target = seats[change.seat];
     if (change.type === 'back') {
       const wasAway = isAway(absence, seats, change.seat);
-      absence = markPresent(absence, seats, change.seat, now);
+      absence = markPresent(absence, seats, change.seat, now, saving);
       if (wasAway && live() && target?.kind === 'human') moves.push({ by: 'player', seat: change.seat, userId: target.userId, a: { type: 'back' } });
     } else {
       if (target?.kind !== 'human') throw new NotYourMove('a bot already plays that seat');
-      // A pass never stamps a tap (R4), so a page left open answering claim windows by itself never refuses this.
-      const tapped = absence[change.seat].lastTap;
-      if (change.sawAt !== null && tapped !== null && tapped > change.sawAt) throw new JustPlayed();
+      // A pass never stamps a tap (R4), so a page left open answering claim windows by itself never refuses this. A tap the host
+      // never saw is one saved after the table they were looking at: by version, since a tap's time is when its request began, and
+      // one that began before the host's table was read can land after it. By the clock only when either side has no version (a
+      // tap saved, or a page loaded, before versions were kept).
+      const e = absence[change.seat];
+      const sawVersion = change.sawVersion ?? null;
+      const unseen = sawVersion !== null && e.tapVersion !== null ? e.tapVersion > sawVersion : change.sawAt !== null && e.lastTap !== null && e.lastTap > change.sawAt;
+      if (unseen) throw new JustPlayed();
       const host = seats[change.bySeat];
       const wasAway = isAway(absence, seats, change.seat);
-      absence = markPresent(markAway(absence, seats, change.seat, 'host'), seats, change.bySeat, now);
+      absence = markPresent(markAway(absence, seats, change.seat, 'host'), seats, change.bySeat, now, saving);
       if (!wasAway && live()) moves.push({ by: 'host', seat: change.seat, ...(host?.kind === 'human' ? { userId: host.userId } : {}), a: { type: 'away', reason: 'host' } });
     }
     settleNow(s);
@@ -476,7 +486,7 @@ export function step(input: StepInput): StepResult {
           // A finished last hand the natural end never saw (saved before it existed): the tap ends the game.
           table = { ...table, over: endOfGame('complete', s, table, seats, null, now) };
         } else if (entry?.kind === 'human') {
-          // Counted once per person, however many phones or taps; a second one changes nothing, and saves nothing.
+          // Counted once per person, however many phones or taps; a second one adds no vote, and saves only its moment (below).
           table = voteNextHand(table, h0, entry.userId, now);
         }
       }
@@ -521,6 +531,9 @@ export function step(input: StepInput): StepResult {
   // Anything new in the table itself or its bookkeeping is a change too: a move, the running scores, someone's absence
   // (a reset of a seat's old entry included), a vote for the next hand, or the game's end.
   if (s !== before || !sameTableState(table, tableBefore)) changed = true;
+  // A Next hand tap is presence (R4) even when it changes nothing else, a second vote or one on a hand that has already started
+  // (R16): its moment is saved all the same, so the host's hand-over can't overrule a tap it never saw (R8).
+  if (action?.type === 'nextHand') changed = true;
   const policy = input.levels ? policyFor(presentLevels(input.levels, seats, absence), input.strict ?? false) : input.policy;
   // The same decision as before, waiting on nobody new (one person answered and another still owes theirs, someone came
   // back, a seat nobody was waiting on went to a bot): its clock keeps running (R7). Never a clock that has just run out:

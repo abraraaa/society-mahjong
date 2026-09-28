@@ -144,11 +144,19 @@ async function healFinish(gameId: string, room: RoomRow, over: GameOver, version
  * STALE_GAME_MS is ended as idle (endIfStale), before the room is joined or
  * dealt again. The room then comes back as that left it. If the finish didn't
  * get as far as the room, the room still reads as finished, as one left
- * "playing" by a game that has ended always does (rooms.ts withGameOver). Any
- * other room comes back as it was.
+ * "playing" by a game that has ended always does (rooms.ts withGameOver).
+ *
+ * So does a room already closed whose game still reads active: its finish
+ * closed the room and stopped before the game's own row, most likely at the
+ * seat it had to give back to someone who left as the last hand was scored
+ * (store.ts closeRoom). A final table doesn't poll, so nobody may look at
+ * that game again before the host deals: it's finished here, and the seat
+ * given back, before the room is joined or dealt again. Any other room comes
+ * back as it was.
  */
 export async function settleRoomGame(room: RoomRow, now = Date.now()): Promise<RoomRow> {
   const gameId = room.current_game_id;
+  if (room.status === 'finished' && gameId !== null) return finishClosedRoomGame(room, gameId);
   if (room.status !== 'playing' || gameId === null) return room;
   const meta = await liveMeta(gameId);
   if (!meta) return room;
@@ -157,6 +165,16 @@ export async function settleRoomGame(room: RoomRow, now = Date.now()): Promise<R
   else if (!isStale(lastActed(meta), now) || !(await endIfStale(gameId, now))) return room;
   const fresh = (await roomById(room.id)) ?? room;
   return fresh.status === 'playing' && fresh.current_game_id === gameId ? { ...fresh, status: 'finished' } : fresh;
+}
+
+/** settleRoomGame for a room already closed: its game's finish run again when the game still reads active and its end is saved. */
+async function finishClosedRoomGame(room: RoomRow, gameId: string): Promise<RoomRow> {
+  const game = await gameById(gameId);
+  if (game?.status !== 'active') return room;
+  const meta = await liveMeta(gameId);
+  if (!meta?.table.over) return room;
+  await healFinish(gameId, room, meta.table.over, meta.version);
+  return (await roomById(room.id)) ?? room;
 }
 
 /** The caller's current view. Spectators (seated nowhere) get the public view. */
@@ -300,6 +318,8 @@ async function applyStep(
       bots,
       levels,
       strict,
+      // What this step saves as if its commit lands; a commit that loses is stepped again on a fresh read, with that one's.
+      version: live.version + 1,
     });
   } catch (err) {
     // Refused with the table attached, so the host's sheet shows who's just played.
@@ -350,7 +370,10 @@ async function applyStep(
     gameOver: result.gameOver,
     ...(over?.how === 'abandoned' ? { abandoned: true } : {}),
   });
-  await afterCommit(steps, () => broadcast([poke]), { gameId: game.id, version });
+  // A game's end closes its room, and may give a seat back to someone whose leave landed as the last hand was scored (their
+  // leave has already told the room a bot has it), so a lobby open on the room hears too, as it does from a heal.
+  const pokes = result.gameOver ? [poke, roomPoke(room.id, 'seats', {})] : [poke];
+  await afterCommit(steps, () => broadcast(pokes), { gameId: game.id, version });
 
   // What a clock did for the caller rides in their own `mine`, on whichever phone's request resolved it; another seat's stays theirs.
   return snapshot(c, { version, deadlines: result.deadlines, state: next, table: result.tableState }, now);
@@ -431,7 +454,7 @@ export async function endIfStale(gameId: string, now = Date.now()): Promise<bool
 }
 
 /** What a page asks of changeSeat, before it's checked: its own person back, or (the host) a bot for someone else's seat. */
-export type SeatChangeRequest = { readonly type: 'back' } | { readonly type: 'letBotPlay'; readonly seat: unknown; readonly sawAt: unknown };
+export type SeatChangeRequest = { readonly type: 'back' } | { readonly type: 'letBotPlay'; readonly seat: unknown; readonly sawAt: unknown; readonly sawVersion?: unknown };
 
 /**
  * Who plays a seat (R4, R8): "I'm back" from someone a bot has been playing
@@ -439,7 +462,8 @@ export type SeatChangeRequest = { readonly type: 'back' } | { readonly type: 'le
  * after they've stepped away. Saved with the table, like a move, on a fresh
  * read each time someone else's commit lands first (three tries). The host's
  * hand-over is refused when its person has tapped since the host's table was
- * sent (`sawAt`, the server's clock on it): 409 with the table, so the host
+ * sent (`sawVersion`, that table's version; `sawAt`, the server's clock on
+ * it, for a page that sends no version): 409 with the table, so the host
  * sees them still playing. One that changes nothing (back when already here,
  * a seat already away) writes nothing and gives the table as it is.
  */
@@ -470,7 +494,8 @@ export async function changeSeat(gameId: string, userId: string, request: SeatCh
       // Here, before the step, whose own check would call it someone else's seat (403).
       if (!isHuman(room.seats, target)) throw new HttpError(409, 'a bot already plays that seat');
       const sawAt = typeof request.sawAt === 'number' && Number.isFinite(request.sawAt) ? request.sawAt : null;
-      change = { type: 'letBotPlay', seat: target, bySeat: seat, sawAt };
+      const sawVersion = typeof request.sawVersion === 'number' && Number.isSafeInteger(request.sawVersion) && request.sawVersion >= 0 ? request.sawVersion : null;
+      change = { type: 'letBotPlay', seat: target, bySeat: seat, sawAt, sawVersion };
     }
     return applyStep(caller, live, { action: null, change }, now);
   });
@@ -519,7 +544,8 @@ export async function leaveGame(gameId: string, userId: string, now = Date.now()
     const seats = withBots(vacated);
     // Optimistic on the room's updated_at: two people standing up at once means the second reads again and empties only their own seat.
     // An end committed after the read above doesn't move updated_at, so this can still land after it; the finish then gives the seat
-    // back as it closes the room (store.ts closeRoom), and a close that lands first makes this lose, and the loop finds the game over.
+    // back once it has closed the room (store.ts closeRoom), on a fresh read of the room, and a finish run again does the same if
+    // that failed. A close that lands first makes this lose, and the loop finds the game over.
     if (await saveSeats(room.id, seats, room.updated_at)) {
       await broadcast([roomPoke(room.id, 'seats', { seats: publicSeats(seats, meta?.table.absence) })]);
       // The bot now in the seat may owe the table a move: settle it straight away. The seat is already given up, so a failure

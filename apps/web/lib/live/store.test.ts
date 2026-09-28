@@ -175,6 +175,20 @@ const write: TableWrite = {
 const END = Date.parse('2026-09-24T22:00:00.000Z');
 const OVER: GameOver = { how: 'complete', by: null, at: END, hands: 16, scores: [2000, 14504, -8000, -8504], seats };
 
+/** The room's updated_at as the close wrote it. */
+const CLOSED_AT = '2026-09-24T22:00:01.000Z';
+/** The one row of the room a finish writes, by what it writes: the close sets the status, a give-back the seats. */
+const written = (q: Query): Record<string, unknown> => (q.steps[0]?.[1][0] ?? {}) as Record<string, unknown>;
+const isClose = (q: Query) => is('rooms', 'update')(q) && 'status' in written(q);
+const isGiveBack = (q: Query) => is('rooms', 'update')(q) && 'seats' in written(q);
+/** The room as a finish reads it back: between games after this one, unless `extra` says otherwise. */
+const between = (roomSeats: Seats, extra: Partial<RoomRow> = {}) => ({ status: 'finished', current_game_id: GAME, seats: roomSeats, updated_at: CLOSED_AT, ...extra });
+/** A finish's queries answered as the database would: the close matches the room and reads back `roomSeats`, and a give-back lands. */
+const closing =
+  (roomSeats: Seats) =>
+  (q: Query): unknown =>
+    isClose(q) ? [between(roomSeats)] : isGiveBack(q) ? [{ id: 'r-1' }] : null;
+
 beforeEach(() => {
   supabase.log.length = 0;
   answerAll();
@@ -382,7 +396,7 @@ const WRITES: readonly Write[] = [
     data: dealAnswers,
     dropsGame: true,
   },
-  { name: 'finishGame', run: () => finishGame(GAME, room, OVER), labels: ['record how everyone finished', 'close the room', 'finish the game'] },
+  { name: 'finishGame', run: () => finishGame(GAME, room, OVER), data: closing(seats), labels: ['record how everyone finished', 'close the room', 'finish the game'] },
   { name: 'countHand', run: () => countHand(GAME), labels: ['count the hand'] },
 ];
 
@@ -573,6 +587,8 @@ describe('finishing a game', () => {
   /** The first argument of the first query on this table made this way: the row(s) it wrote. */
   const wrote = (target: string, method: string): unknown => supabase.log.find(is(target, method))!.steps[0]![1][0];
 
+  beforeEach(() => answerAll(undefined, closing(seats)));
+
   it('writes who finished where, closes the room, then marks the game, in that order, leaving the table itself alone', async () => {
     await finishGame(GAME, room, OVER);
     expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'games:update']);
@@ -612,51 +628,119 @@ describe('finishing a game', () => {
     expect(game).not.toHaveProperty('finished_at');
   });
 
-  it('closes the room only while it still holds this game and is playing it, so a repeat, or a room dealt again, writes nothing to it', async () => {
+  it('closes the room only while it still holds this game and is playing it, so a repeat, or a room dealt again, doesn’t close it again', async () => {
     await finishGame(GAME, room, OVER);
-    const closeRoom = supabase.log.find(is('rooms', 'update'))!;
-    expect(closeRoom.steps).toContainEqual(['eq', ['id', 'r-1']]);
-    expect(closeRoom.steps).toContainEqual(['eq', ['current_game_id', GAME]]);
-    expect(closeRoom.steps).toContainEqual(['eq', ['status', 'playing']]);
+    const close = supabase.log.find(isClose)!;
+    expect(close.steps).toContainEqual(['eq', ['id', 'r-1']]);
+    expect(close.steps).toContainEqual(['eq', ['current_game_id', GAME]]);
+    expect(close.steps).toContainEqual(['eq', ['status', 'playing']]);
+    expect(close.steps).toContainEqual(['select', ['status, current_game_id, seats, updated_at']]);
 
-    // A room that has moved on, or already closed, matches no row, which is not a failure: the old game is still finished.
+    // A room that has moved on, or already closed, matches no row, which is not a failure: the old game is still finished. The
+    // room is read instead, for the give-back, and this one has nothing to give back.
     supabase.log.length = 0;
-    answerAll(undefined, () => []);
+    answerAll(undefined, (q) => (isClose(q) ? [] : is('rooms', 'select')(q) ? between(seats) : null));
     await finishGame(GAME, room, OVER);
-    expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'games:update']);
+    expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:select', 'games:update']);
   });
 
   describe('someone leaving as the last hand is scored', () => {
     /** The room as the close finds it: Hana's leave landed after the end was committed, and a bot has her seat. */
-    const CLOSED_AT = '2026-09-24T22:00:01.000Z';
     const left: Seats = [seats[0], { kind: 'bot', name: 'Ayesha' }, seats[2], seats[3]];
-    const closing = (roomSeats: Seats) => (q: Query) => (is('rooms', 'update')(q) && q.steps.some(([m]) => m === 'select') ? [{ seats: roomSeats, updated_at: CLOSED_AT }] : null);
+    const zara = { kind: 'human', userId: 'u-zara', name: 'Zara', since: '2026-09-24T22:00:02.000Z' } as const;
+    /** The room read again after the close, `updated_at` moved on by whatever landed in between. */
+    const LATER = '2026-09-24T22:00:02.500Z';
+    const reads = (row: unknown) => (q: Query) => (is('rooms', 'select')(q) ? row : null);
+    /** A give-back that loses (someone else wrote the room first) matches no row. */
+    const losing = (n: number) => {
+      let lost = 0;
+      return (q: Query) => (isGiveBack(q) && lost++ < n ? [] : undefined);
+    };
+    /** The first of these answers that has one for the query, else the usual. */
+    const answers =
+      (...fns: ((q: Query) => unknown)[]) =>
+      (q: Query): unknown => {
+        for (const fn of fns) {
+          const out = fn(q);
+          if (out !== undefined && out !== null) return out;
+        }
+        return closing(left)(q);
+      };
+    const givenBack = () => supabase.log.filter(isGiveBack);
 
-    it('gives the seat back as it closes the room, on the time the close wrote, so the final table and the room agree', async () => {
+    it('gives the seat back once it has closed the room, on the time the close wrote, while the room is between games after this one', async () => {
       answerAll(undefined, closing(left));
       await finishGame(GAME, room, OVER);
       expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:update', 'games:update']);
-      const [close, back] = supabase.log.filter(is('rooms', 'update'));
-      expect(close!.steps).toContainEqual(['select', ['seats, updated_at']]);
+      const [back] = givenBack();
       expect(back!.steps[0]).toEqual(['update', [{ seats, updated_at: expect.any(String) }]]);
       expect(back!.steps).toContainEqual(['eq', ['id', 'r-1']]);
-      // Only if nobody has written the room since the close: a person who sat down first keeps the seat.
+      // Only if nobody has written the room since the close, and it hasn't been dealt again.
       expect(back!.steps).toContainEqual(['eq', ['updated_at', CLOSED_AT]]);
+      expect(back!.steps).toContainEqual(['eq', ['current_game_id', GAME]]);
+      expect(back!.steps).toContainEqual(['eq', ['status', 'finished']]);
     });
 
-    it('writes nothing more when nobody left at the last moment, or the room wasn’t closed just now', async () => {
-      answerAll(undefined, closing(seats));
+    it('still gives the seat back when a write that has nothing to do with it lands first, such as someone sitting in another seat', async () => {
+      // Bilal's seat comes before Hana's here, so a newcomer taking the first bot's seat between games takes his, not hers.
+      const atEnd: Seats = [seats[0], seats[2], seats[1], seats[3]];
+      const leftHers: Seats = [seats[0], seats[2], { kind: 'bot', name: 'Ayesha' }, seats[3]];
+      const joined: Seats = [seats[0], zara, { kind: 'bot', name: 'Ayesha' }, seats[3]];
+      answerAll(
+        undefined,
+        answers(losing(1), (q) => (isClose(q) ? [between(leftHers)] : undefined), reads(between(joined, { updated_at: LATER }))),
+      );
+      await finishGame(GAME, room, { ...OVER, seats: atEnd });
+      expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:update', 'rooms:select', 'rooms:update', 'games:update']);
+      const [, again] = givenBack();
+      // Worked out afresh from the room as it now is: Zara keeps the seat she took, and Hana gets hers back.
+      expect(written(again!)).toEqual({ seats: [seats[0], zara, seats[1], seats[3]], updated_at: expect.any(String) });
+      expect(again!.steps).toContainEqual(['eq', ['updated_at', LATER]]);
+    });
+
+    it('never takes back a seat a person has taken since, and then writes nothing more', async () => {
+      answerAll(undefined, answers(losing(1), reads(between([seats[0], zara, seats[2], seats[3]], { updated_at: LATER }))));
       await finishGame(GAME, room, OVER);
-      expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'games:update']);
-      // A repeat finish: the room is closed already, so the close matches nothing and nothing is given back.
-      supabase.log.length = 0;
-      answerAll(undefined, (q) => (is('rooms', 'update')(q) ? [] : null));
+      expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:update', 'rooms:select', 'games:update']);
+    });
+
+    it('gives up after three writes that lose, throwing so the game stays active and the next finish tries again', async () => {
+      answerAll(undefined, answers(losing(3), reads(between(left, { updated_at: LATER }))));
+      expect(await thrown(finishGame(GAME, room, OVER))).toMatchObject({ message: 'could not give back the seats: the room kept changing' });
+      expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:update', 'rooms:select', 'rooms:update', 'rooms:select', 'rooms:update']);
+    });
+
+    it('gives the seat back on a repeat finish, from the room as it reads, when a give-back before it failed', async () => {
+      answerAll(
+        undefined,
+        answers((q) => (isClose(q) ? [] : undefined), reads(between(left, { updated_at: LATER }))),
+      );
+      await finishGame(GAME, room, OVER);
+      expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:select', 'rooms:update', 'games:update']);
+      const [back] = givenBack();
+      expect(written(back!)).toEqual({ seats, updated_at: expect.any(String) });
+      expect(back!.steps).toContainEqual(['eq', ['updated_at', LATER]]);
+    });
+
+    it('never touches a room dealt again, or one that isn’t there any more', async () => {
+      for (const row of [between(left, { status: 'playing', current_game_id: 'g-2' }), between(left, { current_game_id: 'g-2' }), null]) {
+        supabase.log.length = 0;
+        answerAll(
+          undefined,
+          answers((q) => (isClose(q) ? [] : undefined), reads(row)),
+        );
+        await finishGame(GAME, room, OVER);
+        expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:select', 'games:update']);
+      }
+    });
+
+    it('writes nothing more when nobody left at the last moment', async () => {
       await finishGame(GAME, room, OVER);
       expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'games:update']);
     });
 
     it('throws naming the give-back when it fails, leaving the game active', async () => {
-      answerAll((q) => supabase.log.filter(is('rooms', 'update')).indexOf(q) === 1, closing(left));
+      answerAll(isGiveBack, closing(left));
       expect(await thrown(finishGame(GAME, room, OVER))).toMatchObject({ what: 'give back the seats' });
       expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:update']);
     });
@@ -665,14 +749,14 @@ describe('finishing a game', () => {
   it('leaves the game active whichever write fails, so it can be run again from the start', async () => {
     for (const i of [0, 1, 2]) {
       supabase.log.length = 0;
-      failNth(i);
+      failNth(i, closing(seats));
       await expect(finishGame(GAME, room, OVER)).rejects.toBeInstanceOf(SupabaseError);
       // The game's status is the last write: when anything before it fails it never runs, and when it fails it did not land.
       expect(supabase.log).toHaveLength(i + 1);
     }
     // Run again once the database is back, every write goes through, and writes the same.
     supabase.log.length = 0;
-    answerAll();
+    answerAll(undefined, closing(seats));
     await finishGame(GAME, room, OVER);
     expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'games:update']);
   });
@@ -681,7 +765,7 @@ describe('finishing a game', () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     const noProfile = { message: 'insert or update on table "game_players" violates foreign key constraint "game_players_user_id_fkey"', code: '23503' };
     let tries = 0;
-    supabase.answer = (q) => (is('game_players', 'upsert')(q) && tries++ === 0 ? { data: null, error: noProfile } : ok());
+    supabase.answer = (q) => (is('game_players', 'upsert')(q) && tries++ === 0 ? { data: null, error: noProfile } : ok(closing(seats)(q)));
     await finishGame(GAME, room, OVER);
     expect(ran()).toEqual(['game_players:upsert', 'game_players:upsert', 'rooms:update', 'games:update']);
     const [, again] = supabase.log.filter(is('game_players', 'upsert'));

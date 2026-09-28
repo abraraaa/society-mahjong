@@ -107,11 +107,29 @@ describe('POST /api/rooms/[code]/join', () => {
     expect(events.recordEvent).not.toHaveBeenCalled();
   });
 
-  it('asks nothing of the live table for a room between games', async () => {
+  it('asks nothing of the live table for a room between games whose game is recorded', async () => {
     db.room = { ...room, status: 'finished' };
+    db.game = { ...active, status: 'finished' };
     const res = await join();
     expect(res.status).toBe(200);
     expect(store.liveMeta).not.toHaveBeenCalled();
+    expect(store.finishGame).not.toHaveBeenCalled();
+  });
+
+  it('finishes a game whose finish closed the room but not the game, before seating anyone, so a seat it owes is given back first', async () => {
+    // Bilal left as the last hand was scored and his seat went to a bot; the finish closed the room and failed to give it back.
+    const bilal = { kind: 'human', userId: 'u-bilal', name: 'Bilal' } as const;
+    const closed: RoomRow = { ...room, status: 'finished', seats: [room.seats[0], { kind: 'bot', name: 'Ayesha' }, room.seats[2], room.seats[3]] };
+    db.room = closed;
+    db.meta = meta({ ...over, seats: [room.seats[0], bilal, room.seats[2], room.seats[3]] });
+    // Run again, the finish gives it back.
+    db.after = { ...closed, seats: [room.seats[0], bilal, room.seats[2], room.seats[3]], updated_at: CLOSED_AT };
+    const res = await join();
+    expect(res.status).toBe(200);
+    expect(store.finishGame).toHaveBeenCalledWith(GAME, closed, expect.objectContaining({ how: 'complete' }));
+    // Zara takes the first bot's seat of the room as the finish left it: Sana's, not the one given back to Bilal.
+    expect(vi.mocked(store.saveSeats).mock.calls[0]![2]).toBe(CLOSED_AT);
+    expect(await res.json()).toMatchObject({ status: 'finished', me: 2 });
   });
 });
 

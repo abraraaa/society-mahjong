@@ -69,8 +69,9 @@ export const api = {
   end: (gameId: string) => call<GameSnapshot>(`/api/games/${gameId}/end`, { method: 'POST' }),
   /** "I'm back": the reader's own seat, from the bot playing it for them */
   back: (gameId: string) => call<GameSnapshot>(`/api/games/${gameId}/back`, { method: 'POST' }),
-  /** the host hands someone's seat to a bot; `sawAt` is the server's clock on the table the host was looking at */
-  letBotPlay: (gameId: string, seat: number, sawAt: number) => call<GameSnapshot>(`/api/games/${gameId}/away`, { method: 'POST', body: JSON.stringify({ seat, sawAt }) }),
+  /** the host hands someone's seat to a bot; `sawAt` and `sawVersion` are the server's clock on the table the host was looking at, and its version */
+  letBotPlay: (gameId: string, seat: number, sawAt: number, sawVersion: number) =>
+    call<GameSnapshot>(`/api/games/${gameId}/away`, { method: 'POST', body: JSON.stringify({ seat, sawAt, sawVersion }) }),
   leaveRoom: (code: string) => call<RoomSnapshot>(`/api/rooms/${encodeURIComponent(code)}/leave`, { method: 'POST' }),
 };
 

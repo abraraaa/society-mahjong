@@ -438,9 +438,12 @@ describe('the next hand, with two people at the table', () => {
     expect(a.deadlines).toEqual({ claim: null, turn: T1 + NEXT_HAND_WAIT_MS });
     expect(nextHandWait(a.state, two, presentHumans(two, a.tableState.absence), a.tableState)).toEqual({ ready: [A], waiting: [B], startsAt: T1 + NEXT_HAND_WAIT_MS });
 
-    // Abrar again, from his other phone: counted once, so nothing to save.
+    // Abrar again, from his other phone: counted once, and the wait is as it was, but the tap is still a tap, saved for its
+    // moment, so the host can't hand his seat to a bot straight after it (R4, R8).
     const again = vote(a, A, T1 + 2_000);
-    expect(again.changed).toBe(false);
+    expect(again.changed).toBe(true);
+    expect(again.tableState.ready).toEqual(a.tableState.ready);
+    expect(again.tableState.absence[A].lastTap).toBe(T1 + 2_000);
     expect(again.deadlines).toEqual(a.deadlines);
     // A look before the wait is up changes nothing either.
     expect(step({ game: a, ruleset: karachi, seats: two, policy, now: T1 + 19_000, seed }).changed).toBe(false);
@@ -493,7 +496,9 @@ describe('the next hand, with two people at the table', () => {
     const a = vote(done(), A, T1);
     const started = vote(a, B, T1 + 5_000);
     const stale = step({ game: started, ruleset: karachi, seats: two, policy, now: T1 + 6_000, action: { type: 'nextHand', hand: 0 }, actor: B, seed });
-    expect(stale).toMatchObject({ changed: false, dealt: false, moves: [] });
+    // Saved for the tap's moment alone (R16: it still counts as presence), with the hand and its clock as they were.
+    expect(stale).toMatchObject({ changed: true, dealt: false, moves: [] });
+    expect(stale.tableState.absence[B].lastTap).toBe(T1 + 6_000);
     expect(stale.state).toBe(started.state);
     expect(stale.deadlines).toBe(started.deadlines);
 

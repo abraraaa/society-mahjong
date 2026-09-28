@@ -142,7 +142,7 @@ describe('tableStateJson', () => {
   it('writes who’s away only once some seat has something in it, and reads it back the same', () => {
     expect(tableStateJson(NEW_TABLE)).not.toHaveProperty('absence');
     const away = noteClockMove(markAway(EVERYONE_HERE, SEATS, 1, 'host'), SEATS, { by: 'clock', seat: 0, a: { type: 'discard', seat: 0, tile: 's5' } }, true);
-    const t: TableState = { ...NEW_TABLE, absence: markPresent(away, SEATS, 0, T0) };
+    const t: TableState = { ...NEW_TABLE, absence: markPresent(away, SEATS, 0, T0, 7) };
     const written = tableStateJson(t);
     expect(written['absence']).toEqual([
       {
@@ -153,6 +153,7 @@ describe('tableStateJson', () => {
         clockMoves: 1,
         lastClockMove: { by: 'clock', seat: 0, a: { type: 'discard', seat: 0, tile: 's5' } },
         lastTap: T0,
+        tapVersion: 7,
         played: { turns: 0, sets: 0, exchanges: 0, wins: 0, hands: 0 },
       },
       {
@@ -163,6 +164,7 @@ describe('tableStateJson', () => {
         clockMoves: 0,
         lastClockMove: null,
         lastTap: null,
+        tapVersion: null,
         played: { turns: 0, sets: 0, exchanges: 0, wins: 0, hands: 0 },
       },
       EVERYONE_HERE[2],

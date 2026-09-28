@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { EVERYONE_HERE, markAway, markPresent } from './absence';
-import { analysisBot, karachi, reduce, startHand, viewFor, type GameProgress, type HandState } from '@society/engine';
+import { EVERYONE_HERE, markAway, markPresent, noteClockMove } from './absence';
+import { analysisBot, karachi, legalActions, reduce, startHand, viewFor, type GameProgress, type HandState } from '@society/engine';
 import type { GameRow, LiveRow, RoomRow } from './store';
 import type { HandWrite, TableWrite } from './hand-log';
 import { dealFirstHand, deadlinesFor, settle, type StepResult } from './table';
-import type { GameOver, TableState } from './table-state';
+import type { Absence, GameOver, TableState } from './table-state';
 import type { ClientAction, Deadlines, Seats } from './types';
 import { STALE_GAME_MS } from './lifecycle';
 import { policyFor } from './policy';
@@ -586,7 +586,7 @@ describe('voting for the next hand', () => {
     expect(snap.nextHand).toEqual({ ready: [0], waiting: [1], startsAt: T0 + 1000 + WAIT });
   });
 
-  it('starts the next hand on the tick that finds the wait over, as nobody’s move, and then takes a late tap as nothing', async () => {
+  it('starts the next hand on the tick that finds the wait over, as nobody’s move, and then saves a late tap for its moment alone', async () => {
     const waiting: TableState = { ...FRESH, ready: { hand: 0, userIds: ['u-abrar'], dealAt: T0 + WAIT } };
     finishedPair(waiting, { claim: null, turn: T0 + WAIT });
     // Too soon: nothing to do, nothing written.
@@ -603,11 +603,32 @@ describe('voting for the next hand', () => {
     expect(snap.view.progress.handIndex).toBe(1);
     expect(snap.nextHand).toBeNull();
 
-    // Bilal's tap arrives after the start: nothing to save, and he gets the new hand.
+    // Bilal's tap arrives after the start: nothing changes at the table but his presence, which is saved for its moment all the
+    // same (R16), and he gets the new hand.
     const late = await actOnGame(GAME, 'u-bilal', { type: 'nextHand', hand: 0 }, 5, T0 + WAIT + 900);
-    expect(store.commitTable).toHaveBeenCalledTimes(1);
-    expect(late.version).toBe(6);
+    expect(commits()).toHaveLength(2);
+    const tap = commits().at(-1)!;
+    expect(tap.expected).toBe(6);
+    expect(tap.w).toMatchObject({ hands: [], deadlines: w.deadlines });
+    expect(tap.w.state.progress.handIndex).toBe(1);
+    expect(tap.w.table.absence[1]).toMatchObject({ userId: 'u-bilal', misses: 0, away: null, lastTap: T0 + WAIT + 900, tapVersion: 7 });
+    expect(late.version).toBe(7);
     expect(late.view.progress.handIndex).toBe(1);
+  });
+
+  it('saves a second vote from the same person for its moment, so the host can’t hand their seat to a bot straight after it', async () => {
+    finishedPair();
+    await actOnGame(GAME, 'u-bilal', { type: 'nextHand', hand: 0 }, 5, T0 + 1000);
+    // The host (Abrar: the room's host isn't seated, and he has sat longest) looks at the table, Bilal's vote in it.
+    const seen = await viewGame(GAME, 'u-abrar', T0 + 2000);
+    expect(seen).toMatchObject({ isHost: true, version: 6 });
+    // Bilal taps again, from his other phone: no second vote, but a tap all the same.
+    await actOnGame(GAME, 'u-bilal', { type: 'nextHand', hand: 0 }, 6, T0 + 3000);
+    expect(commits()).toHaveLength(2);
+    expect(commits()[1]!.w.table.ready).toEqual(commits()[0]!.w.table.ready);
+    const err = await rejection(changeSeat(GAME, 'u-abrar', { type: 'letBotPlay', seat: 1, sawAt: seen.now, sawVersion: seen.version }, T0 + 4000));
+    expect(err).toMatchObject({ status: 409, message: 'that player has just played' });
+    expect(commits()).toHaveLength(2);
   });
 });
 
@@ -1089,8 +1110,28 @@ describe('the end of the game', () => {
       expect(await settleRoomGame(room, T0)).toBe(room);
       expect(store.finishGame).not.toHaveBeenCalled();
       const between: RoomRow = { ...room, status: 'finished' };
+      // Its game still reads active, but its end isn't saved: nothing to finish.
       expect(await settleRoomGame(between, T0)).toBe(between);
-      expect(store.liveMeta).toHaveBeenCalledTimes(1);
+      expect(store.liveMeta).toHaveBeenCalledTimes(2);
+      // A finished game isn't looked at any further.
+      db.game = { ...(db.game as GameRow), status: 'finished' };
+      expect(await settleRoomGame(between, T0)).toBe(between);
+      expect(store.liveMeta).toHaveBeenCalledTimes(2);
+      const lobby: RoomRow = { ...room, status: 'lobby', current_game_id: null };
+      expect(await settleRoomGame(lobby, T0)).toBe(lobby);
+      expect(store.finishGame).not.toHaveBeenCalled();
+    });
+
+    it('finishes a game whose finish closed the room but stopped short of the game’s row, so its seat is given back before a join or a deal', async () => {
+      ended(OVER);
+      db.game = { ...(db.game as GameRow), status: 'active' };
+      const closed: RoomRow = { ...(db.room as RoomRow), status: 'finished' };
+      // The finish, run again, gives the seat back: the room comes back as it left it.
+      const back: RoomRow = { ...closed, updated_at: '2026-09-24T02:00:00Z' };
+      vi.mocked(store.roomById).mockResolvedValueOnce(back);
+      expect(await settleRoomGame(closed)).toBe(back);
+      expect(store.finishGame).toHaveBeenCalledWith(GAME, closed, OVER);
+      expect(broadcaster.roomPoke).toHaveBeenCalledWith('r-1', 'seats', {});
     });
   });
 });
@@ -1313,6 +1354,24 @@ describe('counting the end for the funnel', () => {
     expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 
+  it('pokes the room as well as the table when a move ends the game, after the finish, so a lobby open on it hears', async () => {
+    setTable();
+    const dealt = settle(startHand(karachi, { seed: 'svc-1', progress: NORTH_3, dealer: 3 }), karachi, seats);
+    const { late } = lastDecision(liveRow(dealt, { claim: null, turn: null }));
+    await actOnGame(GAME, 'u-abrar', null, null, late);
+    expect(broadcaster.roomPoke).toHaveBeenCalledWith('r-1', 'seats', {});
+    expect(broadcaster.broadcast).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(broadcaster.broadcast).mock.calls[0]![0]).toHaveLength(2);
+    expect(vi.mocked(store.finishGame).mock.invocationCallOrder[0]!).toBeLessThan(vi.mocked(broadcaster.broadcast).mock.invocationCallOrder[0]!);
+
+    // A hand that ends without ending the game leaves the room alone.
+    vi.clearAllMocks();
+    const live = setTable();
+    await actOnGame(GAME, 'u-abrar', null, null, lastDecision(live).late);
+    expect(theCommit().hand.ended).toBe(true);
+    expect(broadcaster.roomPoke).not.toHaveBeenCalled();
+  });
+
   it('counts the host’s end by the host, the idle end by nobody, and an abandon by the last to leave', async () => {
     setTable();
     db.room = { ...(db.room as RoomRow), seats: [seats[0], hana, seats[2], seats[3]] };
@@ -1369,7 +1428,7 @@ describe('someone away, and the host handing a seat over', () => {
   const hana = { kind: 'human', userId: 'u-hana', name: 'Hana' } as const;
   /** Hana, the room's host, seated beside Abrar. */
   const withHost: Seats = [seats[0], hana, seats[2], seats[3]];
-  const letBotPlay = (seat: unknown, sawAt: unknown = null) => ({ type: 'letBotPlay' as const, seat, sawAt });
+  const letBotPlay = (seat: unknown, sawAt: unknown = null, sawVersion: unknown = undefined) => ({ type: 'letBotPlay' as const, seat, sawAt, sawVersion });
 
   /** The table with Hana seated (not waited on: it's Abrar's decision), and whoever's absence given. */
   function hosted(absence = EVERYONE_HERE): LiveRow {
@@ -1379,15 +1438,48 @@ describe('someone away, and the host handing a seat over', () => {
     return db.live as LiveRow;
   }
 
+  /**
+   * The first claim window of the deal in which Hana (seat 1) could take the tile, before she has answered, with no clock
+   * running, and `absence` as given. A table at rest never has an away seat owing an answer (the bot gives it before anything
+   * is saved), so this is the one way to put an away person's pass through a step and its commit.
+   */
+  function claimWindow(absence: Absence): LiveRow {
+    const live = hosted(absence);
+    // Everyone plays as the analysis would until then, one move at a time.
+    let state = live.state;
+    const hanaCanClaim = () => state.phase === 'claim' && (legalActions(state, karachi, 1).claims?.length ?? 0) > 0;
+    for (let i = 0; i < 300 && !hanaCanClaim() && state.phase !== 'finished'; i++) {
+      const seat = state.phase === 'claim' ? ([0, 1, 2, 3] as const).find((x) => legalActions(state, karachi, x).claims !== undefined)! : state.turn;
+      state = reduce(state, analysisBot(viewFor(state, karachi, seat), karachi) ?? { type: 'pass', seat }, karachi);
+    }
+    expect(hanaCanClaim()).toBe(true);
+    db.live = { ...live, state, deadlines: { claim: null, turn: null } };
+    return db.live as LiveRow;
+  }
+
   it('leaves someone away when their own phone ticks, or passes: neither is a tap', async () => {
     hosted(markAway(EVERYONE_HERE, withHost, 1, 'host'));
     const snap = await actOnGame(GAME, 'u-hana', null, null, T0 + 1);
     expect(store.commitTable).not.toHaveBeenCalled();
     expect(snap.mine).toMatchObject({ away: 'host' });
-    // A pass from that phone has nothing to answer (the bot already has), and changes nothing.
-    await rejection(actOnGame(GAME, 'u-hana', { type: 'pass', seat: 1 }, null, T0 + 2));
+    // At rest, a pass from that phone has nothing to answer (the bot already has): it's refused, and nothing is written.
+    expect(await rejection(actOnGame(GAME, 'u-hana', { type: 'pass', seat: 1 }, null, T0 + 2))).toMatchObject({ status: 400 });
     expect(store.commitTable).not.toHaveBeenCalled();
+
+    // One that does answer something is played and saved, and still isn't a tap: she stays away, with no tap noted.
+    claimWindow(markAway(EVERYONE_HERE, withHost, 1, 'host'));
+    await actOnGame(GAME, 'u-hana', { type: 'pass', seat: 1 }, null, T0 + 3);
+    const { w, hand } = theCommit();
+    expect(hand.moves[0]).toMatchObject({ by: 'player', seat: 1, a: { type: 'pass', seat: 1 } });
+    expect(w.table.absence[1]).toMatchObject({ userId: 'u-hana', away: 'host', lastTap: null, tapVersion: null });
     expect((db.live as LiveRow).table.absence[1].away).toBe('host');
+  });
+
+  it('keeps a miss, and the last tap, through a pass: letting a tile go is what the clock would have done', async () => {
+    const tapped = markPresent(EVERYONE_HERE, withHost, 1, T0, 2);
+    claimWindow(noteClockMove(tapped, withHost, { by: 'clock', seat: 1, a: { type: 'discard', seat: 1, tile: 's5' } }, true));
+    await actOnGame(GAME, 'u-hana', { type: 'pass', seat: 1 }, null, T0 + 200);
+    expect(theCommit().w.table.absence[1]).toMatchObject({ misses: 1, away: null, lastTap: T0, tapVersion: 2 });
   });
 
   it('hands a seat to a bot for the host, saved as a person’s move with the host’s note, and plays it at once', async () => {
@@ -1434,6 +1526,25 @@ describe('someone away, and the host handing a seat over', () => {
     expect((await viewGame(GAME, 'u-hana', T0)).isHost).toBe(false);
     await changeSeat(GAME, 'u-hana', { type: 'back' }, T0 + 10);
     expect((await viewGame(GAME, 'u-hana', T0 + 20)).isHost).toBe(true);
+  });
+
+  it('refuses a tap the host never saw, by the version of the table the host was looking at, however early its request began', async () => {
+    const live = hosted();
+    // The host's table is read at T0 + 1000, before Abrar's move lands, though his request began at T0 + 500.
+    const seen = await viewGame(GAME, 'u-hana', T0 + 1000);
+    expect(seen.version).toBe(live.version);
+    const move = parseClientAction(analysisBot(viewFor(live.state, karachi, 0), karachi)!)!;
+    await actOnGame(GAME, 'u-abrar', move, live.version, T0 + 500);
+    expect(commits()[0]!.w.table.absence[0]).toMatchObject({ lastTap: T0 + 500, tapVersion: live.version + 1 });
+    const err = await rejection(changeSeat(GAME, 'u-hana', letBotPlay(0, seen.now, seen.version), T0 + 2000));
+    expect(err).toMatchObject({ status: 409, message: 'that player has just played' });
+    expect(commits()).toHaveLength(1);
+
+    // Once the host's table has that move in it, the hand-over goes through, even with a clock read before the move began.
+    const after = await viewGame(GAME, 'u-hana', T0 + 2500);
+    await changeSeat(GAME, 'u-hana', letBotPlay(0, T0 + 100, after.version), T0 + 3000);
+    expect(commits()).toHaveLength(2);
+    expect(commits()[1]!.w.table.absence[0]).toMatchObject({ userId: 'u-abrar', away: 'host' });
   });
 
   it('refuses when the one being handed over has tapped since the host’s table was sent, with the table', async () => {
