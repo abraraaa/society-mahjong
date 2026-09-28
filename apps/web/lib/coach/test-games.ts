@@ -39,9 +39,9 @@ export const LONG_NAME = 'Abcdefghijklmnopqrstuvwx';
 /** Display names as the solo table has them, with one seat at the longest name allowed. */
 export const NAMES: Readonly<Record<Seat, string>> = { 0: 'You', 1: 'Bilal', 2: LONG_NAME, 3: 'Ayesha' };
 
-/** What the tutor says to seat 0 on this view. */
-export function coachOf(view: PrivatePlayerView, stage: CoachStage = 'learning', analysis: HandAnalysis = analyseFor(view, karachi)): CoachState {
-  return coachFor({ view, ruleset: karachi, analysis, stage, names: NAMES });
+/** What the tutor says to seat 0 on this view: to someone who has just taken the seat over, with `firstLook`. */
+export function coachOf(view: PrivatePlayerView, stage: CoachStage = 'learning', analysis: HandAnalysis = analyseFor(view, karachi), firstLook = false): CoachState {
+  return coachFor({ view, ruleset: karachi, analysis, stage, names: NAMES, firstLook });
 }
 
 /** Seat 0's move: the tutor's advice, or a pass or a discard when the advice is only to wait. */

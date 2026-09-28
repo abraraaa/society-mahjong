@@ -19,10 +19,11 @@ import { GLOSSARY } from './glossary';
 import { goalFor } from './goal';
 import { hasWrittenShape, titleOf } from './shape';
 import { stripGroups } from './strip';
-import { NOTE_BUDGET, lessonFor, noteText } from './teach';
+import { firstLookFor } from './first-look';
+import { NOTE_BUDGET, createLessons, createTaughtStore, lessonFor, lineKey, noteText } from './teach';
 import { NAMES as LONG_NAMES, ROUNDS, coachOf, playHand } from './test-games';
 import type { CoachSegment, CoachState } from './types';
-import { SAY_BUDGET, isolate, textOf, visibleLength } from './words';
+import { SAY_BUDGET, isolate, myDiscardCount, textOf, visibleLength } from './words';
 
 const progressFor = (roundWind: Wind, handInRound: number): GameProgress => ({
   roundWind,
@@ -575,5 +576,112 @@ describe('what the tutor could teach a first-timer', () => {
     expect(titles(ROUNDS.N)).toEqual([]);
     const view = dealt(ROUNDS.S, 0);
     expect(coachOf(view).at).toEqual({ hand: ROUNDS.S.handIndex, seq: view.seq });
+  });
+});
+
+describe('someone who takes a seat over part-way through a hand', () => {
+  // East hand 2, after the bot's first discard for the seat: Chow + 5 Honours two tiles off.
+  const tiles: TileKind[] = ['s4', 's5', 's6', 'p2', 'p3', 'p4', 'm6', 'm7', 'WE', 'WS', 'WW', 'WN', 'WN', 'p9'];
+  const mine = turnView('E', 1, tiles);
+  /** The same hand on Bilal's turn, the tile after the seat's own discard gone. */
+  const theirs = { ...turnView('E', 1, tiles.slice(0, 13)), turn: 1, legal: {} } as unknown as PrivatePlayerView;
+  const coachAt = (view: PrivatePlayerView, firstLook?: boolean, stage: 'new' | 'learning' | 'solid' = 'learning', analysis = analyseFor(view, karachi)) =>
+    coachFor({ view, ruleset: karachi, analysis, stage, names: NAMES, ...(firstLook === undefined ? {} : { firstLook }) });
+  const aim = (coach: CoachState) => textOf(coach.say).startsWith(coach.goal.aim);
+  const teachOf = (coach: CoachState) => coach.teach.map((x) => `${x.key}:${x.place}`);
+
+  it("gives the round's aim while someone else is on the move, with the plan still showing, and the take-over footnote first", () => {
+    const coach = coachAt(theirs, true);
+    expect(coach.moment).toBe('handStart');
+    expect(aim(coach)).toBe(true);
+    // The hand's under way, so the plan the strip lays out stays.
+    expect(coach.plan).not.toBeNull();
+    expect(coach.plan).toBe(coachAt(mine).plan);
+    expect(coach.action.kind).toBe('wait');
+    expect(coach.teach[0]).toEqual({ key: 'firstLook', place: 'note', label: 'taking over', text: "these were the bot's tiles; the row above them is the hand to aim for" });
+    // The bubble says the aim, so the round's footnote would only say it again.
+    expect(teachOf(coach)).toEqual(['firstLook:note', 'round:honour:said']);
+    expect(coach.teach[1]).toMatchObject({ also: ['hand:Chow + 5 Honours', 'hand:Pung + 5 Honours'] });
+  });
+
+  it("gives the aim on their own turn too, rather than the discard's reason, and still offers the tutor's tile", () => {
+    const usual = coachAt(mine);
+    const coach = coachAt(mine, true);
+    expect(aim(coach)).toBe(true);
+    expect(textOf(coach.say)).toBe(textOf(coachAt(theirs, true).say));
+    expect(textOf(coach.say)).not.toMatch(/^Discard /);
+    expect(usual.action.kind).toBe('discard');
+    expect(coach.action).toEqual(usual.action);
+    expect(coach.highlight).toEqual(usual.highlight);
+    expect(coach.plan).toBe(usual.plan);
+    expect(teachOf(coach).slice(0, 2)).toEqual(['firstLook:note', 'round:honour:said']);
+    expect(visibleLength(textOf(coach.say))).toBeLessThanOrEqual(SAY_BUDGET);
+  });
+
+  it('changes nothing without it', () => {
+    for (const view of [mine, theirs]) {
+      expect(coachAt(view, false)).toEqual(coachAt(view));
+      expect(teachOf(coachAt(view))).not.toContain('firstLook:note');
+    }
+    // After the seat's first discard, someone else's move is quiet, and the player's own turn gives the discard's reason.
+    expect(coachAt(theirs)).toMatchObject({ moment: 'waiting', say: [] });
+    expect(textOf(coachAt(mine).say)).toMatch(/^Discard /);
+  });
+
+  it('keeps quiet for a regular, and leaves out the footnote when there is no plan for it to point at', () => {
+    expect(coachAt(theirs, true, 'solid').say).toEqual([]);
+    expect(coachAt(mine, true, 'solid').say).toEqual([]);
+    expect(lessonFor(coachAt(theirs, true, 'solid'), new Set()).notes).toEqual([]);
+    // "The row above them" is the plan strip: with no hand to lay out, it's empty.
+    const nothing = { ...analyseFor(theirs, karachi), candidates: [] };
+    const coach = coachAt(theirs, true, 'learning', nothing);
+    expect(aim(coach)).toBe(true);
+    expect(teachOf(coach)).toEqual(['round:honour:said']);
+  });
+
+  it("doesn't hide a Mahjong", () => {
+    const won: TileKind[] = ['m1', 'm1', 'm1', 'p7', 'p7', 'p7', 'm4', 'm4', 'm4', 's2', 's2', 's2', 's9', 's9'];
+    const view = { ...turnView('E', 0, won), legal: { discard: won, win: true } } as unknown as PrivatePlayerView;
+    const coach = coachAt(view, true);
+    expect(coach.action.kind).toBe('win');
+    expect(textOf(coach.say)).toBe("That's Goulash, complete. Call Mahjong!");
+  });
+
+  it('shows the take-over footnote under the first bubble, and teaches it for the visit', { timeout: 120_000 }, () => {
+    // A reducer-played hand, taken over on someone else's turn once the seat has moved: every view from there until the
+    // person's own first move is a first look, as a live table would pass it.
+    const store = createTaughtStore(null);
+    const lessons = createLessons(() => store);
+    let took: { hand: number; seq: number } | null = null;
+    /** Each line the person sees from the take-over on, and whether the take-over footnote is under it. */
+    const lines: { seq: number; line: string; note: boolean }[] = [];
+    let looks = 0;
+    playHand({
+      seed: 'take-over',
+      progress: ROUNDS.E1,
+      onView: (view) => {
+        if (!took && myDiscardCount(view) >= 1 && view.phase === 'turn' && view.turn !== 0) took = { hand: view.progress.handIndex, seq: view.seq };
+        if (!took) return;
+        const firstLook = firstLookFor(view, took);
+        const coach = coachOf(view, 'learning', analyseFor(view, karachi), firstLook);
+        const lesson = lessons.next(coach);
+        if (firstLook) {
+          looks++;
+          if (coach.moment !== 'claim') expect(aim(coach), `seq ${view.seq}`).toBe(true);
+          expect(coach.teach[0]?.key, `seq ${view.seq}`).toBe('firstLook');
+        } else expect(coach.teach.map((x) => x.key)).not.toContain('firstLook');
+        lines.push({ seq: view.seq, line: lineKey(coach), note: lesson.notes.some((n) => n.key === 'firstLook') });
+      },
+    });
+    expect(took).not.toBeNull();
+    expect(looks).toBeGreaterThan(1);
+    // On the take-over's own view, whose bubble is the first with something to say. It stays with that line while the
+    // others move, and no later line has it.
+    expect(lines[0]).toMatchObject({ seq: took!.seq, note: true });
+    const later = lines.findIndex((x) => x.line !== lines[0]!.line);
+    expect(later).toBeGreaterThan(0);
+    expect(lines.slice(0, later).every((x) => x.note)).toBe(true);
+    expect(lines.slice(later).filter((x) => x.note)).toEqual([]);
+    expect(store.all().has('firstLook')).toBe(true);
   });
 });

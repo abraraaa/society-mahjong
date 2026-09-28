@@ -1,4 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
+import { tileName } from '@society/engine';
+import { FIRST_LOOK_NOTE } from '../lib/coach';
 import { cardClockLine } from '../lib/coach/clock';
 import { cardCaption } from '../lib/coach/hand-card';
 import { TAUGHT_KEY, handNote, noteText } from '../lib/coach/teach';
@@ -32,9 +34,10 @@ async function openThenLook(page: Page, s: { readonly before: GameSnapshot; read
  * The tutor at a live table, on scenes made by the engine alone
  * (tutor-fixtures.ts): hand names that open the hand's card, wherever the
  * tutor says them, a card over a claim that shows the table's clock, a win the
- * claim sheet leaves to the table's clock rather than passing on, and the
+ * claim sheet leaves to the table's clock rather than passing on, the
  * footnotes a first-timer gets the first time a hand, a flower or a run tile
- * going past comes up, which stay for as long as the line they came with.
+ * going past comes up, which stay for as long as the line they came with, and
+ * the round's aim for someone who takes a bot's seat over part-way through.
  */
 test.describe('the tutor at a live table', () => {
   test("(l-winner) the result line names the winner's hand, explains it the first time, and a tap shows the tiles they won with", async ({ page }) => {
@@ -266,6 +269,65 @@ test.describe('the tutor at a live table', () => {
     await expect(page.locator('[data-sheet="claim"]')).toBeVisible();
     await expect(list.locator('.clock')).toHaveText(cardClockLine({ kind: 'running', what: 'claim', ms: window.deadlines.claim! - window.now - CLAIM_PASS_MARGIN_MS })!);
     expect(await place()).toEqual(was);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test("(l-take-over) someone who takes a bot's seat over mid-hand gets the round's aim, with a footnote, until they make a move of their own", async ({ page }) => {
+    const { theirs, mine, after, later } = tutorFixtures().takeOver;
+    // Bilal's turn when Amna takes the seat over: the next looks bring her turn, then (after her discard) her next one.
+    let table = theirs;
+    const t = await openTable(page, { view: () => ok(table), act: () => ok(after) }, { clock: true });
+    const bubble = t.stage().locator('.coach');
+    const say = bubble.locator('.say');
+    const note = bubble.locator('[data-note="firstLook"]');
+    const first = liveCoach(theirs);
+    // The bot had already thrown for the seat, so without the take-over there'd be nothing to say on someone else's turn.
+    expect(textOf(first.say)).toContain(first.goal.aim);
+    await expect(say).toHaveText(textOf(first.say));
+    await expect(note).toHaveText(noteText(FIRST_LOOK_NOTE));
+    // "The row above them": the plan, laid out above her tiles.
+    await expect(t.stage().locator('.plan-strip')).toBeVisible();
+    await pauseClock(page);
+    const lookAgain = async () => {
+      const looks = t.count('view');
+      await page.clock.runFor(POLL_MS);
+      await expect.poll(() => t.count('view')).toBeGreaterThan(looks);
+    };
+
+    // Her turn, before a move of her own: the aim again, and the tutor's tile on the Discard button. The footnote's taught.
+    table = mine;
+    await lookAgain();
+    const tip = liveCoach(mine).action;
+    if (tip.kind !== 'discard') throw new Error('the fixture offers a discard');
+    await expect(t.discard()).toHaveText(`Discard ${tileName(tip.tile)}`);
+    await expect(say).toHaveText(textOf(first.say));
+    await expect(note).toHaveCount(0);
+
+    // Her discard is her own first move: from her next turn the tutor talks to her as to anyone, starting with why.
+    await t.discard().click();
+    await expect.poll(() => t.of('act').map((c) => c.body?.action)).toEqual([{ type: 'discard', seat: 0, tile: tip.tile }]);
+    table = later;
+    await lookAgain();
+    const next = textOf(liveCoach(later).say);
+    expect(next).toMatch(/^Discard /);
+    expect(next).not.toContain(first.goal.aim);
+    await expect(say).toHaveText(next);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test("(l-take-over-turn) taken over on her own turn: the aim and the footnote first, and the tutor's tile still offered", async ({ page }) => {
+    const snap = tutorFixtures().takeOverOnTurn;
+    const coach = liveCoach(snap);
+    if (coach.action.kind !== 'discard') throw new Error('the fixture offers a discard');
+    const t = await openTable(page, { view: () => ok(snap) });
+    const bubble = t.stage().locator('.coach');
+    expect(textOf(coach.say)).toContain(coach.goal.aim);
+    await expect(bubble.locator('.say')).toHaveText(textOf(coach.say));
+    await expect(bubble.locator('[data-note="firstLook"]')).toHaveText(noteText(FIRST_LOOK_NOTE));
+    await expect(t.discard()).toHaveText(`Discard ${tileName(coach.action.tile)}`);
+    await expect(t.discard()).toBeEnabled();
+    // Lit in her hand, as on any turn.
+    await expect(t.stage().locator('.hand-dock .tile[data-coached="true"]').first()).toBeVisible();
     expect(t.pageErrors).toEqual([]);
   });
 });

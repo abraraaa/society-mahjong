@@ -13,6 +13,7 @@ import {
   type Seat,
 } from '@society/engine';
 import { analyseFor, coachFor, type CoachStage, type CoachState } from '../lib/coach';
+import { firstLookFor, joinedAtOf, type JoinedAt } from '../lib/coach/first-look';
 import { lessonFor } from '../lib/coach/teach';
 import { flowerSinceMyLastMove, myDiscardCount, textOf } from '../lib/coach/words';
 import { liveStage } from '../lib/live/level';
@@ -197,10 +198,19 @@ function snapshot(state: HandState, version: number, stage: CoachStage, status: 
   };
 }
 
+/**
+ * A snapshot for someone who took Amna's seat over from a bot at `took`, as the server stamps it: the hand, and the
+ * moment, of the take-over. Its own copy of the field, as the server lane adds it to the snapshot (tutor v2 H2).
+ */
+function takenOver(state: HandState, version: number, took: JoinedAt): GameSnapshot {
+  return { ...snapshot(state, version, 'learning'), joinedAt: took } as GameSnapshot;
+}
+
 /** What the live page's tutor says on this snapshot, for comparing through the helpers rather than retyping copy. */
 export function liveCoach(s: GameSnapshot): CoachState {
   const view = s.view as PrivatePlayerView;
-  return coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: liveStage(s.stage, view), names: LIVE_NAMES });
+  const firstLook = firstLookFor(view, joinedAtOf(s));
+  return coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: liveStage(s.stage, view), names: LIVE_NAMES, firstLook });
 }
 
 /** The first seed of `tutor-{from}`, `tutor-{from + 1}`, ... for which `make` returns something. */
@@ -260,6 +270,36 @@ export interface TutorFixtures {
    * turn and something in the river. The tutor's words are the same on both, and the flower is still news.
    */
   readonly handStartTwice: { readonly first: GameSnapshot; readonly next: GameSnapshot };
+  /**
+   * Amna takes seat 0 over from the bot keeping it, part-way through an East honour hand, for a learner. `theirs` is
+   * the table then, on Bilal's turn, after the bot's first discard for the seat. `mine` is her turn once Bilal has
+   * thrown, still before a move of her own. `after` is the table's answer to her discarding the tutor's tile, and
+   * `later` her next turn. Every one carries the take-over's `joinedAt`.
+   */
+  readonly takeOver: { readonly theirs: GameSnapshot; readonly mine: GameSnapshot; readonly after: GameSnapshot; readonly later: GameSnapshot };
+  /** The same, taken over on Amna's own turn, after the bot's first discard for the seat. */
+  readonly takeOverOnTurn: GameSnapshot;
+}
+
+/** Plays the people's moves, as the server's bot would make them, until Amna has a decision to make: null if the hand ends first. */
+function untilAmna(state: HandState): HandState | null {
+  let s = state;
+  for (let i = 0; i < 400 && s.phase !== 'finished'; i++) {
+    const seat = pending(s)[0];
+    if (seat === undefined) return null;
+    if (seat === ME) return s;
+    s = settle(reduce(s, personMove(s, seat), karachi));
+  }
+  return null;
+}
+
+/** The moment of a take-over at this table: its hand, and its last move. */
+const tookAt = (s: HandState): JoinedAt => ({ hand: s.progress.handIndex, seq: s.seq });
+
+/** Whether the tutor gives a take-over its first look here: the aim, with the take-over's footnote first under it for a first visit. */
+function firstLookHere(snap: GameSnapshot): boolean {
+  const coach = liveCoach(snap);
+  return coach.moment === 'handStart' && textOf(coach.say).startsWith(coach.goal.aim) && lessonFor(coach, new Set()).notes[0]?.key === 'firstLook';
 }
 
 function build(): TutorFixtures {
@@ -360,7 +400,45 @@ function build(): TutorFixtures {
     const news = [a, b].every((c) => c.teach.some((t) => t.key === 'rule:flowers'));
     return same && news && riverOrder(next.view).length > 0 ? { first, next } : null;
   });
-  return { otherWin, claim, winClaim, claimAgain, flowerTurn, missedRun, handStartTwice };
+  const takeOver = search("a take-over on Bilal's turn, then Amna's turn, her discard and her next turn", (seed) => {
+    let s = settle(startHand(karachi, { seed, progress: EAST_HONOUR, dealer: 0 }));
+    for (let i = 0; i < 400 && s.phase !== 'finished'; i++) {
+      if (s.phase === 'turn' && pending(s).join() === '1' && myDiscardCount(viewFor(s, karachi, ME)) > 0) {
+        const took = tookAt(s);
+        const theirs = takenOver(s, 9, took);
+        // Bilal throws, and nothing asks Amna to decide before her turn.
+        const turn = settle(reduce(s, personMove(s, 1), karachi));
+        const mine = takenOver(turn, 10, took);
+        const tip = liveCoach(mine).action;
+        if (firstLookHere(theirs) && turn.phase === 'turn' && pending(turn).join() === '0' && tip.kind === 'discard') {
+          const answered = settle(reduce(turn, { type: 'discard', seat: ME, tile: tip.tile }, karachi));
+          const next = untilAmna(answered);
+          if (!pending(answered).includes(ME) && next?.phase === 'turn') {
+            const later = takenOver(next, 12, took);
+            if (liveCoach(later).action.kind === 'discard') return { theirs, mine, after: takenOver(answered, 11, took), later };
+          }
+        }
+      }
+      const seat = pending(s)[0];
+      if (seat === undefined) return null;
+      s = settle(reduce(s, personMove(s, seat), karachi));
+    }
+    return null;
+  });
+  const takeOverOnTurn = search("a take-over on Amna's own turn, after the bot's first discard for the seat", (seed) => {
+    let s = settle(startHand(karachi, { seed, progress: EAST_HONOUR, dealer: 0 }));
+    for (let i = 0; i < 400 && s.phase !== 'finished'; i++) {
+      if (s.phase === 'turn' && s.turn === ME && myDiscardCount(viewFor(s, karachi, ME)) > 0) {
+        const snap = takenOver(s, 9, tookAt(s));
+        return firstLookHere(snap) && liveCoach(snap).action.kind === 'discard' ? snap : null;
+      }
+      const seat = pending(s)[0];
+      if (seat === undefined) return null;
+      s = settle(reduce(s, personMove(s, seat), karachi));
+    }
+    return null;
+  });
+  return { otherWin, claim, winClaim, claimAgain, flowerTurn, missedRun, handStartTwice, takeOver, takeOverOnTurn };
 }
 
 let built: TutorFixtures | null = null;

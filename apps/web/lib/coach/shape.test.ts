@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { karachi } from '@society/engine';
+import { FIRST_LOOK_NOTE } from './coach';
 import { GLOSSARY } from './glossary';
 import { generalTitlesOf, roundNote } from './goal';
 import { TITLE_SHAPES, noteShapeOf, shapeOf, titleOf } from './shape';
@@ -49,7 +50,7 @@ describe("a hand's footnote", () => {
   });
 });
 
-describe("the round's and the flowers' footnotes", () => {
+describe("the round's, the flowers' and the take-over's footnotes", () => {
   it('fit under a line', () => {
     for (const kind of ['goulash', 'honour', 'noHonour', 'big']) {
       const round = roundNote(kind);
@@ -57,6 +58,7 @@ describe("the round's and the flowers' footnotes", () => {
       expect(visibleLength(noteText(round!)), kind).toBeLessThanOrEqual(NOTE_BUDGET);
     }
     expect(visibleLength(noteText({ label: 'flowers', text: GLOSSARY.bonus.short }))).toBeLessThanOrEqual(NOTE_BUDGET);
+    expect(visibleLength(noteText(FIRST_LOOK_NOTE))).toBeLessThanOrEqual(NOTE_BUDGET);
   });
 
   it('say nothing for a kind of hand they have no words for', () => {

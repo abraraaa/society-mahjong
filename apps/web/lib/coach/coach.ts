@@ -68,6 +68,11 @@ export interface CoachInput {
   readonly stage: CoachStage;
   /** table-local display names, since the engine knows seats and not people */
   readonly names: Readonly<Record<Seat, string>>;
+  /**
+   * Someone who has just taken this seat over in a hand under way, and hasn't moved since (`firstLookFor`,
+   * first-look.ts). Until they do, the tutor gives them what the start of a hand gives: the round's aim, and the plan.
+   */
+  readonly firstLook?: boolean;
 }
 
 export function handOf(view: PrivatePlayerView): HandInput {
@@ -359,15 +364,38 @@ function fitting(attempts: readonly CoachSegment[][]): CoachSegment[] {
  */
 const FLOWERS_NOTE: CoachTeach = { key: 'rule:flowers', place: 'note', label: 'flowers', text: GLOSSARY.bonus.short, also: ['term:bonus'] };
 
+/**
+ * The footnote for someone who has just taken a seat over: the tiles aren't
+ * ones they chose, and the plan strip, which sits between the bubble and the
+ * tiles, is where to look. The person has just tapped to take over from the
+ * bot, so "the bot's" needs no name.
+ */
+export const FIRST_LOOK_NOTE: CoachTeach = {
+  key: 'firstLook',
+  place: 'note',
+  label: 'taking over',
+  text: "these were the bot's tiles; the row above them is the hand to aim for",
+};
+
 export function coachFor(input: CoachInput): CoachState {
   const state = adviceFor(input);
+  // Through a first look, every view offers the take-over footnote first, for the first bubble to show: while there's
+  // a plan, which is what the strip it points at shows.
+  const first = input.firstLook && state.target?.layout ? [FIRST_LOOK_NOTE] : [];
   // Wherever the tutor has something to say, a flower drawn since the player's last move can be explained under it.
-  if (state.say.length === 0 || !flowerSinceMyLastMove(input.view)) return state;
-  return { ...state, teach: [...state.teach, FLOWERS_NOTE] };
+  const flowers = state.say.length > 0 && flowerSinceMyLastMove(input.view) ? [FLOWERS_NOTE] : [];
+  if (first.length === 0 && flowers.length === 0) return state;
+  return { ...state, teach: [...first, ...state.teach, ...flowers] };
+}
+
+/** The round's aim, with the one thing beginners get wrong in it when there's room: the bubble at the start of a hand. */
+function aimLine(goal: CoachGoal): CoachSegment[] {
+  return fitting([goal.watchOut ? [seg(goal.aim), seg(` ${goal.watchOut}`)] : [seg(goal.aim)], [seg(goal.aim)]]);
 }
 
 function adviceFor(input: CoachInput): CoachState {
   const { view, ruleset, analysis, stage, names } = input;
+  const firstLook = input.firstLook === true;
   const spec = ruleset.handSpec(view.progress);
   const ctx = ctxOf(view);
   const goal: CoachGoal = { ...goalFor(spec, view.progress.roundWind, ruleset), hands: handsThisRound(spec, analysis, ruleset, ctx) };
@@ -494,8 +522,9 @@ function adviceFor(input: CoachInput): CoachState {
   const myTurn = view.phase === 'turn' && view.turn === view.me;
   // The round's aim is for a hand nobody has played yet: until the player has
   // discarded once, not until anyone has, or three hands in four it flashed up
-  // for as long as the dealer took to throw.
-  const beforeMyFirst = myDiscardCount(view) === 0 && view.players[view.me].melds.length === 0;
+  // for as long as the dealer took to throw. Someone who has just taken the
+  // seat over hasn't played this hand either, whatever the bot did with it.
+  const beforeMyFirst = firstLook || (myDiscardCount(view) === 0 && view.players[view.me].melds.length === 0);
   const firstTurn = myTurn && beforeMyFirst ? roundTeach('note') : [];
 
   if (myTurn && view.legal.win) {
@@ -517,14 +546,20 @@ function adviceFor(input: CoachInput): CoachState {
 
   if (!myTurn) {
     if (beforeMyFirst && !quiet) {
-      // Someone else is dealing: the goal gets the bubble, and a plan for a hand not yet played would say nothing.
-      const withWatch = goal.watchOut ? [seg(goal.aim), seg(` ${goal.watchOut}`)] : [seg(goal.aim)];
-      return { ...base, moment: 'handStart', plan: null, action, say: fitting([withWatch, [seg(goal.aim)]]), reason: goal.watchOut, highlight, teach: roundTeach('said') };
+      // Someone else is dealing: the goal gets the bubble, and a plan for a hand not yet played would say nothing. A
+      // hand taken over is under way, so its plan stays.
+      return { ...base, moment: 'handStart', plan: firstLook ? plan : null, action, say: aimLine(goal), reason: goal.watchOut, highlight, teach: roundTeach('said') };
     }
     return { ...base, moment: 'waiting', action, say: [], reason: null, highlight: [] };
   }
 
   const moment = beforeMyFirst ? 'handStart' : 'turn';
+  if (firstLook && !quiet) {
+    // Taken over on their own turn: the bubble is the round's aim, as it is on whichever view they see first, and the
+    // tile to let go is still lit and offered on the Discard button. After that discard, the tutor says why as usual.
+    const teach = [...roundTeach('said'), ...(target ? missedRun(view, target, goal, names) : [])];
+    return { ...base, moment, action, say: aimLine(goal), reason: goal.watchOut, highlight, teach };
+  }
   if (quiet || !target) {
     return { ...base, moment, action, say: [], reason: null, highlight, teach: firstTurn };
   }

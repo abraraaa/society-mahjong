@@ -6,7 +6,8 @@ import { SEATS, analysisBot, initialProgress, karachi, nextHand, startHand, view
 import { NO_SCORES, applyResult, type Scores } from '@/lib/ledger';
 import { Table } from '@/components/table';
 import { playFor, refusalMessage, tableFlow, tryReduce, type Refusal } from '@/lib/table-flow';
-import { analyseFor, coachFor, stageFor, type CoachState } from '@/lib/coach';
+import { stageFor } from '@/lib/coach';
+import { useCoach } from '@/lib/coach/use-coach';
 import { reportBody } from '@/lib/client-errors';
 import { onceOnly } from '@/lib/report-error';
 
@@ -58,11 +59,8 @@ export function SoloTable({ seed }: { seed: string }) {
   const view = useMemo(() => viewFor(state, ruleset, ME), [state]);
   const flow = tableFlow(state, view.legal, ME);
 
-  // The analysis is the expensive part (a bounded search per pattern), so it is
-  // memoised on the state it was taken from and handed to the coach.
-  const analysis = useMemo(() => analyseFor(view, ruleset), [view]);
   const stage = stageFor(progress);
-  const coach: CoachState = useMemo(() => coachFor({ view, ruleset, analysis, stage, names: NAMES }), [view, analysis, stage]);
+  const coach = useCoach({ view, ruleset, stage, names: NAMES, game: round });
   // Company for a beginner: the bots fumble a little until the player has a few wins.
   const bots: BotOptions = useMemo(() => ({ strength: stage === 'solid' ? 'sharp' : 'gentle' }), [stage]);
 
