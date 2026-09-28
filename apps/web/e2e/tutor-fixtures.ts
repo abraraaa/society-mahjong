@@ -18,8 +18,7 @@ import { lessonFor } from '../lib/coach/teach';
 import { flowerSinceMyLastMove, myDiscardCount, textOf } from '../lib/coach/words';
 import { liveStage } from '../lib/live/level';
 import type { GameSnapshot } from '../lib/live/snapshot';
-import type { StandIn } from '../lib/live/table';
-import type { Deadlines, PlayerMove } from '../lib/live/types';
+import type { Deadlines, Move, PlayerMove } from '../lib/live/types';
 import { riverOrder } from '../lib/river';
 import { GAME_ID, USER_NAME } from './fixtures';
 
@@ -135,9 +134,9 @@ function personMove(s: HandState, seat: Seat): Action {
  * A claim window's clock running out, by `resolveExpired`'s rules (lib/live/table.ts): each person still to answer is
  * answered by the server's sharp bot standing in for them (it takes a win it's offered), then the bots play on.
  */
-function runOut(s: HandState): { readonly state: HandState; readonly standIns: readonly StandIn[] } {
+function runOut(s: HandState): { readonly state: HandState; readonly standIns: readonly { readonly seat: Seat; readonly action: PlayerMove }[] } {
   let out = s;
-  const standIns: StandIn[] = [];
+  const standIns: { seat: Seat; action: PlayerMove }[] = [];
   for (const seat of pending(s)) {
     if (out.phase !== 'claim') break;
     const bot = analysisBot(viewFor(out, karachi, seat), karachi);
@@ -328,10 +327,16 @@ function build(): TutorFixtures {
         const window = snapshot(s, 9, 'new', 'active', deadlines(s, SHORT_WIN));
         if (!namesAHand(window)) return null;
         const out = runOut(s);
-        // The server tells each person only the moves made for them.
+        // The server tells each person only the moves made for them, in their own absence (`mine`, as ownAbsence builds it).
         const mine = out.standIns.filter((x) => x.seat === ME);
         if (out.state.result?.type !== 'win' || out.state.result.winner !== ME || mine[0]?.action.type !== 'claim') return null;
-        return { before: snapshot(before, 8, 'new'), window, won: { ...snapshot(out.state, 10, 'new'), standIns: mine } };
+        const lastClockMove: Move = { by: 'clock', seat: ME, a: mine[0].action };
+        const played = { turns: 0, sets: 0, exchanges: 0, wins: 0, hands: 0 };
+        return {
+          before: snapshot(before, 8, 'new'),
+          window,
+          won: { ...snapshot(out.state, 10, 'new'), mine: { misses: 0, away: null, clockMoves: mine.length, lastClockMove, played } },
+        };
       }),
     4,
   );
