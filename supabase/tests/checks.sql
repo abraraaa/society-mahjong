@@ -214,6 +214,21 @@ begin
 end
 $$;
 
+-- The sweep's first question (wake_at <= now) has its partial index. Its second (no wake_at) scans, which is fine at
+-- one row per game; the first never waits behind it (dueGames asks them in turn).
+do $$
+declare def text;
+begin
+  select indexdef into def from pg_indexes where schemaname = 'public' and tablename = 'live_state' and indexname = 'live_state_wake_at';
+  if def is null then
+    raise exception 'live_state has no wake_at index';
+  end if;
+  if def not like '%(wake_at) WHERE (wake_at IS NOT NULL)' then
+    raise exception 'live_state_wake_at is not the partial index on wake_at: %', def;
+  end if;
+end
+$$;
+
 -- The move log holds every seat's moves: a seated player reads a hand's log only once it has ended.
 do $$
 declare

@@ -3,7 +3,7 @@ import type { HandState, RulesetId, Seat } from '@society/engine';
 import type { CoachStage } from '@/lib/coach';
 // Relative rather than '@/': vitest runs without the path alias, and the tests load this.
 import { createServiceClient } from '../supabase/service';
-import { HttpError, must, SupabaseError } from './errors';
+import { HttpError, must, SupabaseError, type SupabaseFailure } from './errors';
 import { commitArgs, type TableWrite } from './hand-log';
 import { stageFromStats, tallyHand, type ProfileStats } from './stage';
 import { NEW_TABLE, parseTableState, tableStateJson, wakeAt, type TableState } from './table-state';
@@ -325,17 +325,27 @@ async function closeRoom(client: ReturnType<typeof db>, gameId: string, roomId: 
 }
 
 /**
- * Active games whose deadline has passed and nobody has poked since. The
- * status filter matters: a finished or abandoned game keeps its live_state
- * row, and one left with a deadline would be swept, and fail, every day.
+ * The games the sweep should visit, asked of `live_state.wake_at` alone (the
+ * next moment the server has to act on a table unasked), as two questions
+ * within one limit:
+ * 1. active games whose wake time has passed, earliest first, which the
+ *    partial index live_state_wake_at serves;
+ * 2. only if that left room, active games with no wake time at all, least
+ *    recently saved first: a table last saved before 0005 or by older code,
+ *    or a finished hand waiting for someone to deal the next.
+ * Due tables come first, so however many tables are parked, they can never
+ * crowd out one whose clock has run out. The status filter matters: a
+ * finished or abandoned game keeps its live_state row, and one left with a
+ * wake time would be swept, and fail, every day.
  */
-export async function expiredGames(now: number, limit = 50): Promise<string[]> {
+export async function dueGames(now: number, limit = 50): Promise<string[]> {
   const iso = new Date(now).toISOString();
-  const data = must(
-    await db().from('live_state').select('game_id, games!inner(status)').eq('games.status', 'active').or(`claim_deadline.lte.${iso},turn_deadline.lte.${iso}`).limit(limit),
-    'find tables past their clocks',
-  );
-  return (data ?? []).map((r) => (r as { game_id: string }).game_id);
+  const active = () => db().from('live_state').select('game_id, games!inner(status)').eq('games.status', 'active');
+  const ids = (res: { data: unknown[] | null; error: SupabaseFailure | null }) => (must(res, 'find tables past their clocks') ?? []).map((r) => (r as { game_id: string }).game_id);
+  const due = ids(await active().lte('wake_at', iso).order('wake_at', { ascending: true }).limit(limit));
+  const left = limit - due.length;
+  if (left <= 0) return due;
+  return [...due, ...ids(await active().is('wake_at', null).order('updated_at', { ascending: true }).limit(left))];
 }
 
 /**

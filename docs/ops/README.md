@@ -8,7 +8,14 @@ Three things to check by hand before the link goes out to everyone. Code can't s
 
 ## 1. The daily sweep keeps Supabase awake
 
-**Why it matters.** A Supabase project on the Free plan pauses after 7 days with no activity (docs/PLAN.md §3). While it's paused, every table is down until someone restores the project by hand from the Supabase dashboard. `apps/web/vercel.json` has Vercel call `GET /api/cron/sweep` every day at 04:00 UTC (09:00 in Karachi). The sweep settles tables whose clocks have run out, and the query it makes to do that is what keeps a quiet project awake.
+**Why it matters.** A Supabase project on the Free plan pauses after 7 days with no activity (docs/PLAN.md §3). While it's paused, every table is down until someone restores the project by hand from the Supabase dashboard. `apps/web/vercel.json` has Vercel call `GET /api/cron/sweep` every day at 04:00 UTC (09:00 in Karachi). The sweep settles tables whose clocks have run out, and the queries it makes to find them are what keep a quiet project awake.
+
+It asks two questions of `live_state.wake_at`, the next moment a table needs the server without anyone asking:
+
+1. Which games in play have a wake time that has passed? Earliest first.
+2. With whatever is left of its 50 places, which games in play have no wake time at all? Least recently saved first. These are tables parked on a finished hand that nobody has dealt the next one from, and tables last saved by older code.
+
+It asks in that order, so however many tables are parked, they can never push out one whose clock has run out.
 
 The sweep only runs if Vercel sends the right secret. Vercel adds `Authorization: Bearer <CRON_SECRET>` to its cron calls only when a `CRON_SECRET` environment variable exists. Without it, the route answers **401 before touching the database**, so the daily call keeps nothing awake, and one quiet week pauses the project under your players.
 
@@ -23,7 +30,7 @@ The sweep only runs if Vercel sends the right secret. Vercel adds `Authorization
 1. Trigger a run now, rather than waiting for 04:00 UTC. Use **Settings → Cron Jobs**, where `/api/cron/sweep` has a **Run** button, or run `vercel crons run /api/cron/sweep` from a terminal that is linked to the project.
 2. Open the logs: **View Logs** next to the job, or the project's **Logs** tab filtered to the path `/api/cron/sweep`. Vercel's own calls carry the user agent `vercel-cron/1.0`.
 3. Read the status code on the latest call:
-   - **200**: the secret matched and the database answered. The body is `{"swept":N,"results":{...}}`, and N is usually 0. Each result is `ok`, `already moved` (someone at the table moved it first, or the game ended, so there was nothing to do), or what went wrong.
+   - **200**: the secret matched and the database answered. The body is `{"swept":N,"results":{...}}`. N counts the tables from both questions, so it isn't always 0: a table parked on a finished hand is looked at every day until someone deals the next hand. Each result is `ok` (a clock that had run out was settled, or there was nothing to do yet), `already moved` (someone at the table moved it first, or the game ended, so there was nothing to do), or what went wrong.
    - **401**: `CRON_SECRET` is missing from Production, or was changed without a redeploy. Nothing reached the database. Go back to "Check it's set".
    - **500**: the secret is fine but the database didn't answer. The function log has a line containing `could not find tables past their clocks`. Open the Supabase dashboard. If the project says it's paused, restore it, then run the sweep again.
 4. The next day, check again. The Logs tab should show a 200 from `vercel-cron/1.0` a little after 04:00 UTC. On the Hobby plan Vercel runs a daily job at some point within that hour, not on the minute.
@@ -36,6 +43,12 @@ curl -s -o /dev/null -w '%{http_code}\n' https://societymahjong.app/api/cron/swe
 ```
 
 A manual call does exactly what the daily one does, so it's safe to repeat. The same header on `https://societymahjong.app/api/health` returns a JSON report starting `{"ok":true` when the server can play. It returns 404 when the secret doesn't match, and 503 when something is missing.
+
+The report's `schema` line checks that the database has what migration 0005 added and the server relies on: `table_state`, `wake_at` and `acted_at` on `live_state`, `ended_how` and `ended_by` on `games`, and the `commit_table` function. It asks the function about a game that doesn't exist, so the check saves nothing.
+
+- `ok`: all there.
+- `missing: …`: names what isn't there, which means the database is behind the code, and every live table fails until it's fixed. Run the _Migrate and deploy_ workflow (GitHub, then Actions, then _Migrate and deploy_, then Run workflow; set up as in docs/DATA-MODEL.md, "Setting up the pipeline"), then reload the report.
+- `could not check: …`: the database didn't answer at all, which is a different problem. The `tables` lines will say the same, and a paused project is the usual cause (see the 500 above).
 
 **While you're in Supabase**, check the plan under the organisation's billing settings. A paid plan doesn't pause, so this check matters only on Free.
 

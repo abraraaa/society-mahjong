@@ -160,7 +160,10 @@ volume; the number to watch as tables multiply.
 
 ### Timers without a server clock
 
-Deadlines live on `live_state`: `claim_deadline` and `turn_deadline`.
+Deadlines live on `live_state`: `claim_deadline` and `turn_deadline`,
+with `wake_at`, the earliest of them, saved in the same write. `wake_at` is
+the next moment the server has to act on the table unasked, and it's what
+the sweep below reads.
 
 - Any incoming request first resolves expired deadlines. A bot stands in
   for whoever did not answer: in a claim window it takes a win they were
@@ -174,8 +177,15 @@ Deadlines live on `live_state`: `claim_deadline` and `turn_deadline`.
   too; anyone else gets a 403.
 - A Vercel Cron sweep (`/api/cron/sweep`, `CRON_SECRET`; see
   `docs/ops/README.md` for how to check it runs) is the backstop for
-  tables everyone has left. On the Hobby plan crons run at most daily, which
-  is why the tick above does the real work; Pro makes the sweep per-minute.
+  tables everyone has left. It asks `wake_at` alone, in two questions
+  within one limit of 50 (`store.ts` `dueGames`): first the games in play
+  whose wake time has passed, earliest first, which an index serves; then,
+  with whatever room is left, the games in play with no wake time at all,
+  least recently saved first (a finished hand nobody has dealt on from, or
+  a table last saved by older code). Due tables come first, so parked ones
+  can never crowd out a table whose clock has run out. On the Hobby plan
+  crons run at most daily, which is why the tick above does the real work;
+  Pro makes the sweep per-minute.
 
 **Claim windows are adaptive, and rarely open.** Three things keep the
 countdown from frightening anyone:

@@ -63,7 +63,7 @@ import {
   commitTable,
   countHand,
   createRoom,
-  expiredGames,
+  dueGames,
   finishGame,
   gameById,
   loadLive,
@@ -182,15 +182,14 @@ describe('reads', () => {
     expect(await roomById('r-1')).toBeNull();
     expect(await gameById(GAME)).toBeNull();
     expect(await loadLive('g-1')).toBeNull();
-    expect(await expiredGames(0)).toEqual([]);
+    expect(await dueGames(0)).toEqual([]);
     expect(ran()).toContain('games:select');
   });
 
   it('hand back what they found', async () => {
-    answerAll(undefined, (q) => (q.target === 'rooms' ? room : [{ game_id: 'g-9' }]));
+    answerAll(undefined, (q) => (q.target === 'rooms' ? room : null));
     expect(await roomByCode('abcd')).toEqual(room);
     expect(supabase.log[0]!.steps).toContainEqual(['eq', ['code', 'ABCD']]);
-    expect(await expiredGames(0)).toEqual(['g-9']);
   });
 
   it('read the live table with its bookkeeping, clocks and stamps, parsing table_state', async () => {
@@ -229,7 +228,7 @@ describe('reads', () => {
 
   it('throw when the database fails, instead of passing for "no such room" or an empty table', async () => {
     answerAll(() => true);
-    const reads = [() => roomByCode('ABCD'), () => roomById('r-1'), () => gameById(GAME), () => loadLive('g-1'), () => expiredGames(0)];
+    const reads = [() => roomByCode('ABCD'), () => roomById('r-1'), () => gameById(GAME), () => loadLive('g-1'), () => dueGames(0)];
     for (const read of reads) await expect(read()).rejects.toBeInstanceOf(SupabaseError);
   });
 
@@ -276,6 +275,67 @@ describe('reads', () => {
     const bots: Seats = [null, { kind: 'bot', name: 'Bilal' }, null, null];
     expect(await stagesBySeat(bots)).toEqual([null, null, null, null]);
     expect(supabase.log).toHaveLength(0);
+  });
+});
+
+describe('the sweep asking which tables to visit', () => {
+  const iso = new Date(T).toISOString();
+  const due = (q: Query) => q.steps.some(([m]) => m === 'lte');
+  const rows = (...ids: string[]) => ids.map((game_id) => ({ game_id, games: { status: 'active' } }));
+
+  it('asks for games in play whose wake time has passed, earliest first, then for those with no wake time, least recently saved first', async () => {
+    answerAll(undefined, (q) => (due(q) ? rows('g-late', 'g-later') : rows('g-parked')));
+    expect(await dueGames(T)).toEqual(['g-late', 'g-later', 'g-parked']);
+    expect(supabase.log).toEqual([
+      {
+        target: 'live_state',
+        steps: [
+          ['select', ['game_id, games!inner(status)']],
+          ['eq', ['games.status', 'active']],
+          ['lte', ['wake_at', iso]],
+          ['order', ['wake_at', { ascending: true }]],
+          ['limit', [50]],
+        ],
+      },
+      {
+        target: 'live_state',
+        steps: [
+          ['select', ['game_id, games!inner(status)']],
+          ['eq', ['games.status', 'active']],
+          ['is', ['wake_at', null]],
+          ['order', ['updated_at', { ascending: true }]],
+          ['limit', [48]],
+        ],
+      },
+    ]);
+    // It never asks about the clocks themselves: wake_at is the one column the sweep reads.
+    expect(JSON.stringify(supabase.log)).not.toMatch(/deadline/);
+  });
+
+  it('asks only for what the due tables left of the limit, and nothing more once they fill it, so parked tables never crowd them out', async () => {
+    answerAll(undefined, (q) => (due(q) ? rows('g-1', 'g-2', 'g-3') : rows('g-parked')));
+    expect(await dueGames(T, 3)).toEqual(['g-1', 'g-2', 'g-3']);
+    expect(supabase.log).toHaveLength(1);
+
+    supabase.log.length = 0;
+    answerAll(undefined, (q) => (due(q) ? rows('g-1') : rows('g-parked')));
+    expect(await dueGames(T, 3)).toEqual(['g-1', 'g-parked']);
+    expect(supabase.log[1]!.steps).toContainEqual(['limit', [2]]);
+  });
+
+  it('keeps the label the ops runbook quotes on both questions, and stops at the first that fails', async () => {
+    answerAll(due);
+    const first = await thrown(dueGames(T));
+    expect(first).toBeInstanceOf(SupabaseError);
+    expect((first as SupabaseError).what).toBe('find tables past their clocks');
+    expect(supabase.log).toHaveLength(1);
+
+    supabase.log.length = 0;
+    answerAll((q) => !due(q));
+    const second = await thrown(dueGames(T));
+    expect(second).toBeInstanceOf(SupabaseError);
+    expect((second as SupabaseError).what).toBe('find tables past their clocks');
+    expect(supabase.log).toHaveLength(2);
   });
 });
 
@@ -556,7 +616,7 @@ describe('saving the live table', () => {
       () => roomByCode('ABCD'),
       () => roomById('r-1'),
       () => gameById(GAME),
-      () => expiredGames(0),
+      () => dueGames(0),
       () => stagesBySeat(seats),
       () => recordHand(seats, wonHand),
     ];
