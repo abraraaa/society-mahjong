@@ -27,6 +27,27 @@ export interface CoachGoal {
   readonly watchOut: string | null;
   readonly honours: 'required' | 'forbidden' | 'gated' | 'optional';
   readonly chowsClaimable: boolean;
+  /** "Hands this round": one per title the round allows, the player's own lay-out where it's among their nearest, else an example */
+  readonly hands: readonly CoachHandRef[];
+}
+
+/** A hand the tutor can show: the player's own nearest lay-out, how it would stand after a claim, a winner's hand, or an example. */
+export interface CoachHandRef {
+  readonly patternId: string;
+  readonly title: string;
+  readonly shape: string;
+  readonly whose: 'yours' | 'ifClaimed' | 'winner' | 'example';
+  /** the winner's display name; 'You' for the player */
+  readonly owner?: string;
+  /** yours / ifClaimed */
+  readonly away?: number;
+  readonly approximate?: boolean;
+  /**
+   * The engine's groups; the card lays them out with stripGroups. A missing lay-out
+   * falls back to the example (whose 'example'); empty only for a ruleset with no
+   * examples, and the card then shows the title and shape alone.
+   */
+  readonly layout: readonly LayoutGroup[];
 }
 
 /** One pattern the hand could still become, dressed for a human. */
@@ -49,6 +70,8 @@ export interface CoachTarget {
   readonly wantsFromWall: readonly TileKind[];
   /** the nearest complete hand of this pattern, grouped into sets, each tile held or still to find; null when there isn't one */
   readonly layout: readonly LayoutGroup[] | null;
+  /** what its card shows: this lay-out, or the example when there isn't one */
+  readonly hand: CoachHandRef;
 }
 
 export type CoachAction =
@@ -66,8 +89,8 @@ export interface CoachOutcome {
   readonly winnerName?: string;
   readonly winnerIsMe?: boolean;
   readonly selfDrawn?: boolean;
-  /** the winning hand, named and explained */
-  readonly hand?: { readonly title: string; readonly shape: string };
+  /** the winning hand, named and explained, with the card that shows it */
+  readonly hand?: { readonly title: string; readonly shape: string; readonly ref: CoachHandRef };
   /** the winner's tiles, revealed, for the sheet to lay out */
   readonly tiles?: readonly TileKind[];
   /** how far the player got, when the coach can say honestly */
@@ -78,6 +101,8 @@ export interface CoachOutcome {
 export interface CoachSegment {
   readonly text: string;
   readonly action?: true;
+  /** the text is this hand's title: it renders as one tappable word that opens the hand's card, never glossary-tagged inside */
+  readonly hand?: CoachHandRef;
 }
 
 export interface CoachState {

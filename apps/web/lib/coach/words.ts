@@ -59,6 +59,11 @@ export function textOf(say: readonly CoachSegment[]): string {
   return say.map((s) => s.text).join('');
 }
 
+/** Characters a reader sees: the isolates round a name take no room, and the budgets were measured on visible text. */
+export function visibleLength(s: string): number {
+  return s.replace(/[⁨⁩]/g, '').length;
+}
+
 /** How many copies of a tile might still turn up: four, less the player's own and every one already face up. */
 export function liveCopies(view: PrivatePlayerView, kind: TileKind): number {
   let seen = view.concealed.filter((k) => k === kind).length;

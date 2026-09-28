@@ -73,8 +73,8 @@ export function analyseHand(
   const handSize = concealed.length + hand.melds.reduce((n, m) => n + m.tiles.length, 0);
 
   const coverOptions: CoverOptions = options.claims ? { claims: options.claims } : {};
-  const rated: { pattern: Pattern; cover: CoverResult; away: number; concealedUsed: Counts; plan: CoverSolution | undefined }[] = [];
-  for (const pattern of patterns) {
+  const rated: { pattern: Pattern; index: number; cover: CoverResult; away: number; concealedUsed: Counts; plan: CoverSolution | undefined }[] = [];
+  for (const [index, pattern] of patterns.entries()) {
     const cover = coverPattern(pattern, hand, ctx, guards, coverOptions);
     if (!cover.reachable) continue;
 
@@ -85,14 +85,18 @@ export function analyseHand(
     // pattern is still on the table, so it stays on the list with nothing to show for itself.
     // A lay-out can come back with a group the search never filled; one without a hole is a plan the table can draw.
     const first = cover.solutions.find(whole) ?? cover.solutions[0];
-    rated.push({ pattern, cover, away, concealedUsed: countKinds(first?.used ?? []), plan: first });
+    rated.push({ pattern, index, cover, away, concealedUsed: countKinds(first?.used ?? []), plan: first });
   }
 
+  // A tie goes to the pattern listed first. Rulesets list theirs most specific first and the
+  // reducer announces the first match, so a complete hand leads with the name it will be announced under.
   rated.sort(
     (a, b) =>
       a.away - b.away ||
       b.cover.covered - a.cover.covered ||
-      (a.pattern.id < b.pattern.id ? -1 : 1),
+      // While a hand is being built, the round's general hand goes first when a named one is only as close.
+      (a.away > 0 ? Number(!a.pattern.tags?.includes('general')) - Number(!b.pattern.tags?.includes('general')) : 0) ||
+      a.index - b.index,
   );
 
   // A candidate usually has several lay-outs at its best coverage, and the search finds

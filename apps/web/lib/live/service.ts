@@ -2,34 +2,33 @@ import 'server-only';
 import { HttpError } from './errors';
 export { HttpError };
 import { withBots } from './rooms';
-import { getRuleset, publicView, viewFor, type Seat } from '@society/engine';
+import { getRuleset, publicView, viewFor, type HandState, type Seat } from '@society/engine';
 import type { CoachStage } from '../coach/types';
 import type { GameSnapshot } from './snapshot';
 import { broadcast, gamePoke, roomPoke } from './broadcast';
 import { afterCommit, type CommitStep } from './commit';
+import { handWrites, stamp } from './hand-log';
+import { STALE_GAME_MS } from './lifecycle';
 import { logError } from './log';
 import { emptySeatBots, humanLevels, policyFor } from './policy';
 import { SEAT_ATTEMPTS, vacate } from './seating';
 import {
   abandonGame,
-  appendAction,
+  commitTable,
   countHand,
-  endHand,
   finishGame,
   gameById,
   loadLive,
-  openHand,
   recordHand,
-  recordResult,
   roomById,
-  saveLive,
   saveSeats,
-  settleScores,
   stagesBySeat,
   type GameRow,
+  type LiveRow,
   type RoomRow,
 } from './store';
 import { rejectionStatus, step } from './table';
+import { TABLE_STATE_V, lastActed, wakeAt, withLegacyScores, type TableState } from './table-state';
 import { seatOf, type ClientAction, type Deadlines, type Seats } from './types';
 import { isUuid, parseClientAction } from './validate';
 
@@ -49,17 +48,39 @@ async function loadGame(gameId: string): Promise<{ game: GameRow; room: RoomRow 
   return { game, room };
 }
 
-function snapshot(
-  game: GameRow,
-  room: RoomRow,
-  version: number,
-  deadlines: Deadlines,
-  state: Parameters<typeof publicView>[0],
-  me: Seat | null,
-  now: number,
-  userId: string | null,
-  levels: readonly (CoachStage | null)[],
-): GameSnapshot {
+/** Who is asking about which game, and each seat's level: everything a snapshot needs besides the table itself. */
+interface Caller {
+  readonly game: GameRow;
+  readonly room: RoomRow;
+  readonly me: Seat | null;
+  readonly userId: string | null;
+  readonly levels: readonly (CoachStage | null)[];
+}
+
+/** The table as a snapshot shows it. */
+interface Shown {
+  readonly version: number;
+  readonly deadlines: Deadlines;
+  readonly state: HandState;
+  readonly table: TableState;
+}
+
+/**
+ * The table's bookkeeping as the game reads it. A legacy table, last saved by
+ * code before table_state, still has its running totals in rooms.ledger: they
+ * are seeded from there here, and saved with the table's next change (R13).
+ * Nothing else reads the ledger.
+ */
+function tableOf(live: LiveRow, room: RoomRow): TableState {
+  return live.legacy ? withLegacyScores(live.table, room.ledger) : live.table;
+}
+
+function shownOf(live: LiveRow, room: RoomRow): Shown {
+  return { version: live.version, deadlines: live.deadlines, state: live.state, table: tableOf(live, room) };
+}
+
+function snapshot(c: Caller, shown: Shown, now: number): GameSnapshot {
+  const { game, room, me, userId, levels } = c;
   const ruleset = getRuleset(room.ruleset_id);
   return {
     gameId: game.id,
@@ -67,12 +88,12 @@ function snapshot(
     roomCode: room.code,
     isHost: userId !== null && room.host_id === userId,
     rulesetId: room.ruleset_id,
-    version,
-    deadlines,
+    version: shown.version,
+    deadlines: shown.deadlines,
     seats: publicSeats(room.seats),
-    scores: room.ledger.length === 4 ? room.ledger : [0, 0, 0, 0],
+    scores: shown.table.scores ?? [0, 0, 0, 0],
     me,
-    view: me === null ? publicView(state) : viewFor(state, ruleset, me),
+    view: me === null ? publicView(shown.state) : viewFor(shown.state, ruleset, me),
     status: game.status,
     now,
     stage: me === null ? null : (levels[me] ?? 'new'),
@@ -86,7 +107,7 @@ export async function viewGame(gameId: string, userId: string, now = Date.now())
   if (me === null && room.host_id !== userId) throw new HttpError(403, 'not at this table');
   const [live, levels] = await Promise.all([loadLive(gameId), stagesBySeat(room.seats)]);
   if (!live) throw new HttpError(404, 'game has no live state');
-  return snapshot(game, room, live.version, live.deadlines, live.state, me, now, userId, levels);
+  return snapshot({ game, room, me, userId, levels }, shownOf(live, room), now);
 }
 
 /**
@@ -99,18 +120,20 @@ export async function viewGame(gameId: string, userId: string, now = Date.now())
  * table back) they need a seat or the host's chair, as viewing does, so a
  * stranger holding a game id can neither move the table nor watch it.
  *
- * Saving the live state is the commit point. Before it, a failure goes back
- * to the caller and nothing has changed. After it, the move counts: the
- * bookkeeping (hand log, result, scores, the game's end) is attempted and
- * any failure logged, the others are always poked, and the caller always
- * gets the new table, never a 500 for a move that landed.
+ * The commit point is one commit_table call (applyStep): the state, the
+ * running totals, the clocks and every move the request made, with the
+ * hand's result once it ends, all saved together or not at all. Before it, a
+ * failure goes back to the caller and nothing has changed. After it, the move
+ * counts: the rest of the bookkeeping (the game's hand count, the players'
+ * tallies, the game's end) is attempted and any failure logged, the others
+ * are always poked, and the caller always gets the new table, never a 500 for
+ * a move that landed.
  */
 export async function actOnGame(gameId: string, userId: string | null, clientAction: ClientAction | null, expectedVersion: number | null, now = Date.now()): Promise<GameSnapshot> {
   // Rebuilt from its checked fields whoever the caller is, so the table and the hand log only ever see a validated move.
   const action = clientAction === null ? null : parseClientAction(clientAction);
   if (clientAction !== null && action === null) throw new HttpError(400, 'that is not a move a player can make');
   const { game, room } = await loadGame(gameId);
-  const ruleset = getRuleset(room.ruleset_id);
   const me = userId === null ? null : seatOf(room.seats, userId);
   if (action && me === null) throw new HttpError(403, 'not seated at this table');
   if (userId !== null && me === null && room.host_id !== userId) throw new HttpError(403, 'not at this table');
@@ -119,56 +142,76 @@ export async function actOnGame(gameId: string, userId: string | null, clientAct
   // The players' levels size the clocks and pick how the filler bots play; read alongside the table, not after it.
   const [live, levels] = await Promise.all([loadLive(gameId), stagesBySeat(room.seats)]);
   if (!live) throw new HttpError(404, 'game has no live state');
-  if (expectedVersion !== null && live.version !== expectedVersion) {
-    throw new HttpError(409, 'stale version', snapshot(game, room, live.version, live.deadlines, live.state, me, now, userId, levels));
+  const caller: Caller = { game, room, me, userId, levels };
+  if (expectedVersion !== null && live.version !== expectedVersion) throw new HttpError(409, 'stale version', snapshot(caller, shownOf(live, room), now));
+
+  const out = await applyStep(caller, live, { action }, now);
+  if (out !== 'lost') return out;
+  // Someone else saved first, and nothing of this request was written: the caller gets the table as it now stands.
+  const fresh = await loadLive(gameId);
+  throw new HttpError(409, 'lost the race', fresh ? snapshot(caller, shownOf(fresh, room), now) : undefined);
+}
+
+/**
+ * One request's step, saved as one commit_table call, then the bookkeeping
+ * that follows it and the poke. Gives the new snapshot, or 'lost' when
+ * someone else saved first, in which case nothing was written, no step after
+ * the commit ran and nobody was poked.
+ */
+async function applyStep(c: Caller, live: LiveRow, input: { readonly action: ClientAction | null }, now: number): Promise<GameSnapshot | 'lost'> {
+  const { game, room, me, userId, levels } = c;
+  const { action } = input;
+  // A newer deploy wrote this table's bookkeeping in a shape this code can't read. Saving over it would lose what it
+  // can't see, so the table waits for that deploy to come back.
+  if (live.table.v > TABLE_STATE_V) {
+    logError('table_state_newer', new Error(`table_state is v${live.table.v}, and this deploy writes v${TABLE_STATE_V}`), { gameId: game.id, version: live.version });
+    throw new HttpError(503, 'something went wrong');
   }
 
+  const ruleset = getRuleset(room.ruleset_id);
+  const table = tableOf(live, room);
   const strict = room.options['strict'] === true;
   const policy = policyFor(humanLevels(levels), strict);
   const bots = emptySeatBots(levels, strict);
   let result;
   try {
-    result = step({ game: live, ruleset, seats: room.seats, policy, now, ...(action ? { action } : {}), ...(me !== null ? { actor: me } : {}), seed: game.seed, bots });
+    result = step({
+      game: { state: live.state, deadlines: live.deadlines, tableState: table },
+      ruleset,
+      seats: room.seats,
+      policy,
+      now,
+      ...(action ? { action } : {}),
+      ...(me !== null ? { actor: me } : {}),
+      seed: game.seed,
+      bots,
+    });
   } catch (err) {
     const status = rejectionStatus(err);
     if (status) throw new HttpError(status, (err as Error).message);
     throw err;
   }
 
-  if (!result.changed && !result.gameOver) return snapshot(game, room, live.version, live.deadlines, live.state, me, now, userId, levels);
+  // Nothing moved (a tick before any clock ran out): nothing to save.
+  if (!result.changed) return snapshot(c, { version: live.version, deadlines: live.deadlines, state: live.state, table }, now);
 
-  const wasFinished = live.state.phase === 'finished';
-  const ok = await saveLive(gameId, live.version, result.state, result.deadlines);
-  if (!ok) {
-    const fresh = await loadLive(gameId);
-    throw new HttpError(409, 'lost the race', fresh ? snapshot(game, room, fresh.version, fresh.deadlines, fresh.state, me, now, userId, levels) : undefined);
-  }
   const version = live.version + 1;
+  const hands = handWrites(live.state, result.state, stamp(result.moves, version));
+  // acted_at says when a person last moved the table at all, so a pass counts. A legacy table's first commit also counts
+  // when its last save was recent: older code never wrote acted_at, and a game being played across the deploy mustn't read
+  // as idle for its age (R23).
+  const acted = (userId !== null && action !== null) || (live.legacy && now - lastActed(live) <= STALE_GAME_MS);
+  const wake = wakeAt({ deadlines: result.deadlines, table: result.tableState, actedAt: acted ? now : lastActed(live) });
+  const saved = await commitTable(game.id, live.version, { state: result.state, table: result.tableState, deadlines: result.deadlines, wakeAt: wake, acted, hands });
+  if (saved === null) return 'lost';
 
-  // Committed: from here the move counts. The snapshot carries the scores and status as the database now holds them, as the others will see them.
+  // Committed: from here the move counts, and so does the hand's result with its points. The snapshot carries the status as
+  // the database now holds it, as the others will see it.
   const next = result.state;
-  const handIndex = live.state.progress.handIndex;
-  let ledger = room.ledger;
   let finished = false;
-  // The durable log: player actions per hand, results when a hand ends.
   const steps: CommitStep[] = [];
-  if (action && action.type !== 'nextHand') steps.push({ what: 'log the move', run: () => appendAction(gameId, handIndex, action) });
-  if (action?.type === 'nextHand' && !result.gameOver) steps.push({ what: 'open the hand', run: () => openHand(gameId, next) });
-  if (!wasFinished && next.phase === 'finished') {
-    // Closing the hand is five writes, each its own step, so one that fails costs only itself. The scores go first and the
-    // snapshot takes them the moment they land, so the caller's totals are the room's, whichever later write fails.
-    steps.push(
-      {
-        what: 'settle the scores',
-        run: async () => {
-          ledger = (await settleScores(gameId, room, next)) ?? ledger;
-        },
-      },
-      { what: 'close the hand', run: () => endHand(gameId, next) },
-      { what: 'record the result', run: () => recordResult(gameId, next) },
-      { what: 'count the hand', run: () => countHand(gameId) },
-      { what: 'tally the players', run: () => recordHand(room.seats, next) },
-    );
+  if (result.finishedHand) {
+    steps.push({ what: 'count the hand', run: () => countHand(game.id) }, { what: 'tally the players', run: () => recordHand(room.seats, next) });
   }
   if (result.gameOver) {
     // The game's own status is finishGame's last write, so a finish that fails part way leaves the game active, and the next
@@ -176,15 +219,19 @@ export async function actOnGame(gameId: string, userId: string | null, clientAct
     steps.push({
       what: 'finish the game',
       run: async () => {
-        await finishGame(gameId, room.id);
+        await finishGame(game.id, room.id);
         finished = true;
       },
     });
   }
-  const poke = gamePoke(gameId, version, { phase: next.phase, turn: next.turn, seq: next.seq, gameOver: result.gameOver });
-  await afterCommit(steps, () => broadcast([poke]), { gameId, version });
+  const poke = gamePoke(game.id, version, { phase: next.phase, turn: next.turn, seq: next.seq, gameOver: result.gameOver });
+  await afterCommit(steps, () => broadcast([poke]), { gameId: game.id, version });
 
-  const snap = snapshot({ ...game, status: finished ? 'finished' : game.status }, { ...room, ledger }, version, result.deadlines, next, me, now, userId, levels);
+  const snap = snapshot(
+    { ...c, game: { ...game, status: finished ? 'finished' : game.status } },
+    { version, deadlines: result.deadlines, state: next, table: result.tableState },
+    now,
+  );
   // Only the caller's own stand-in moves: another seat's exchange carries the tiles it passed, which stay private.
   const mine = me === null ? [] : result.standIns.filter((x) => x.seat === me);
   return mine.length > 0 ? { ...snap, standIns: mine } : snap;

@@ -1,6 +1,7 @@
 import { FULL_SET, isDragonTile, isWindTile, windOf } from '../../tiles';
 import type { Guard, Guards } from '../../patterns/types';
 import type { GameProgress, HandSpec, Ruleset, Settlement, WinInput } from '../../ruleset';
+import { KARACHI_ALIASES, KARACHI_EXAMPLES } from './examples';
 import { EAST_GENERAL, EAST_NAMED, GOULASH, NORTH, SOUTH } from './patterns';
 import { scoreKarachi } from './scoring';
 
@@ -38,6 +39,7 @@ const GOULASH_SPEC: HandSpec = {
   patterns: [GOULASH],
 };
 
+/** Patterns are listed most specific first: the reducer announces the first match, and the analyser uses spec order to break ties. */
 export function karachiHandSpec(p: GameProgress): HandSpec {
   switch (p.roundWind) {
     case 'E':
@@ -46,7 +48,7 @@ export function karachiHandSpec(p: GameProgress): HandSpec {
         kind: 'honour',
         label: 'East: the honour hand',
         description: 'Three chows or three pungs, all one suit or one per suit, plus five honours.',
-        patterns: [...EAST_GENERAL, ...EAST_NAMED],
+        patterns: [...EAST_NAMED, ...EAST_GENERAL],
       };
     case 'S':
       return {
@@ -91,7 +93,10 @@ export const karachi: Ruleset = {
   handSpec: karachiHandSpec,
   guards: karachiGuards,
   score: karachiScore,
+  examples: KARACHI_EXAMPLES,
+  aliases: KARACHI_ALIASES,
 };
 
+export * from './examples';
 export * from './patterns';
 export * from './scoring';

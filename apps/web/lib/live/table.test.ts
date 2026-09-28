@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { IllegalAction, analysisBot, karachi, legalActions, viewFor, type Seat } from '@society/engine';
-import type { ClientAction, LiveGame } from './types';
+import { IllegalAction, analysisBot, karachi, legalActions, viewFor, type HandState, type Seat } from '@society/engine';
+import type { ClientAction, LiveGame, Move } from './types';
 import { NotYourMove, actionIsForSeat, dealFirstHand, decisionRandom, resolveExpired, settle, step, type StepInput } from './table';
-import { isHuman, seatOf, type Seats } from './types';
+import { isHuman, isPlayerMove, seatOf, type Seats } from './types';
+import { replayHand, stamp } from './hand-log';
 import { policyFor } from './policy';
+import { NEW_TABLE, type TableState } from './table-state';
 
 const ME: Seat = 0;
 const seats: Seats = [
@@ -328,5 +330,228 @@ describe('the bots in empty seats', () => {
       expect(game.state.phase).toBe('finished');
       expect(moves).toBeGreaterThan(3);
     }
+  });
+});
+
+/**
+ * The hand log: every move a step makes comes back in `moves`, tagged with
+ * who made it, so the seed and the log replay to the same table (hand-log.ts).
+ */
+describe('the moves a step makes', () => {
+  const BOTS: readonly Seat[] = [1, 2, 3];
+
+  /** A move the table made on its own: a bot's in a bot seat, or the pass for a person with nothing to claim. */
+  function isTableMadeMove(m: Move): boolean {
+    if (m.by === 'bot') return m.seat !== undefined && BOTS.includes(m.seat) && m.userId === undefined && isPlayerMove(m.a) && m.a.seat === m.seat;
+    if (m.by === 'table') return m.seat === ME && m.userId === undefined && m.a.type === 'pass' && isPlayerMove(m.a) && m.a.seat === ME;
+    return false;
+  }
+
+  it('tags the player’s own move with their id, and every move the table makes after it', { timeout: 60_000 }, () => {
+    let game: LiveGame = dealFirstHand(karachi, seats, 'tags-1', policy, T0);
+    const all: Move[] = [];
+    for (let i = 0; i < 400 && game.state.phase !== 'finished'; i++) {
+      const a = (analysisBot(viewFor(game.state, karachi, ME), karachi) ?? { type: 'pass', seat: ME }) as ClientAction;
+      const r = step({ game, ruleset: karachi, seats, policy, now: T0 + i * 1000, action: a, actor: ME });
+      expect(r.moves[0]).toEqual({ by: 'player', seat: ME, userId: 'u-me', a });
+      expect(r.moves.slice(1).every(isTableMadeMove), JSON.stringify(r.moves)).toBe(true);
+      expect(r.dealt).toBe(false);
+      expect(r.finishedHand).toBe(r.state.phase === 'finished');
+      all.push(...r.moves);
+      game = r;
+    }
+    expect(game.state.phase).toBe('finished');
+    expect(all.some((m) => m.by === 'bot')).toBe(true);
+    // The log never holds the engine's own move: a claim window closes itself once everyone has answered.
+    expect(all.map((m) => m.a.type)).not.toContain('resolveClaims');
+  });
+
+  it('tags the pass for a person with nothing to claim as the table’s', { timeout: 60_000 }, () => {
+    // A bot's discard that another bot could claim asks everyone else to answer, and the person here has nothing to take.
+    const passes = ['tags-2', 'tags-3', 'tags-4', 'tags-5'].flatMap((seed) => {
+      let game: LiveGame = dealFirstHand(karachi, seats, seed, policy, T0);
+      const found: Move[] = [];
+      for (let i = 0; i < 400 && game.state.phase !== 'finished'; i++) {
+        const a = (analysisBot(viewFor(game.state, karachi, ME), karachi) ?? { type: 'pass', seat: ME }) as ClientAction;
+        const r = step({ game, ruleset: karachi, seats, policy, now: T0 + i * 1000, action: a, actor: ME });
+        found.push(...r.moves.filter((m) => m.by === 'table'));
+        game = r;
+      }
+      return found;
+    });
+    expect(passes.length).toBeGreaterThan(0);
+    expect(passes.every((m) => m.seat === ME && m.userId === undefined && m.a.type === 'pass')).toBe(true);
+  });
+
+  it('tags a move a clock made as the clock’s, and says when that finished the hand', { timeout: 60_000 }, () => {
+    let game: LiveGame = dealFirstHand(karachi, seats, 'tags-6', policy, T0);
+    for (let i = 0; i < 400 && game.state.phase !== 'finished'; i++) {
+      const late = (game.deadlines.turn ?? game.deadlines.claim)! + 1;
+      const r = step({ game, ruleset: karachi, seats, policy, now: late });
+      expect(r.moves[0]).toEqual({ by: 'clock', seat: ME, a: r.standIns[0]!.action });
+      expect(r.moves.filter((m) => m.by === 'clock')).toHaveLength(r.standIns.length);
+      expect(r.moves.slice(1).every((m) => m.by === 'clock' || isTableMadeMove(m))).toBe(true);
+      expect(r.finishedHand).toBe(r.state.phase === 'finished');
+      game = r;
+    }
+    expect(game.state.phase).toBe('finished');
+  });
+
+  it('logs nothing for a step that changes nothing, or a "next hand" when the game is over', () => {
+    const game = dealFirstHand(karachi, seats, 'tags-7', policy, T0);
+    const quiet = step({ game, ruleset: karachi, seats, policy, now: T0 + 1000 });
+    expect(quiet).toMatchObject({ changed: false, moves: [], dealt: false, finishedHand: false });
+    // A finished last hand: nothing to deal, nothing played.
+    const done = settle(game.state, karachi, [seats[1], seats[2], seats[3], { kind: 'bot', name: 'Me' }] as unknown as Seats);
+    expect(done.phase).toBe('finished');
+    const lastHand = { ...done, progress: { roundWind: 'N' as const, roundIndex: 3, handInRound: 3, handIndex: 15 } };
+    const over = step({
+      game: { state: lastHand, deadlines: { claim: null, turn: null } },
+      ruleset: karachi,
+      seats,
+      policy,
+      now: T0,
+      action: { type: 'nextHand' },
+      actor: ME,
+      seed: 'tags-7',
+    });
+    expect(over).toMatchObject({ gameOver: true, moves: [], dealt: false, finishedHand: false });
+  });
+
+  it('deals the next hand with only that hand’s moves in the step, and a hand finished by a bare step is finished there', { timeout: 60_000 }, () => {
+    let game: LiveGame = dealFirstHand(karachi, seats, 'tags-8', policy, T0);
+    for (let i = 0; i < 400 && game.state.phase !== 'finished'; i++) {
+      const a = (analysisBot(viewFor(game.state, karachi, ME), karachi) ?? { type: 'pass', seat: ME }) as ClientAction;
+      game = step({ game, ruleset: karachi, seats, policy, now: T0 + i * 1000, action: a, actor: ME });
+    }
+    const r = step({ game, ruleset: karachi, seats, policy, now: T0, action: { type: 'nextHand' }, actor: ME, seed: 'tags-8' });
+    expect(r.dealt).toBe(true);
+    expect(r.finishedHand).toBe(false);
+    expect(r.state.dealer).toBe(1);
+    // Hand 1's dealer is a bot, so bots move before the person's first decision; every one of those moves is the new hand's.
+    expect(r.moves.length).toBeGreaterThan(0);
+    expect(r.moves.every(isTableMadeMove)).toBe(true);
+    expect(replayHand(karachi, 'tags-8', { progress: r.state.progress, dealer: r.state.dealer }, stamp(r.moves, 2))).toEqual(r.state);
+
+    // A seat that stands up mid-hand: the next bare step plays the rest of the hand for the bots, and says it finished there.
+    const allBots = [{ kind: 'bot', name: 'Me' }, seats[1], seats[2], seats[3]] as unknown as Seats;
+    const played = step({ game: r, ruleset: karachi, seats: allBots, policy, now: T0 });
+    expect(played).toMatchObject({ changed: true, dealt: false, finishedHand: true });
+    expect(played.state.phase).toBe('finished');
+    expect(played.moves.every((m) => m.by === 'bot' || m.by === 'table')).toBe(true);
+    expect(replayHand(karachi, 'tags-8', { progress: r.state.progress, dealer: r.state.dealer }, [...stamp(r.moves, 2), ...stamp(played.moves, 3)])).toEqual(played.state);
+  });
+
+  it('gives the deal’s bot moves with the first hand', () => {
+    const late: Seats = [seats[1], seats[2], seats[0], seats[3]] as unknown as Seats;
+    const first = dealFirstHand(karachi, late, 'tags-9', policy, T0);
+    // Seat 0 deals, and it's a bot: the bots have moved before the person in seat 2 decides anything.
+    expect(first.moves.length).toBeGreaterThan(0);
+    expect(first.moves.every((m) => (m.by === 'bot' && m.seat !== 2) || (m.by === 'table' && m.seat === 2 && m.a.type === 'pass'))).toBe(true);
+    expect(replayHand(karachi, 'tags-9', { progress: first.state.progress, dealer: first.state.dealer }, stamp(first.moves, 1))).toEqual(first.state);
+    // When the person deals, nothing has happened yet.
+    expect(dealFirstHand(karachi, seats, 'tags-9', policy, T0).moves).toEqual([]);
+  });
+});
+
+/**
+ * The table's running scores (table_state.scores) move inside step, in the
+ * same step as the hand that wins them, so they're saved with it.
+ */
+describe('the running scores', () => {
+  /** Where the game stood before this hand, with a key from a newer deploy that must come through untouched. */
+  const table: TableState = { v: 1, scores: [100, -100, 0, 0], extra: { later: { kept: true } } };
+
+  /** The totals with a won hand's transfers added, worked out here rather than by the code under test. */
+  function plus(scores: readonly number[], s: HandState): number[] {
+    const next = [...scores];
+    if (s.result?.type === 'win') for (const t of s.result.settlement.transfers) ((next[t.from]! -= t.amount), (next[t.to]! += t.amount));
+    return next;
+  }
+
+  /** The human plays the hand out; every step but the last must hand the table back as it was given. */
+  function playOut(seed: string): { last: ReturnType<typeof step>; before: LiveGame } {
+    let game: LiveGame = { ...dealFirstHand(karachi, seats, seed, policy, T0), tableState: table };
+    for (let i = 0; i < 400; i++) {
+      const a = (analysisBot(viewFor(game.state, karachi, ME), karachi) ?? { type: 'pass', seat: ME }) as ClientAction;
+      const r = step({ game, ruleset: karachi, seats, policy, now: T0 + i * 1000, action: a, actor: ME });
+      if (r.state.phase === 'finished') return { last: r, before: game };
+      expect(r.tableState).toBe(table);
+      game = r;
+    }
+    throw new Error('the hand never finished');
+  }
+
+  it('adds a hand won in a step to the table’s running scores, keeping the rest of the table as it was', { timeout: 60_000 }, () => {
+    const { last } = playOut('writes-2');
+    expect(last.state.result?.type).toBe('win');
+    expect(last.finishedHand).toBe(true);
+    expect(last.changed).toBe(true);
+    expect(last.tableState.scores).toEqual(plus(table.scores!, last.state));
+    expect(last.tableState.scores).not.toEqual(table.scores);
+    expect(last.tableState).toMatchObject({ v: 1, extra: { later: { kept: true } } });
+    // The table it was given is left as it was.
+    expect(table.scores).toEqual([100, -100, 0, 0]);
+  });
+
+  it('adds nothing for a washout', { timeout: 60_000 }, () => {
+    const { last } = playOut('writes-1');
+    expect(last.state.result?.type).toBe('draw');
+    expect(last.finishedHand).toBe(true);
+    expect(last.tableState).toBe(table);
+  });
+
+  it('passes the table through untouched when nothing happens, and calls that no change', () => {
+    const game: LiveGame = { ...dealFirstHand(karachi, seats, 'scores-1', policy, T0), tableState: table };
+    const quiet = step({ game, ruleset: karachi, seats, policy, now: T0 + 1000 });
+    expect(quiet.changed).toBe(false);
+    expect(quiet.tableState).toBe(table);
+    expect(quiet.state).toBe(game.state);
+    // A table with no bookkeeping yet starts from a fresh one.
+    const fresh = step({ game: { state: game.state, deadlines: game.deadlines }, ruleset: karachi, seats, policy, now: T0 + 1000 });
+    expect(fresh).toMatchObject({ changed: false, tableState: NEW_TABLE });
+  });
+
+  it('gives a "next hand" on the finished last hand changed and gameOver, with the hand and the table as they were', () => {
+    const game = dealFirstHand(karachi, seats, 'scores-2', policy, T0);
+    const done = settle(game.state, karachi, [seats[1], seats[2], seats[3], { kind: 'bot', name: 'Me' }] as unknown as Seats);
+    const lastHand = { ...done, progress: { roundWind: 'N' as const, roundIndex: 3, handInRound: 3, handIndex: 15 } };
+    const r = step({
+      game: { state: lastHand, deadlines: { claim: null, turn: null }, tableState: table },
+      ruleset: karachi,
+      seats,
+      policy,
+      now: T0,
+      action: { type: 'nextHand' },
+      actor: ME,
+      seed: 'scores-2',
+    });
+    expect(r).toMatchObject({ changed: true, gameOver: true, finishedHand: false, deadlines: { claim: null, turn: null } });
+    expect(r.state).toBe(lastHand);
+    expect(r.tableState).toBe(table);
+  });
+
+  it('adds the points of a hand dealt and finished in the same step', { timeout: 60_000 }, () => {
+    // Four bots: the deal of the next hand plays it to its end in the step that deals it.
+    const bots = [
+      { kind: 'bot', name: 'A' },
+      { kind: 'bot', name: 'B' },
+      { kind: 'bot', name: 'C' },
+      { kind: 'bot', name: 'D' },
+    ] as unknown as Seats;
+    let won: ReturnType<typeof step> | undefined;
+    for (const seed of ['dealt-1', 'dealt-2', 'dealt-3', 'dealt-4', 'dealt-5', 'dealt-6']) {
+      const first = dealFirstHand(karachi, bots, seed, policy, T0);
+      expect(first.state.phase).toBe('finished');
+      const r = step({ game: { ...first, tableState: table }, ruleset: karachi, seats: bots, policy, now: T0, action: { type: 'nextHand' }, seed });
+      if (r.state.result?.type === 'win') {
+        won = r;
+        break;
+      }
+    }
+    expect(won, 'no seed gave a won hand at a table of bots').toBeDefined();
+    expect(won).toMatchObject({ dealt: true, finishedHand: true, changed: true });
+    expect(won!.state.progress.handIndex).toBe(1);
+    expect(won!.tableState.scores).toEqual(plus(table.scores!, won!.state));
   });
 });

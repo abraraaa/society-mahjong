@@ -104,14 +104,16 @@ change isn't additive.
 | Document | Shape (all keys optional unless noted) | Parser |
 |---|---|---|
 | `live_state.state` | the engine's `HandState` | engine |
-| `live_state.table_state` | `{ v, absence: [4 × { userId, misses, away, since, lastTap, played }], ready: { hand, userIds, dealAt }, scores: [4], over: { how, by, at, hands, scores, seats } }` | `table-state.ts`* |
+| `live_state.table_state` | `{ v, absence: [4 × { userId, misses, away, since, lastTap, played }], ready: { hand, userIds, dealAt }, scores: [4], over: { how, by, at, hands, scores, seats } }` | `table-state.ts` |
 | `rooms.seats` | 4 × `null` \| `{ kind: 'human', userId, name, since?, seen? }` \| `{ kind: 'bot', name, heldFor?, kept? }` | `types.ts` |
 | `rooms.options` | `{ strict?, stakes?, tutorForGuests?, botStrength? }` | `validate.ts` |
 | `profiles.stats` | `{ hands, wins }` | `stage.ts` |
-| `hands.actions[]` | `{ v, by: 'player' \| 'bot' \| 'clock' \| 'away' \| 'table' \| 'host', seat?, userId?, a: Action }` | `table.ts` |
+| `hands.actions[]` | `{ v, by: 'player' \| 'bot' \| 'clock' \| 'away' \| 'table' \| 'host', seat?, userId?, a: Action }` | `hand-log.ts` |
 | `app_events.data` | per `type` | `events.ts`* |
 
-\* Arrives with the code that first writes it.
+\* Arrives with the code that first writes it. `table-state.ts` reads `scores`
+today and keeps every other key as it found it; the rest of that shape is
+filled in by the features that write it.
 
 App vocabularies (`by`, `ended_how`, event types) have **no CHECK
 constraints**, so a new word is a code change. Only structure is constrained
@@ -182,13 +184,14 @@ pushed by an agent.
      `SUPABASE_DB_URL` and `VERCEL_DEPLOY_HOOK`.
 4. **Adopt what was run by hand**:
    - Actions, then *Migrate and deploy*, then Run workflow from `main`, with
-     "adopt" ticked.
+     the box "Adopt (first run only): record 0001-0004…" ticked.
    - This records 0001–0004 as applied and pushes anything newer.
    - It's safe to run more than once.
-5. **Turn off Vercel's own production deploy** (a one-line change to
-   `vercel.json`: `"git": { "deploymentEnabled": { "main": false } }`).
-   Production then deploys only after migrations are in. Previews still deploy
-   from every branch.
+5. **Vercel's own production deploy is off** (`apps/web/vercel.json`:
+   `"git": { "deploymentEnabled": { "main": false } }`), so production deploys
+   only through the workflow, after migrations are in. If a migration fails,
+   production stays on the last good deploy. Previews still deploy from every
+   branch.
 
 If the database password is ever reset, update `SUPABASE_DB_URL` to match.
 Nothing else expires.

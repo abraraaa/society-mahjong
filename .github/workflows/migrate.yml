@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       adopt:
-        description: 'First run only: record 0001-0004, which were run by hand, as already applied'
+        description: 'Adopt (first run only): record 0001-0004, which were run by hand, as already applied'
         type: boolean
         default: false
 permissions:
