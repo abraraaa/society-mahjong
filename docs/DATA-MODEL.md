@@ -111,7 +111,7 @@ change isn't additive.
 | `rooms.seats` | 4 × `null` \| `{ kind: 'human', userId, name, since?, seen? }` \| `{ kind: 'bot', name, heldFor?, keptName?, kept?: 'left' \| 'late' }` (a bot keeping a seat for someone who left, or wasn't here at the deal) | `types.ts` |
 | `rooms.options` | `{ strict?, stakes?, tutorForGuests?, botStrength? }` | `validate.ts` |
 | `profiles.stats` | `{ hands, wins }` | `stage.ts` |
-| `hands.actions[]` | `{ v, by: 'player' \| 'bot' \| 'clock' \| 'away' \| 'table' \| 'host', seat?, userId?, a: Action }` | `hand-log.ts` |
+| `hands.actions[]` | `{ v, by: 'player' \| 'bot' \| 'clock' \| 'away' \| 'table' \| 'host', seat?, userId?, a: Action \| TableNote }`. Table notes include a seat going away (`{ type: 'away', reason: 'clock' \| 'host' \| 'self' }`, a break logged `by: 'player'` with their userId), coming back, a take-over, and the game's end | `hand-log.ts` |
 | `app_events.data` | per `type`: `room_made` `{ ruleset, guest }`; `seat_taken` `{ how, status }`; `game_dealt` `{ humans, bots, again, levels: { new, first_hand, learning, solid } \| null }` (null when the levels couldn't be read); `game_finished` `{ how, hands, humans }`; `game_abandoned` `{ hands }` | `events.ts` |
 
 `table-state.ts` keeps any key it doesn't read as it found it, so a newer
