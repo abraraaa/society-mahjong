@@ -23,8 +23,8 @@ const ROOM_CODE = 'KHI-4287Q';
 const SEATS: Seats = [
   { kind: 'human', userId: USER_ID, name: USER_NAME },
   { kind: 'human', userId: '00000000-0000-4000-8000-000000000002', name: 'Bilal' },
-  { kind: 'bot', name: 'Bot' },
-  { kind: 'bot', name: 'Bot' },
+  { kind: 'bot', name: 'Sana' },
+  { kind: 'bot', name: 'Omar' },
 ];
 const ME: Seat = 0;
 
@@ -99,6 +99,10 @@ export interface Fixtures {
   readonly newTurn: GameSnapshot;
   /** The same turn for a regular. */
   readonly solidTurn: GameSnapshot;
+  /** The same turn after Bilal got up from the table: a bot plays his seat, under his name. Getting up changes the seats and not the table, so the version is the same. */
+  readonly bilalLeft: GameSnapshot;
+  /** Amna's turn clock ran out, and the tick that found it had a bot move for her: what that tick answers her own phone, with the stand-in's move. */
+  readonly timedOut: GameSnapshot;
   /** The table after her discard: Bilal's turn, so she has no Discard button. */
   readonly turnAfter: GameSnapshot;
   /** The same hand, finished, with the game over. */
@@ -133,6 +137,10 @@ function build(): Fixtures {
     return end && { t, after, end };
   });
 
+  // Her clock runs out on that turn, and a tick finds it: the stand-in's move is told to her phone alone, as the tick route does.
+  const expired = step({ game: live.t, ruleset: karachi, seats: SEATS, policy: POLICY, now: live.t.deadlines.turn! + 1 });
+  const timedOut = snapshot(expired.state, 6, expired.deadlines, 'active', { standIns: expired.standIns.filter((x) => x.seat === ME) });
+
   // The step that scores the last hand ends the game by itself: that step's end is what the page is told.
   const last = search('a last hand that plays out and ends the game', (seed) => {
     const end = playOut(deal(seed, NORTH_LAST, 3));
@@ -166,6 +174,10 @@ function build(): Fixtures {
     turn: snapshot(live.t.state, 5, live.t.deadlines),
     newTurn: { ...snapshot(live.t.state, 5, live.t.deadlines), stage: 'new' },
     solidTurn: { ...snapshot(live.t.state, 5, live.t.deadlines), stage: 'solid' },
+    bilalLeft: snapshot(live.t.state, 5, live.t.deadlines, 'active', {
+      seats: SEATS.map((s, i) => (i === 1 ? { kind: 'bot', name: 'Bilal' } : s && { kind: s.kind, name: s.name })),
+    }),
+    timedOut,
     turnAfter: snapshot(live.after.state, 6, live.after.deadlines),
     finished: snapshot(live.end.state, 9, { claim: null, turn: null }, 'finished'),
     handDone: snapshot(live.end.state, 9, { claim: null, turn: null }, 'active', { scores: [...(live.end.tableState.scores ?? [0, 0, 0, 0])] }),

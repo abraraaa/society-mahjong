@@ -184,7 +184,7 @@ export function resolveExpired(game: LiveGame, ruleset: Ruleset, seats: Seats, n
 /** A move a bot made on an absent human's behalf, so the table can tell them. */
 export interface StandIn {
   readonly seat: Seat;
-  readonly action: Action;
+  readonly action: PlayerMove;
 }
 
 function resolveExpiredWith(game: LiveGame, ruleset: Ruleset, seats: Seats, now: number): { state: HandState; standIns: StandIn[]; moves: EngineMove[] } | null {

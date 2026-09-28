@@ -64,7 +64,7 @@ export interface TableProps {
   readonly clock?: { readonly kind: 'turn' | 'claim'; readonly ms: number } | null;
   /** a move is on its way to the table: the action buttons are disabled, and a second tap does nothing until it lands */
   readonly busy?: boolean;
-  /** what plays each seat that a person doesn't: the final table marks a bot's row */
+  /** what plays each seat that a person doesn't: a bot's seat is marked on its pill, in the result sheet's rows and on the final table */
   readonly marks?: Readonly<Partial<Record<Seat, 'bot' | 'away'>>>;
   /** the line under the final scores, when the page knows how the game ended; "That's the game." and who finished top otherwise */
   readonly endLine?: string;
@@ -309,6 +309,7 @@ function TableInner({
       score={signed(scores[p.seat])}
       clock={clock && clock.kind === 'turn' && view.phase === 'turn' && view.turn === p.seat ? mmss(clock.ms) : undefined}
       urgent={urgent}
+      mark={marks?.[p.seat]}
       {...(orientation ? { orientation } : {})}
     />
   );
@@ -598,7 +599,10 @@ function ResultSheet({
             </div>
             {order.map((seat) => (
               <div key={seat} className={`row${seat === view.me ? ' is-me' : ''}`}>
-                <span className="who">{names[seat]}</span>
+                <span className="who">
+                  {names[seat]}
+                  {marks?.[seat] === 'bot' && ' · bot'}
+                </span>
                 <span className="delta">{paid ? signed(deltas[seat]) : ''}</span>
                 <span className="total">{signed(scores[seat])}</span>
               </div>

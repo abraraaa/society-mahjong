@@ -31,7 +31,7 @@ test.describe('the end of a game', () => {
     const sheet = page.locator('.sheet');
     await expect(sheet.getByRole('heading', { name: 'Final scores' })).toBeVisible();
     // Ranked: Bilal top, then Amna (you), then the two bots, each marked.
-    await expect(sheet.locator('.standings .row .who')).toHaveText(['1Bilal', '2You', '3Bot · bot', '4Bot · bot']);
+    await expect(sheet.locator('.standings .row .who')).toHaveText(['1Bilal', '2You', '3Sana · bot', '4Omar · bot']);
     await expect(sheet.locator('.standings .row .total')).toHaveText(['+14,504', '+2,000', '−8,000', '−8,504']);
     await expect(sheet.locator('.standings .row.is-me .who')).toHaveText('2You');
     const line = endLineOf(fx.lastHandOver);

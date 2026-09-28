@@ -261,10 +261,13 @@ countdown from frightening anyone:
    out by a deadline they could not see.
 
 When a clock runs out on someone who has gone, the response to whichever
-request resolved it carries what the stand-in did, and their own table
-says so in a line at the top ("You ran out of time, so a stand-in
-discarded 5 bamboo for you") rather than leaving them to work out why the
-hand looks different.
+request resolved it carries what the bot did for them. When that request
+was their own phone's tick, their table says so in plain words in a line
+at the top ("You ran out of time, so a bot discarded the 5 Bamboo for
+you"; a claimed set is "picked up that tile to make a set", a declared
+kong "put down four of a kind"), rather than leaving them to work out why
+the hand looks different. The words never say pung, chow, kong or
+exchange (`lib/live/presence.ts`).
 
 **Next hand.** Any seated human may deal the next hand, not only the host:
 the finished phase runs no clock, so a host who has wandered off would
@@ -292,9 +295,15 @@ room channel's `started` message to the new one.
 
 **Leaving.** Any seat can stand up from a live table (Leave, top right,
 with a confirmation). A bot takes the seat for the rest of the game so the
-others carry on. The host's Leave sheet has a third answer, "End the game
-for everyone", which asks again ("End the game now?", saying the hand
-being played won't count) before ending it for the whole table. When the
+others carry on. Everyone else's table says so the next time it looks
+("Bilal's left the table, so a bot's playing their seat for now."), which
+is at the next move (the bot's own, if the seat owed one) or the slow
+poll: getting up changes the seats, not the table, so it pokes no game
+channel by itself. Every seat a bot plays is marked "Sana · bot", on its
+pill, in the result sheet's rows and on the final table. The host's Leave
+sheet has a third answer, "End the game for everyone", which asks again
+("End the game now?", saying the hand being played won't count) before
+ending it for the whole table. When the
 last human leaves, the game ends as `abandoned`, saved with the table like
 any other end (a hand cut short doesn't count), and the room goes back to
 `finished`; anyone still on the page sees "The table has closed". A Leave
