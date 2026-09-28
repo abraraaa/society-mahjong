@@ -1,7 +1,8 @@
 'use client';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { PrivatePlayerView, Ruleset, Seat } from '@society/engine';
 import { analyseFor, coachFor } from './coach';
+import { nextPlanMark, preferFor, samePlanMark, type PlanMark } from './plan-mark';
 import type { CoachStage, CoachState } from './types';
 
 /**
@@ -15,7 +16,7 @@ export interface CoachSource {
   readonly ruleset: Ruleset;
   readonly stage: CoachStage;
   readonly names: Readonly<Record<Seat, string>>;
-  /** what makes a new game: solo's round counter, a live gameId. Nothing the tutor says reads it yet: it's here so anything the tutor comes to carry from one view to the next starts afresh with a new game. */
+  /** what makes a new game: solo's round counter, a live gameId. The plan the tutor holds the player to starts afresh with each. */
   readonly game: string | number;
   /** someone who has just taken this seat over in a hand under way, and hasn't moved since (`firstLookFor`) */
   readonly firstLook?: boolean;
@@ -23,10 +24,17 @@ export interface CoachSource {
 
 /**
  * What the tutor says on this view. The analysis is the expensive part (a
- * bounded search per pattern), so it's kept for as long as the view is the
- * same, and the tutor's words for as long as nothing they depend on changes.
- * Null in, null out, so a table still waiting for its first view can call it
- * before any early return.
+ * bounded search per pattern), so it's kept for as long as the view and the
+ * plan are the same, and the tutor's words for as long as nothing they depend
+ * on changes. Null in, null out, so a table still waiting for its first view
+ * can call it before any early return.
+ *
+ * The plan holds steady from one view to the next: the one the player is on
+ * (plan-mark.ts) goes back to the analysis as `prefer`. When the analysis
+ * moves to a new plan, the mark is stored during render, the "store what you
+ * saw" pattern plan-strip.tsx uses, and React renders again at once with the
+ * new plan in front: one extra analysis on a switch, before anything is
+ * painted. The mark lasts as long as the page: a reload starts without it.
  */
 export function useCoach(source: CoachSource): CoachState;
 export function useCoach(source: CoachSource | null): CoachState | null;
@@ -35,10 +43,15 @@ export function useCoach(source: CoachSource | null): CoachState | null {
   const ruleset = source?.ruleset ?? null;
   const stage = source?.stage ?? null;
   const names = source?.names ?? null;
+  const game = source?.game ?? null;
   const firstLook = source?.firstLook ?? false;
-  const analysis = useMemo(() => (view && ruleset ? analyseFor(view, ruleset) : null), [view, ruleset]);
+  const [mark, setMark] = useState<PlanMark | null>(null);
+  const prefer = view && game !== null ? preferFor(mark, game, view) : undefined;
+  const analysis = useMemo(() => (view && ruleset ? analyseFor(view, ruleset, prefer) : null), [view, ruleset, prefer]);
+  const next = view && game !== null && analysis ? nextPlanMark(mark, game, view, analysis.candidates[0]) : mark;
+  if (!samePlanMark(next, mark)) setMark(next);
   return useMemo(
-    () => (view && ruleset && analysis && stage && names ? coachFor({ view, ruleset, analysis, stage, names, firstLook }) : null),
-    [view, ruleset, analysis, stage, names, firstLook],
+    () => (view && ruleset && analysis && stage && names ? coachFor({ view, ruleset, analysis, stage, names, firstLook, mark: next }) : null),
+    [view, ruleset, analysis, stage, names, firstLook, next],
   );
 }

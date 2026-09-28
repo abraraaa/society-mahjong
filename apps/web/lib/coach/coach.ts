@@ -24,8 +24,9 @@ import {
 } from '@society/engine';
 import { GLOSSARY } from './glossary';
 import { goalFor, roundNote } from './goal';
-import { handsThisRound, winnerRef, yoursRef } from './hand-card';
-import { shapeOf, titleOf } from './shape';
+import { exampleRef, handsThisRound, winnerRef, yoursRef } from './hand-card';
+import { isTurnView, type PlanMark } from './plan-mark';
+import { noteShapeOf, shapeOf, titleOf } from './shape';
 import {
   SAY_BUDGET,
   countWord,
@@ -73,6 +74,11 @@ export interface CoachInput {
    * first-look.ts). Until they do, the tutor gives them what the start of a hand gives: the round's aim, and the plan.
    */
   readonly firstLook?: boolean;
+  /**
+   * The plan the tutor is holding the player to (plan-mark.ts), after this view. On the turn view that tells a
+   * switch (`switched.toldAt` is its seq), the bubble says what the tutor switched from, and why.
+   */
+  readonly mark?: PlanMark | null;
 }
 
 export function handOf(view: PrivatePlayerView): HandInput {
@@ -83,10 +89,23 @@ function ctxOf(view: PrivatePlayerView): MatchCtx {
   return { seatWind: view.players[view.me].seatWind, roundWind: view.progress.roundWind };
 }
 
-/** The analysis the coach runs on. Separate so a component can memoise it by `seq`. */
-export function analyseFor(view: PrivatePlayerView, ruleset: Ruleset): HandAnalysis {
+/**
+ * The analysis the coach runs on. Separate so a component can memoise it by `seq`. `prefer` is the plan the
+ * player is already on (`preferFor`, plan-mark.ts), kept in front of hands only as close, so the strip, the
+ * tutor's words and its discards all stay with it.
+ */
+export function analyseFor(view: PrivatePlayerView, ruleset: Ruleset, prefer?: string): HandAnalysis {
   const spec = ruleset.handSpec(view.progress);
-  return analyseHand(handOf(view), spec.patterns, ctxOf(view), ruleset.guards, { claims: ruleset.claims });
+  return analyseHand(handOf(view), spec.patterns, ctxOf(view), ruleset.guards, { claims: ruleset.claims, ...(prefer ? { prefer } : {}) });
+}
+
+/**
+ * Whether a hand of this pattern can hold a run: a set that may be a run (Any Damn Hand's "any set" included), or
+ * a run of its own. Once a pung is laid face up, a hand that needs its runs may be out of reach, and only the
+ * analysis of the hand after the claim knows.
+ */
+export function admitsRun(p: Pattern): boolean {
+  return p.components.some((c) => (c.c === 'set' && (c.of === 'chow' || c.of === 'any')) || c.c === 'seq' || c.c === 'run' || c.c === 'mixedSeq' || c.c === 'mixedRun');
 }
 
 function targetOf(candidate: PatternCandidate | undefined, patterns: readonly Pattern[], ruleset: Ruleset, ctx: MatchCtx): CoachTarget | null {
@@ -188,6 +207,8 @@ function missedRun(view: PrivatePlayerView, target: CoachTarget, goal: CoachGoal
 const RUNS_SAID: CoachTeach = { key: 'rule:runs', place: 'said', text: 'runs only come from the wall' };
 
 const CLAIM_VERB: Readonly<Record<ClaimOption['type'], string>> = { pung: 'Pung', kong: 'Kong', chow: 'Chow', win: 'Mahjong!' };
+/** A claim as a noun, for the lines that say why not to make it. */
+const CLAIM_NOUN: Readonly<Record<ClaimOption['type'], string>> = { pung: 'pung', kong: 'kong', chow: 'chow', win: 'claim' };
 
 function seg(text: string): CoachSegment {
   return { text };
@@ -326,6 +347,18 @@ function outcomeOf(input: CoachInput, target: CoachTarget | null, patterns: read
   };
 }
 
+/**
+ * C2, the claim sheet's line for a claim worth making: how close it leaves the hand, and which hand (`hand`,
+ * when there is one). With `endsRuns` (C2x), it also says the claim rules out every run hand, while that fits.
+ * A kong's replacement tile is the first thing to go when the line runs long, and C2x never keeps it: with it,
+ * the line is over the bubble's budget for almost every hand's name.
+ */
+export function claimLine(type: ClaimOption['type'], away: number, hand: Part | null, endsRuns: boolean): CoachSegment[] {
+  const claim = (tail: string) => line(act(CLAIM_VERB[type]), ` it: you'll be ${tilesWord(Math.max(1, away))}`, ...(hand ? [' from ', hand] : []), tail);
+  const plain = type === 'kong' ? [claim(', with a replacement tile to come.'), claim('.')] : [claim('.')];
+  return fitting(endsRuns ? [claim(', but it rules out every run hand.'), ...plain] : plain);
+}
+
 /** E2 and E3: who won, with what, and how the last tile came. `hand` is the hand's name, or words when there's no pattern to name. */
 export function winnerLine(who: string, hand: Part, how: string): CoachSegment[] {
   return line(`${isolate(who)} wins with `, hand, `, ${how}.`);
@@ -418,6 +451,7 @@ function adviceFor(input: CoachInput): CoachState {
     outcome: null,
     teach: [] as readonly CoachTeach[],
     at: { hand: view.progress.handIndex, seq: view.seq },
+    planSwitch: null,
   } as const;
 
   // --- hand end: the debrief, where a beginner learns most -------------------
@@ -484,36 +518,55 @@ function adviceFor(input: CoachInput): CoachState {
     }
     // The only honest answer to "does this help" is to re-analyse the hand as it
     // would stand after the claim: an exposed pung can shut this hand out of every
-    // run pattern the round allows, and only the analysis knows that.
+    // run pattern the round allows, and only the analysis knows that. Every hand
+    // still reachable after it counts, not only the nearest few, so "no run hand
+    // is left" is true when it's said.
     const baseAway = target?.away ?? Number.POSITIVE_INFINITY;
+    const patternOf = (id: string) => spec.patterns.find((p) => p.id === id);
+    const takesRuns = (c: PatternCandidate) => {
+      const p = patternOf(c.patternId);
+      return p ? admitsRun(p) : false;
+    };
     let best: { option: ClaimOption; away: number; after: HandAnalysis } | null = null;
     for (const option of options) {
       const hand = handAfterClaim(handOf(view), option, discard.kind, discard.from);
       if (!hand) continue;
-      const after = analyseHand(hand, spec.patterns, ctx, ruleset.guards, { claims: ruleset.claims });
+      const after = analyseHand(hand, spec.patterns, ctx, ruleset.guards, { claims: ruleset.claims, limit: Number.POSITIVE_INFINITY });
       const away = after.candidates[0]?.away ?? Number.POSITIVE_INFINITY;
       if (!best || away < best.away) best = { option, away, after };
     }
+    // The player was building towards a hand with runs, among their nearest few, and after the claim no hand that
+    // takes runs is left. In South, Any Damn Hand takes runs and takes a pung too, so a pung there never ends them.
+    const endsRuns = !!best && analysis.candidates.slice(0, 3).some(takesRuns) && !best.after.candidates.some(takesRuns);
     if (best && best.away < baseAway) {
       // The hand as it would stand after the claim, with the claimed set laid face up.
       const leader = best.after.candidates[0];
-      const from: Part[] = leader ? [' from ', named(yoursRef(leader, spec.patterns, ruleset, ctx, 'ifClaimed'))] : [];
-      const tail = best.option.type === 'kong' ? ', with a replacement tile to come.' : '.';
+      const hand = leader ? named(yoursRef(leader, spec.patterns, ruleset, ctx, 'ifClaimed')) : null;
       return {
         ...base,
         moment: 'claim',
         action: { kind: 'claim', option: best.option, tile: discard.kind },
-        say: line(act(CLAIM_VERB[best.option.type]), ` it: you'll be ${tilesWord(Math.max(1, best.away))}`, ...from, tail),
+        say: claimLine(best.option.type, best.away, hand, endsRuns),
         reason: 'the claim moves the hand closer than leaving it',
         highlight: [],
       };
     }
-    const runs = runNoteApplies(target, goal, spec.patterns, view.concealed, discard.kind);
+    // Why not, most telling first: a claim that leaves no hand at all, one that ends every run hand, then the run
+    // this tile would have made, which can't be claimed.
+    const noun = best ? CLAIM_NOUN[best.option.type] : 'claim';
+    const noHand = !!best && best.after.candidates.length === 0;
+    const runs = !noHand && !endsRuns && runNoteApplies(target, goal, spec.patterns, view.concealed, discard.kind);
     const say: CoachSegment[] = !target
       ? [seg("Nothing here's worth breaking your hand for. "), act('Pass'), seg('.')]
-      : runs
-        ? line(named(target.hand), " wants that tile in a run, and you can't claim for a run here. ", act('Pass'), '.')
-        : line('That does nothing for ', named(target.hand), '. ', act('Pass'), '.');
+      : noHand
+        ? line(`A ${noun} here would leave no winning hand you could still make. `, act('Pass'), '.')
+        : endsRuns
+          ? best!.away > baseAway
+            ? line(`A ${noun} here would set you back and rule out every run hand. `, act('Pass'), '.')
+            : line(`A ${noun} here gets you no closer and rules out every run hand. `, act('Pass'), '.')
+          : runs
+            ? line(named(target.hand), " wants that tile in a run, and you can't claim for a run here. ", act('Pass'), '.')
+            : line('That does nothing for ', named(target.hand), '. ', act('Pass'), '.');
     const teach = runs ? [RUNS_SAID] : [];
     return { ...base, moment: 'claim', action: { kind: 'pass', tile: discard.kind }, say, reason: 'no claim on this tile shortens the hand', highlight: [], teach };
   }
@@ -572,8 +625,69 @@ function adviceFor(input: CoachInput): CoachState {
   const reason = discardReason(analysis, goal, target, view.concealed, action.tile, myDiscardCount(view));
   const lead = act(`Discard ${tileName(action.tile)}`);
   const progress = progressAfter(input, spec, target, action.tile);
+  const planSwitch = switchFor(input, spec, target);
+  if (planSwitch) {
+    // The turn that tells a switch: which hand the tutor moved to, and why, in place of the discard's reason.
+    const to = named(target.hand);
+    const from = named(planSwitch.from);
+    const approximate = target.approximate || planSwitch.approximate;
+    const why: Part[] | null =
+      planSwitch.closerBy === null
+        ? [': ', from, " can't be made now"]
+        : approximate
+          ? null
+          : planSwitch.closerBy > 0
+            ? [`: it's ${planSwitch.closerBy === 1 ? 'a tile' : tilesWord(planSwitch.closerBy)} closer than `, from]
+            : planSwitch.closerBy === 0 && goal.generalTitles.includes(target.title)
+              ? [": it's as close as ", from, ', and easier']
+              : null;
+    const said = (...rest: Part[]) => line(lead, '. Switching to ', to, ...rest);
+    const say = fitting([...(why ? [said(...why, `.${progress}`), said(...why, '.')] : []), said(`.${progress}`), said('.')]);
+    return {
+      ...base,
+      moment,
+      action,
+      say,
+      reason: textOf(line(...reason.full)),
+      highlight,
+      teach,
+      planSwitch: { from: planSwitch.from, closerBy: planSwitch.closerBy },
+    };
+  }
   const say = fitting([line(lead, ': ', ...reason.full, `.${progress}`), line(lead, ': ', ...reason.short, `.${progress}`), line(lead, ': ', ...reason.short, '.')]);
   return { ...base, moment, action, say, reason: textOf(line(...reason.full)), highlight, teach };
+}
+
+/**
+ * On the turn view that tells a plan switch (plan-mark.ts), the hand the tutor switched from and how much
+ * closer the new plan is: its nearest candidate of that title, from this view's analysis, or from one over
+ * every hand when the analysis's short list has none. None at all means it can't be made now (`closerBy`
+ * null), and its card shows the example. Null on any other view.
+ */
+function switchFor(
+  input: CoachInput,
+  spec: ReturnType<Ruleset['handSpec']>,
+  target: CoachTarget,
+): { readonly from: CoachHandRef; readonly closerBy: number | null; readonly approximate: boolean } | null {
+  const { view, ruleset, analysis, mark } = input;
+  const switched = mark?.switched;
+  if (!switched || switched.toldAt !== view.seq || mark.hand !== view.progress.handIndex || switched.fromTitle === target.title || !isTurnView(view)) return null;
+  const ctx = ctxOf(view);
+  const nearest = (candidates: readonly PatternCandidate[]) =>
+    candidates.filter((c) => titleOf(c) === switched.fromTitle).reduce<PatternCandidate | undefined>((a, c) => (a && a.away <= c.away ? a : c), undefined);
+  const old =
+    nearest(analysis.candidates) ?? nearest(analyseHand(handOf(view), spec.patterns, ctx, ruleset.guards, { claims: ruleset.claims, limit: Number.POSITIVE_INFINITY }).candidates);
+  if (old) return { from: yoursRef(old, spec.patterns, ruleset, ctx), closerBy: old.away - target.away, approximate: old.approximate };
+  const pattern = spec.patterns.find((p) => p.id === switched.fromId) ?? spec.patterns.find((p) => titleOf(p) === switched.fromTitle);
+  const from: CoachHandRef = (pattern && exampleRef(pattern, ruleset, ctx)) ?? {
+    patternId: pattern?.id ?? switched.fromId,
+    title: switched.fromTitle,
+    shape: pattern ? shapeOf(pattern.id, spec.patterns) : '',
+    whose: 'example',
+    layout: [],
+    note: noteShapeOf(switched.fromTitle, spec.patterns),
+  };
+  return { from, closerBy: null, approximate: false };
 }
 
 /** The tile that was just thrown, from the river, for the debrief. */

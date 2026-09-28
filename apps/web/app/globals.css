@@ -1327,6 +1327,15 @@ button.link-quiet {
   gap: 1px;
   flex: none;
 }
+/* A new plan's tiles fade in: opacity only, so nothing on the table moves. */
+.plan-strip[data-new-plan] .strip-row {
+  animation: strip-in 180ms ease-out;
+}
+@keyframes strip-in {
+  from {
+    opacity: 0;
+  }
+}
 .strip-row .tile {
   /* 22px, or narrower when the row holds more tiles than fit (four kongs, a small phone). */
   width: min(22px, calc((100cqw - var(--strip-g) * 8px - (var(--strip-n) - var(--strip-g) - 1) * 1px) / var(--strip-n)));

@@ -81,4 +81,10 @@ export interface AnalysisOptions {
    * discard. Without them nothing is reported claimable, since only the ruleset knows.
    */
   readonly claims?: ClaimRules;
+  /**
+   * The plan the player is already on, as a pattern id: kept in front of patterns exactly as
+   * close, once the general-hand rule has had its say, so two equally close hands don't take
+   * turns leading from one draw to the next. The tutor passes it; bots never do.
+   */
+  readonly prefer?: string;
 }

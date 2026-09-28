@@ -14,14 +14,15 @@ import {
   type TileKind,
   type Wind,
 } from '@society/engine';
-import { analyseFor, coachFor, runNoteApplies, runTileFor, shortOfLine, washoutLine } from './coach';
+import { admitsRun, analyseFor, claimLine, coachFor, runNoteApplies, runTileFor, shortOfLine, washoutLine } from './coach';
 import { GLOSSARY } from './glossary';
 import { goalFor } from './goal';
 import { hasWrittenShape, titleOf } from './shape';
 import { stripGroups } from './strip';
 import { firstLookFor } from './first-look';
 import { NOTE_BUDGET, createLessons, createTaughtStore, lessonFor, lineKey, noteText } from './teach';
-import { NAMES as LONG_NAMES, ROUNDS, coachOf, playHand } from './test-games';
+import { NAMES as LONG_NAMES, ROUNDS, coachOf, playHand, stickyCoach } from './test-games';
+import type { PlanMark } from './plan-mark';
 import type { CoachSegment, CoachState } from './types';
 import { SAY_BUDGET, isolate, myDiscardCount, textOf, visibleLength } from './words';
 
@@ -176,16 +177,20 @@ describe('the run rule, explained only when it bites', () => {
     for (const kind of coach.target!.wantsFromWall) expect(runTileFor(coach.target, coach.goal, kind), kind).toBeNull();
   });
 
-  it('says so at a claim when the tile would make a run the plan wants, and marks the rule said', () => {
+  it('says at a claim what a pung of a run tile would cost, and leaves the run rule for its footnote', () => {
     // Chow + 5 Honours two tiles off, both 6 Bamboo in its runs: a pung of the third is legal, and does the hand no good.
+    // What it costs is the telling part: every run hand. So the claim sheet says that, and the run line ("you can't
+    // claim for a run here") gives way to it. In East a pung of a suit tile always ends every run hand, so the run
+    // line stays for a round where a pung leaves one in reach.
     const tiles: TileKind[] = ['s4', 's5', 's6', 's6', 's7', 's7', 's8', 's8', 'WE', 'WS', 'WW', 'WN', 'm1'];
     const view = { ...waitingView('E', 1, tiles, 's6'), legal: { claims: [{ type: 'pung', tiles: ['s6', 's6'] }], pass: true } } as unknown as PrivatePlayerView;
     const coach = coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: 'new', names: NAMES });
     expect(coach.action.kind).toBe('pass');
-    expect(textOf(coach.say)).toBe("Chow + 5 Honours wants that tile in a run, and you can't claim for a run here. Pass.");
-    expect(coach.teach).toContainEqual(expect.objectContaining({ key: 'rule:runs', place: 'said' }));
-    // So the sheet teaches the rule, and no footnote says it again this visit.
-    expect(lessonFor(coach, new Set()).marks).toContain('rule:runs');
+    expect(runNoteApplies(coach.target, coach.goal, [], tiles, 's6')).toBe(true);
+    expect(textOf(coach.say)).toBe('A pung here would set you back and rule out every run hand. Pass.');
+    // The sheet hasn't said the rule, so the footnote about a run tile going past is still to come this visit.
+    expect(coach.teach).toEqual([]);
+    expect(lessonFor(coach, new Set()).marks).not.toContain('rule:runs');
   });
 
   it('keeps quiet while someone else is on the move', () => {
@@ -683,5 +688,226 @@ describe('someone who takes a seat over part-way through a hand', () => {
     expect(lines.slice(0, later).every((x) => x.note)).toBe(true);
     expect(lines.slice(later).filter((x) => x.note)).toEqual([]);
     expect(store.all().has('firstLook')).toBe(true);
+  });
+});
+
+describe('claims that tell the truth about run hands', () => {
+  /** A claim window on Bilal's discard, with the claims the player is offered. */
+  const claimView = (round: Wind, handInRound: number, tiles: TileKind[], discard: TileKind, claims: readonly { type: 'pung' | 'kong'; tiles: TileKind[] }[]) =>
+    ({ ...waitingView(round, handInRound, tiles, discard), legal: { claims, pass: true } }) as unknown as PrivatePlayerView;
+  const pung = (k: TileKind) => [{ type: 'pung' as const, tiles: [k, k] }];
+  const sayOf = (view: PrivatePlayerView) => {
+    const coach = coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: 'new', names: NAMES });
+    return { coach, text: textOf(coach.say) };
+  };
+
+  it('knows which hands take runs: Any Damn Hand, whose sets can be runs, included', () => {
+    const find = (round: Wind, handInRound: number, id: string) => karachi.handSpec(progressFor(round, handInRound)).patterns.find((p) => p.id === id)!;
+    expect(admitsRun(find('S', 0, 'karachi.south.anyDamnHand'))).toBe(true);
+    expect(admitsRun(find('S', 0, 'karachi.south.crazyChows'))).toBe(true);
+    expect(admitsRun(find('E', 1, 'karachi.east.chows.each.news'))).toBe(true);
+    expect(admitsRun(find('E', 1, 'karachi.east.pungs.each.news'))).toBe(false);
+    expect(admitsRun(find('E', 0, 'karachi.goulash'))).toBe(false);
+    expect(admitsRun(find('S', 0, 'karachi.south.dirtyPairs'))).toBe(false);
+  });
+
+  it('says a pung that gets the hand closer rules out every run hand, when it does', () => {
+    // Before the pung, every nearest hand is a run hand or Windyfly; after it, no run hand is left.
+    const { coach, text } = sayOf(claimView('E', 1, ['s4', 's5', 's6', 'p2', 'p2', 'm8', 'm8', 'WE', 'WS', 'WW', 'WN', 'DR', 'DG'], 'p2', pung('p2')));
+    expect(coach.action.kind).toBe('claim');
+    expect(text).toBe("Pung it: you'll be four tiles from Pung + 5 Honours, but it rules out every run hand.");
+    expect(coach.say.find((x) => x.hand)?.hand).toMatchObject({ whose: 'ifClaimed', title: 'Pung + 5 Honours' });
+  });
+
+  it('says a pung that would set the hand back, and end every run hand, does both, instead of "does nothing"', () => {
+    const { coach, text } = sayOf(claimView('E', 1, ['s4', 's5', 's6', 'p2', 'p2', 'm7', 'm8', 'WE', 'WS', 'WW', 'WN', 'WN', 'DR'], 'p2', pung('p2')));
+    expect(coach.action.kind).toBe('pass');
+    expect(text).toBe('A pung here would set you back and rule out every run hand. Pass.');
+    expect(text).not.toContain('does nothing');
+    // It's not the run rule the claim sheet says, so the run tile's footnote is still to come.
+    expect(coach.teach).toEqual([]);
+  });
+
+  it('says a pung that gets the hand no closer, and ends every run hand, does that', () => {
+    const { coach, text } = sayOf(
+      claimView('E', 1, ['s4', 's5', 's6', 'p2', 'p2', 'p2', 'm8', 'm8', 'WE', 'WS', 'WW', 'WN', 'DR'], 'p2', [
+        { type: 'pung', tiles: ['p2', 'p2'] },
+        { type: 'kong', tiles: ['p2', 'p2', 'p2'] },
+      ]),
+    );
+    expect(coach.action.kind).toBe('pass');
+    expect(text).toBe('A pung here gets you no closer and rules out every run hand. Pass.');
+    const kong = sayOf(claimView('E', 1, ['s4', 's5', 's6', 'p2', 'p2', 'p2', 'm7', 'm8', 'WE', 'WS', 'WW', 'WN', 'WN'], 'p2', [{ type: 'kong', tiles: ['p2', 'p2', 'p2'] }]));
+    expect(kong.text).toBe('A kong here would set you back and rule out every run hand. Pass.');
+  });
+
+  it('says a pung of a wind in South would leave no hand at all', () => {
+    const { coach, text } = sayOf(claimView('S', 0, ['m2', 'm4', 'm8', 'm8', 'm9', 'm9', 'm9', 'p5', 'p5', 's8', 's9', 'WW', 'WW'], 'WW', pung('WW')));
+    expect(coach.action.kind).toBe('pass');
+    expect(text).toBe('A pung here would leave no winning hand you could still make. Pass.');
+  });
+
+  it('never says a pung in South rules out every run hand: Any Damn Hand takes runs, and a pung too', () => {
+    const { coach, text } = sayOf(claimView('S', 0, ['m2', 'm3', 'm4', 'm6', 'p2', 'p3', 'p6', 's3', 's3', 's5', 's6', 's9', 's9'], 's9', pung('s9')));
+    expect(coach.target?.title).toBe('Any Damn Hand');
+    expect(coach.action.kind).toBe('claim');
+    expect(text).toBe("Pung it: you'll be two tiles from Any Damn Hand.");
+  });
+
+  it('never says so in South over seeded play either', { timeout: 240_000 }, () => {
+    let windows = 0;
+    for (let h = 0; h < 30; h++) {
+      playHand({
+        seed: `v2sim-S-${h}`,
+        progress: ROUNDS.S,
+        dealer: (h % 4) as 0 | 1 | 2 | 3,
+        onView: (view) => {
+          if (view.phase !== 'claim' || !view.legal.claims?.some((c) => c.type === 'pung')) return;
+          windows++;
+          const text = textOf(coachOf(view).say);
+          expect(text, `v2sim-S-${h} seq ${view.seq}`).not.toContain('rules out every run hand');
+          expect(text, `v2sim-S-${h} seq ${view.seq}`).not.toContain('rule out every run hand');
+        },
+      });
+    }
+    expect(windows).toBeGreaterThan(10);
+  });
+
+  it("drops a kong's replacement tile first when the line runs long, and never keeps it while saying the kong ends every run hand", () => {
+    const hand = (title: string): CoachSegment => ({ text: title, hand: { patternId: 'x', title, shape: '', whose: 'ifClaimed', layout: [], note: '' } });
+    for (const title of ['Monty Wriggly Snake v2', 'Pung + 5 Honours', 'Goulash'])
+      for (let away = 1; away <= 13; away++) {
+        const ends = textOf(claimLine('kong', away, hand(title), true));
+        expect(ends, ends).not.toContain('replacement');
+        expect(visibleLength(ends), ends).toBeLessThanOrEqual(SAY_BUDGET);
+        const pungLine = textOf(claimLine('pung', away, hand(title), true));
+        expect(visibleLength(pungLine), pungLine).toBeLessThanOrEqual(SAY_BUDGET);
+      }
+    expect(textOf(claimLine('kong', 3, hand('Monty Wriggly Snake v2'), true))).toBe("Kong it: you'll be three tiles from Monty Wriggly Snake v2, but it rules out every run hand.");
+    expect(textOf(claimLine('kong', 2, hand('Goulash'), false))).toBe("Kong it: you'll be two tiles from Goulash, with a replacement tile to come.");
+    expect(textOf(claimLine('pung', 2, null, false))).toBe("Pung it: you'll be two tiles.");
+  });
+});
+
+describe('a plan that holds steady, and says when it switches', () => {
+  // East hand 2: Chow + 5 Honours and Apple Blossom both two tiles off, Hovering Angel three.
+  const tiles: TileKind[] = ['s1', 's2', 's3', 'p1', 'p2', 'p3', 'm1', 'm2', 'DW', 'DW', 'DW', 'DG', 'WE', 'WS'];
+  const at = (seq: number, t: readonly TileKind[] = tiles) => ({ ...turnView('E', 1, t), seq }) as unknown as PrivatePlayerView;
+  const markFor = (view: PrivatePlayerView, from: { id: string; title: string }, toldAt: number | null): PlanMark => {
+    const lead = analyseFor(view, karachi).candidates[0]!;
+    return { game: 'g', hand: view.progress.handIndex, patternId: lead.patternId, title: titleOf(lead), switched: { fromId: from.id, fromTitle: from.title, toldAt } };
+  };
+  const coachWith = (view: PrivatePlayerView, mark: PlanMark | null, analysis = analyseFor(view, karachi)) =>
+    coachFor({ view, ruleset: karachi, analysis, stage: 'learning', names: NAMES, mark });
+
+  it('says the new plan is a tile closer, with the old one a hand you can tap', () => {
+    const view = at(7);
+    const coach = coachWith(view, markFor(view, { id: 'karachi.east.hoveringAngel', title: 'Hovering Angel' }, 7));
+    const tile = tileName((coach.action as { tile: TileKind }).tile);
+    expect(textOf(coach.say)).toBe(`Discard ${tile}. Switching to Chow + 5 Honours: it's a tile closer than Hovering Angel.`);
+    expect(coach.planSwitch).toMatchObject({ closerBy: 1, from: { title: 'Hovering Angel', whose: 'yours', away: 3 } });
+    expect(coach.say.filter((x) => x.hand).map((x) => x.hand)).toEqual([coach.target!.hand, coach.planSwitch!.from]);
+    // So a first visit gets both hands' footnotes, the old one included.
+    expect(lessonFor(coach, new Set(['rule:runs'])).notes.map((n) => n.key)).toContain('hand:Chow + 5 Honours');
+  });
+
+  it("says the round's general hand has caught up, when that's why", () => {
+    const view = at(7);
+    const coach = coachWith(view, markFor(view, { id: 'karachi.east.appleBlossom', title: 'Apple Blossom' }, 7));
+    expect(textOf(coach.say)).toMatch(/^Discard .+\. Switching to Chow \+ 5 Honours: it's as close as Apple Blossom, and easier\.$/);
+    expect(coach.planSwitch?.closerBy).toBe(0);
+  });
+
+  it("says the old hand can't be made now, and shows its example", () => {
+    // A pung of 2 Dots laid face up: no run hand is left.
+    const view = {
+      ...at(9, ['s4', 's5', 's6', 'm8', 'm8', 'WE', 'WS', 'WW', 'WN', 'DR', 'DG']),
+      players: (['E', 'S', 'W', 'N'] as const).map((seatWind, seat) => ({
+        seat,
+        seatWind,
+        melds: seat === 0 ? [{ type: 'pung', tiles: ['p2', 'p2', 'p2'], from: 1 }] : [],
+        discards: [],
+        bonus: [],
+      })),
+    } as unknown as PrivatePlayerView;
+    const coach = coachWith(view, markFor(view, { id: 'karachi.east.windyChows', title: 'Windy Chows' }, 9));
+    expect(textOf(coach.say)).toMatch(/^Discard .+\. Switching to .+: Windy Chows can't be made now\.$/);
+    expect(coach.planSwitch).toMatchObject({ closerBy: null, from: { title: 'Windy Chows', whose: 'example' } });
+  });
+
+  it("says only that it's switching when neither reason holds", () => {
+    // Two named hands as close, and nothing to say the new one is easier.
+    const view = at(7);
+    const plain = analyseFor(view, karachi);
+    const blossom = plain.candidates.find((c) => c.patternId === 'karachi.east.appleBlossom')!;
+    const analysis = { ...plain, candidates: [blossom, ...plain.candidates.filter((c) => c !== blossom)] };
+    const mark: PlanMark = {
+      game: 'g',
+      hand: view.progress.handIndex,
+      patternId: blossom.patternId,
+      title: 'Apple Blossom',
+      switched: { fromId: 'karachi.east.chows.each.pungPair', fromTitle: 'Chow + 5 Honours', toldAt: 7 },
+    };
+    const coach = coachWith(view, mark, analysis);
+    expect(textOf(coach.say)).toMatch(/^Discard .+\. Switching to Apple Blossom\.$/);
+    expect(coach.planSwitch?.closerBy).toBe(0);
+  });
+
+  it('says nothing of it on any other view, or on the turn after the one that told it', () => {
+    const view = at(12);
+    const usual = coachWith(view, null);
+    for (const mark of [
+      markFor(view, { id: 'karachi.east.hoveringAngel', title: 'Hovering Angel' }, 7),
+      markFor(view, { id: 'karachi.east.hoveringAngel', title: 'Hovering Angel' }, null),
+    ]) {
+      const coach = coachWith(view, mark);
+      expect(textOf(coach.say)).toBe(textOf(usual.say));
+      expect(textOf(coach.say)).not.toContain('Switching');
+      expect(coach.planSwitch).toBeNull();
+    }
+    // Nor while someone else is on the move, even with a switch told on this seq.
+    const theirs = { ...at(12, tiles.slice(0, 13)), turn: 1, legal: {} } as unknown as PrivatePlayerView;
+    expect(coachWith(theirs, markFor(theirs, { id: 'karachi.east.hoveringAngel', title: 'Hovering Angel' }, 12)).planSwitch).toBeNull();
+  });
+
+  it('keeps each switch line within the bubble and names both hands, over seeded play with the plan held', { timeout: 120_000 }, () => {
+    const seen = { switches: 0, closer: 0, caughtUp: 0, gone: 0 };
+    for (const [round, progress] of Object.entries(ROUNDS)) {
+      if (round === 'E0' || round === 'W') continue;
+      const spec = karachi.handSpec(progress);
+      for (let h = 0; h < 4; h++) {
+        const tutor = stickyCoach(`${round}-${h}`);
+        playHand({
+          seed: `switch-${round}-${h}`,
+          progress,
+          dealer: h as 0 | 1 | 2 | 3,
+          onView: (view) => {
+            const coach = tutor(view);
+            const where = `${round} ${h} seq ${view.seq}: ${textOf(coach.say)}`;
+            if (!coach.planSwitch) {
+              expect(textOf(coach.say), where).not.toContain('Switching');
+              return;
+            }
+            seen.switches++;
+            expect(view.phase === 'turn' && view.turn === view.me, where).toBe(true);
+            expect(textOf(coach.say), where).toMatch(new RegExp(`^Discard [^.]+\\. Switching to ${coach.target!.title.replace(/[+()]/g, '\\$&')}`));
+            expect(visibleLength(textOf(coach.say)), where).toBeLessThanOrEqual(SAY_BUDGET);
+            expect(coach.planSwitch.from.title, where).not.toBe(coach.target!.title);
+            expect(
+              spec.patterns.some((p) => p.id === coach.planSwitch!.from.patternId),
+              where,
+            ).toBe(true);
+            const { closerBy } = coach.planSwitch;
+            if (closerBy === null) seen.gone++;
+            else if (closerBy > 0) seen.closer++;
+            else seen.caughtUp++;
+            // Every closer-by count is honest: never negative, and never two tiles or more in this corpus's play.
+            if (closerBy !== null) expect(closerBy, where).toBeGreaterThanOrEqual(0);
+          },
+        });
+      }
+    }
+    expect(seen.switches).toBeGreaterThan(0);
+    expect(seen.closer + seen.caughtUp).toBeGreaterThan(0);
   });
 });
