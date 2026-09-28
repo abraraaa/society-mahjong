@@ -30,12 +30,18 @@
 --   and result says how it went: result->>'type' is 'win', or 'draw' for a
 --   washout (the wall ran out). hand_results, which older queries read, is no
 --   longer written, so hands is where finished hands are counted.
+-- * app_events has one row for each moment the app counts as it happens: a
+--   room made, a seat taken, a game dealt, a game finished or abandoned. Only
+--   query 9 reads it. The app started writing it with the release that added
+--   query 9, so its counts start that day: earlier weeks aren't there, and
+--   the first week is only part of one.
 --
 -- Columns used, checked against the migrations:
 --   rooms        id, code, host_id, seats, created_at
 --   games        id, room_id, status, started_at, ended_how
 --   hands        game_id, result, ended_at
 --   profiles     is_guest, created_at
+--   app_events   at, type, user_id, data
 
 
 -- 1. Rooms created per week.
@@ -282,5 +288,41 @@ select
   count(*) filter (where dealt) as dealt_any,
   count(*) filter (where finished) as finished_any
 from room_facts
+group by 1
+order by 1 desc;
+
+
+-- 9. The funnel's moments, week by week, as they happened.
+-- Counted from app_events (see the note at the top): its counts start the
+-- day the app began writing them, so this is no help with earlier weeks.
+-- Unlike the queries above, nothing here is pieced together from who is
+-- sitting where now: each moment was written down when it happened.
+--   rooms_made:      rooms created ("Host a table").
+--   people_who_sat:  different people who took a seat by the room's link
+--                    that week. A host sits down by making the room, so
+--                    isn't counted here unless they sat in someone else's.
+--   games_dealt:     games dealt, first games and games played again alike.
+--   finished:        games that reached the final table, split by how:
+--     complete:      the last hand was scored;
+--     by_host:       the host ended it;
+--     idle:          nobody had played it for six hours, so it ended by
+--                    itself.
+--   abandoned:       every person stood up, so the game closed with no
+--                    result.
+-- A game's end is counted in the week it ended, which needn't be the week it
+-- was dealt. To leave your own test tables out, add
+-- `where e.room_id not in (select id from public.rooms where host_id = '<your user id>')`
+-- above the group by.
+select
+  date_trunc('week', e.at)::date as week,
+  count(*) filter (where e.type = 'room_made') as rooms_made,
+  count(distinct e.user_id) filter (where e.type = 'seat_taken') as people_who_sat,
+  count(*) filter (where e.type = 'game_dealt') as games_dealt,
+  count(*) filter (where e.type = 'game_finished') as finished,
+  count(*) filter (where e.type = 'game_finished' and e.data ->> 'how' = 'complete') as complete,
+  count(*) filter (where e.type = 'game_finished' and e.data ->> 'how' = 'host') as by_host,
+  count(*) filter (where e.type = 'game_finished' and e.data ->> 'how' = 'idle') as idle,
+  count(*) filter (where e.type = 'game_abandoned') as abandoned
+from public.app_events e
 group by 1
 order by 1 desc;

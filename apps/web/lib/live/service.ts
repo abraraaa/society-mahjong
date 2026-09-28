@@ -7,6 +7,7 @@ import type { CoachStage } from '../coach/types';
 import type { GameSnapshot } from './snapshot';
 import { broadcast, gamePoke, roomPoke } from './broadcast';
 import { afterCommit, type CommitStep } from './commit';
+import { gameEnded, recordEvent } from './events';
 import { handWrites, stamp } from './hand-log';
 import { STALE_GAME_MS, isStale, presentAtEnd, publicGameOver } from './lifecycle';
 import { logError } from './log';
@@ -182,9 +183,9 @@ export async function viewGame(gameId: string, userId: string, now = Date.now())
  * together or not at all. Before it, a failure goes back to the caller and
  * nothing has changed. After it, the move counts: the rest of the
  * bookkeeping (the game's hand count, the players' tallies, the game's
- * finish) is attempted and any failure logged, the others are always poked,
- * and the caller always gets the new table, never a 500 for a move that
- * landed.
+ * finish and the funnel's count of its end) is attempted and any failure
+ * logged, the others are always poked, and the caller always gets the new
+ * table, never a 500 for a move that landed.
  *
  * A game that has ended but isn't all recorded yet is finished again here
  * (healFinish): a tick, the sweep included, then gets the final table, and a
@@ -288,6 +289,9 @@ async function applyStep(c: Caller, live: LiveRow, input: { readonly action: Cli
     // The game's own status is finishGame's last write, so a finish that fails part way leaves the game active, and the next
     // request that looks at it finishes it again (healFinish). The game is over either way: its end is committed.
     steps.push({ what: 'finish the game', run: () => finishGame(game.id, room, over) });
+    // Counted here, by the request that ended the game, whether or not its finish landed, and never by a heal: each end once.
+    // recordEvent never throws; a failed write is its own event_write_failed line.
+    steps.push({ what: 'count the end', run: () => recordEvent(gameEnded({ roomId: room.id, gameId: game.id, over, leaver: userId })) });
   }
   const poke = gamePoke(game.id, version, {
     phase: next.phase,

@@ -3,6 +3,7 @@ import { getRuleset } from '@society/engine';
 // Relative, not '@/lib', so vitest can load this handler without an alias.
 import { currentUser } from '../../../../../lib/live/auth';
 import { broadcast, roomPoke } from '../../../../../lib/live/broadcast';
+import { gameDealt, recordEvent } from '../../../../../lib/live/events';
 import { stamp } from '../../../../../lib/live/hand-log';
 import { errorResponse, json } from '../../../../../lib/live/http';
 import { emptySeatBots, humanLevels, policyFor } from '../../../../../lib/live/policy';
@@ -40,6 +41,9 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ code: str
     // The bots' opening moves go in the first hand's log, stamped with the live table's first version.
     const game = await startGame(room, first.state.seed, seats, { ...first, moves: stamp(first.moves, 1) });
     await broadcast([roomPoke(room.id, 'started', { gameId: game.id })]);
+    // Counted once the room points at the game: a deal that lost to a seat change threw above, and counts nothing. "Again" is a
+    // room that had a game before this one.
+    await recordEvent(gameDealt({ roomId: room.id, gameId: game.id, userId: user.id, seats, levels, again: room.current_game_id !== null }));
     return json({ gameId: game.id }, 201);
   } catch (err) {
     return errorResponse(err, '/api/rooms/[code]/start');

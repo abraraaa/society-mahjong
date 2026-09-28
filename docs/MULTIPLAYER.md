@@ -160,9 +160,10 @@ server  session → seat
           passes) appended to the hand's log, with its result once it ends
         then, when a hand ended, count it (unless it ended the game) and
           tally the players; when the game ended, finish it (who finished
-          where, the room, the game's row). A failure here is logged, and
-          the move still counts; a finish that failed is written again by
-          the next request that touches the game
+          where, the room, the game's row) and count its end for the funnel.
+          A failure here is logged, and the move still counts; a finish that
+          failed is written again by the next request that touches the game
+          (which never counts the end a second time)
         broadcast {version} on game:{id}; every client refetches its own view
         respond with the actor's private view and version
 ```
@@ -356,6 +357,12 @@ changing either are in `docs/DATA-MODEL.md`. What a live table keeps:
 - `games.ended_how` (`complete`, `host`, `idle` or `abandoned`), `ended_by`
   (the host who ended it, if one did), `ended_at` and `hands_played` say
   how the game ended, for the funnel.
+- `app_events`, one row for each moment the funnel counts
+  (`lib/live/events.ts`, read by `docs/ops/funnel.sql` query 9): a room
+  made, a seat taken by the room's link, a game dealt, and a game finished
+  (with how it ended) or abandoned. Each is written as it happens, and a
+  write that fails is logged, never a failed request. A game's end is
+  counted only by the request that ended it, so it's counted once.
 - Replaying a hand (`lib/live/hand-log.ts` `replayHand`): deal it from the
   game's seed with its progress, its dealer and its dealer streak (the run of
   hand rows just before it with the same dealer, which is why the streak

@@ -278,6 +278,29 @@ begin
 end
 $$;
 
+-- app_events: the row events.ts recordEvent writes, as the service role writes it. Nothing it names has to exist (no
+-- foreign keys, so a count outlives what it counts, and an idle end has nobody), and the database stamps when.
+do $$
+declare
+  n bigint;
+  m bigint;
+  row_ public.app_events;
+begin
+  set local role service_role;
+  insert into public.app_events (type, room_id, game_id, user_id, data)
+    values ('game_finished', gen_random_uuid(), gen_random_uuid(), null, '{"how": "idle", "hands": 3, "humans": 1}')
+    returning id into n;
+  insert into public.app_events (type, room_id, game_id, user_id, data) values ('seat_taken', gen_random_uuid(), null, gen_random_uuid(), '{}')
+    returning id into m;
+  reset role;
+  select * into row_ from public.app_events where id = n;
+  assert row_.at is not null and row_.at <= now(), 'app_events stamps when';
+  assert row_.data ->> 'how' = 'idle' and row_.user_id is null, 'app_events keeps the data as sent';
+  assert m > n, 'app_events numbers each row';
+  delete from public.app_events where id in (n, m);
+end
+$$;
+
 -- commit_table against the payload the app builds (supabase/tests/commit-table-payload.json, written by
 -- apps/web/lib/live/commit-payload.test.ts): what commitArgs and commitHands send is what commit_table reads.
 create temp table commit_payload as select :'payload'::jsonb as j;

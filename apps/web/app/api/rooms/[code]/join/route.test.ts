@@ -6,7 +6,8 @@ import type { GameOver } from '../../../../../lib/live/table-state';
 /**
  * A room code is enough to sit down. A room whose game has ended, but whose
  * end isn't all recorded yet, is finished first, so the friend arriving after
- * the last hand finds it between games rather than "already started".
+ * the last hand finds it between games rather than "already started". A new
+ * seat is one of the funnel's moments; coming back to one's own seat isn't.
  */
 const db = vi.hoisted(() => ({ room: null as unknown, game: null as unknown, meta: null as unknown, after: null as unknown }));
 
@@ -17,6 +18,7 @@ vi.mock('../../../../../lib/live/broadcast', () => ({
   gamePoke: vi.fn(() => ({})),
   roomPoke: vi.fn(() => ({})),
 }));
+vi.mock('../../../../../lib/live/events', () => ({ recordEvent: vi.fn(async () => {}) }));
 vi.mock('../../../../../lib/live/store', () => ({
   roomByCode: vi.fn(async () => db.room),
   roomById: vi.fn(async () => db.after ?? db.room),
@@ -27,7 +29,9 @@ vi.mock('../../../../../lib/live/store', () => ({
 }));
 
 import { POST } from './route';
+import * as events from '../../../../../lib/live/events';
 import * as store from '../../../../../lib/live/store';
+import { SEAT_ATTEMPTS } from '../../../../../lib/live/seating';
 
 const GAME = '6f1c2a9e-4b7d-4e3a-9c5f-2d8b0a7e1f34';
 /** A room written to a moment ago: a finished room turns newcomers away only once it has been quiet for a while. */
@@ -88,6 +92,8 @@ describe('POST /api/rooms/[code]/join', () => {
     // Seated in the room as the finish left it: a bot's seat, between games.
     expect(vi.mocked(store.saveSeats).mock.calls[0]![2]).toBe(CLOSED_AT);
     expect(await res.json()).toMatchObject({ status: 'finished', me: 1 });
+    expect(events.recordEvent).toHaveBeenCalledTimes(1);
+    expect(events.recordEvent).toHaveBeenCalledWith({ type: 'seat_taken', roomId: 'r-1', userId: 'u-zara', data: { how: 'join', status: 'finished' } });
   });
 
   it('still turns a newcomer away from a game in play, without touching it', async () => {
@@ -97,6 +103,7 @@ describe('POST /api/rooms/[code]/join', () => {
     expect(await res.json()).toEqual({ error: 'this table has already started' });
     expect(store.finishGame).not.toHaveBeenCalled();
     expect(store.saveSeats).not.toHaveBeenCalled();
+    expect(events.recordEvent).not.toHaveBeenCalled();
   });
 
   it('asks nothing of the live table for a room between games', async () => {
@@ -104,5 +111,42 @@ describe('POST /api/rooms/[code]/join', () => {
     const res = await join();
     expect(res.status).toBe(200);
     expect(store.liveMeta).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/rooms/[code]/join, counted for the funnel', () => {
+  it('counts a seat taken before the first game, once the seat is saved', async () => {
+    db.room = { ...room, status: 'lobby', current_game_id: null, seats: [room.seats[0], null, null, null] };
+    expect((await join()).status).toBe(200);
+    expect(events.recordEvent).toHaveBeenCalledWith({ type: 'seat_taken', roomId: 'r-1', userId: 'u-zara', data: { how: 'join', status: 'lobby' } });
+    const order = [store.saveSeats, events.recordEvent].map((fn) => vi.mocked(fn).mock.invocationCallOrder[0]!);
+    expect(order[0]).toBeLessThan(order[1]!);
+  });
+
+  it('counts nothing for someone coming back to the seat they already have', async () => {
+    db.room = { ...room, status: 'lobby', current_game_id: null, seats: [room.seats[0], { kind: 'human', userId: 'u-zara', name: 'Zara' }, null, null] };
+    const res = await join();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ me: 1 });
+    expect(store.saveSeats).not.toHaveBeenCalled();
+    expect(events.recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('counts nothing when the seat was never saved: a full table, or someone else sitting first every time', async () => {
+    const full: RoomRow['seats'] = [
+      room.seats[0],
+      { kind: 'human', userId: 'u-b', name: 'B' },
+      { kind: 'human', userId: 'u-c', name: 'C' },
+      { kind: 'human', userId: 'u-d', name: 'D' },
+    ];
+    db.room = { ...room, status: 'lobby', current_game_id: null, seats: full };
+    expect((await join()).status).toBe(409);
+    db.room = { ...room, status: 'lobby', current_game_id: null, seats: [room.seats[0], null, null, null] };
+    for (let i = 0; i < SEAT_ATTEMPTS; i++) vi.mocked(store.saveSeats).mockResolvedValueOnce(null);
+    const lost = await join();
+    expect(lost.status).toBe(409);
+    expect(await lost.json()).toEqual({ error: 'that seat was just taken; try again' });
+    expect(store.saveSeats).toHaveBeenCalledTimes(SEAT_ATTEMPTS);
+    expect(events.recordEvent).not.toHaveBeenCalled();
   });
 });
