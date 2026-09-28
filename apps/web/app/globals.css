@@ -809,23 +809,41 @@ h3 {
   /* a flex child will not shrink below its text without this, and the clamp needs it to */
   min-width: 0;
 }
-/* The plan line answers "how am I doing" and must stay one line to be worth its height. */
+/* The plan line answers "how am I doing" and must stay one line to be worth its height.
+   It's a button: a tap opens the plan's card, as the strip does. */
 .coach .plan {
+  display: flex;
+  width: 100%;
   margin: 0 0 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
   font: 500 11px/1.3 var(--font-sans);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--color-ink-700);
   white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.coach .plan .plan-title {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.coach .plan .plan-count {
+  flex: none;
 }
 /* The tip is never cut on a phone held upright: the river gives up the room,
    because a sentence you cannot finish reading teaches nothing. */
 .coach .say {
   margin: 0;
 }
-/* A glossary word: dotted, tappable, otherwise reading as text. */
+/* A glossary word or a hand's name: dotted, tappable, otherwise reading as text.
+   A span, not a button, so a name wraps like the words round it. */
 .term {
   font: inherit;
   color: inherit;
@@ -837,9 +855,20 @@ h3 {
   text-decoration-color: rgb(20 40 36 / 0.45);
   text-underline-offset: 3px;
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+/* A span has no focus ring of its own. */
+.term:focus-visible {
+  outline: 2px solid var(--color-brass-400);
+  outline-offset: 1px;
+  border-radius: 2px;
 }
 b .term {
   font-weight: inherit;
+}
+/* Sheets are dark: the dots follow the ivory text. */
+.sheet .term {
+  text-decoration-color: rgb(243 236 219 / 0.45);
 }
 /* The footnote a first-timer gets the first time a word appears. */
 .coach .gloss {
@@ -928,6 +957,18 @@ b .term {
 .glossary .entry + .entry {
   padding-top: 14px;
   border-top: 1px solid rgb(251 247 238 / 0.12);
+}
+/* "Hands this round" on the ? sheet: one chip per hand, each opening its card. */
+.hands-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0 18px;
+}
+.hand-card .clock {
+  font: 500 12px/1.3 var(--font-sans);
+  color: var(--color-brass-400);
+  margin: 0 0 6px;
 }
 
 /* Running score on a seat pill, and the standings on the result sheet. */
@@ -1300,6 +1341,6 @@ button.link-quiet {
     display: none;
   }
   .coach .plan[data-strip] {
-    display: block;
+    display: flex;
   }
 }

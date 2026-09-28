@@ -21,9 +21,10 @@ import {
   type TileKind,
 } from '@society/engine';
 import { goalFor } from './goal';
+import { handsThisRound, winnerRef, yoursRef } from './hand-card';
 import { shapeOf, titleOf } from './shape';
-import { SAY_BUDGET, capitalise, countWord, isLoner, isolate, liveCopies, myDiscardCount, planCount, textOf, tilesWord, waitList } from './words';
-import type { CoachAction, CoachGoal, CoachOutcome, CoachSegment, CoachStage, CoachState, CoachTarget } from './types';
+import { SAY_BUDGET, countWord, isLoner, isolate, liveCopies, myDiscardCount, planCount, textOf, tilesWord, visibleLength, waitList } from './words';
+import type { CoachAction, CoachGoal, CoachHandRef, CoachOutcome, CoachSegment, CoachStage, CoachState, CoachTarget } from './types';
 
 /**
  * The coach: everything the tutor says about a hand, derived from the engine's
@@ -64,7 +65,7 @@ export function analyseFor(view: PrivatePlayerView, ruleset: Ruleset): HandAnaly
   return analyseHand(handOf(view), spec.patterns, ctxOf(view), ruleset.guards, { claims: ruleset.claims });
 }
 
-function targetOf(candidate: PatternCandidate | undefined, patterns: readonly Pattern[]): CoachTarget | null {
+function targetOf(candidate: PatternCandidate | undefined, patterns: readonly Pattern[], ruleset: Ruleset, ctx: MatchCtx): CoachTarget | null {
   if (!candidate) return null;
   return {
     patternId: candidate.patternId,
@@ -77,6 +78,7 @@ function targetOf(candidate: PatternCandidate | undefined, patterns: readonly Pa
     wantsFromDiscard: candidate.needsClaimable,
     wantsFromWall: candidate.needsFromWall,
     layout: candidate.layout,
+    hand: yoursRef(candidate, patterns, ruleset, ctx),
   };
 }
 
@@ -101,7 +103,13 @@ function hasRunGroup(pattern: Pattern | undefined): boolean {
  * Crazy Chows take their "runs" across the suits, and a single tile a pung is
  * two short of is wall-only for a different reason.
  */
-export function runNoteApplies(target: CoachTarget | null, goal: CoachGoal, patterns: readonly Pattern[], concealed: readonly TileKind[], kind: TileKind): boolean {
+export function runNoteApplies(
+  target: CoachTarget | null,
+  goal: Pick<CoachGoal, 'chowsClaimable'>,
+  patterns: readonly Pattern[],
+  concealed: readonly TileKind[],
+  kind: TileKind,
+): boolean {
   if (goal.chowsClaimable || !target || target.away < 2) return false;
   if (!hasRunGroup(patterns.find((p) => p.id === target.patternId))) return false;
   return target.wantsFromWall.includes(kind) && completesRun(concealed, kind);
@@ -115,10 +123,35 @@ function seg(text: string): CoachSegment {
 function act(text: string): CoachSegment {
   return { text, action: true };
 }
+/** A hand's title, said so it can be tapped to see the hand. */
+function named(ref: CoachHandRef): CoachSegment {
+  return { text: ref.title, hand: ref };
+}
+
+/** A piece of a sentence: plain words, or a segment (the bold action, a hand's name). */
+type Part = CoachSegment | string;
+
+/** A sentence from its parts, neighbouring plain words joined into one segment so a glossary phrase is never split across two. */
+function line(...parts: readonly Part[]): CoachSegment[] {
+  const out: CoachSegment[] = [];
+  for (const part of parts) {
+    const s = typeof part === 'string' ? seg(part) : part;
+    const last = out[out.length - 1];
+    if (last && !last.action && !last.hand && !s.action && !s.hand) out[out.length - 1] = seg(last.text + s.text);
+    else out.push(s);
+  }
+  return out;
+}
+
+/** A winning hand the player would hold, told as theirs rather than as someone's win. An example it fell back to stays an example. */
+function asMine(ref: CoachHandRef, whose: 'yours' | 'ifClaimed'): CoachHandRef {
+  if (ref.whose !== 'winner') return ref;
+  return { patternId: ref.patternId, title: ref.title, shape: ref.shape, whose, away: 0, layout: ref.layout };
+}
 
 interface Reason {
-  readonly full: string;
-  readonly short: string;
+  readonly full: readonly Part[];
+  readonly short: readonly Part[];
 }
 
 /**
@@ -128,23 +161,27 @@ interface Reason {
  * the same words every turn stop being read.
  */
 function discardReason(analysis: HandAnalysis, goal: CoachGoal, target: CoachTarget | null, concealed: readonly TileKind[], tile: TileKind, r: number): Reason {
-  const same = (full: string): Reason => ({ full, short: full });
-  if (goal.honours === 'forbidden' && isHonourTile(tile)) return { full: 'no wind or dragon fits a hand this round', short: 'this round has no use for it' };
+  const same = (full: string): Reason => ({ full: [full], short: [full] });
+  if (goal.honours === 'forbidden' && isHonourTile(tile)) return { full: ['no wind or dragon fits a hand this round'], short: ['this round has no use for it'] };
   const rating = analysis.ratings.find((x) => x.kind === tile);
   const serves = rating?.serves ?? [];
   if (goal.honours === 'gated' && isHonourTile(tile) && serves.length === 0) return same('winds and dragons are fussy here');
-  const title = target?.title;
+  const title = target ? named(target.hand) : null;
   if (serves.length === 0 && isLoner(concealed, tile))
-    return isHonourTile(tile) ? same("it's on its own") : { full: "it's on its own, with no neighbours", short: "it's on its own" };
+    return isHonourTile(tile) ? same("it's on its own") : { full: ["it's on its own, with no neighbours"], short: ["it's on its own"] };
   if (serves.length === 0) {
     if (!title) return same('your hand has no use for it');
-    const full = [`${title} has no use for it`, `nothing in ${title} needs it`, `it does nothing for ${title}`][r % 3]!;
-    return { full, short: 'your hand has no use for it' };
+    const full = [
+      [title, ' has no use for it'],
+      ['nothing in ', title, ' needs it'],
+      ['it does nothing for ', title],
+    ][r % 3]!;
+    return { full, short: ['your hand has no use for it'] };
   }
   const use = target ? target.holding.filter((k) => k === tile).length : 0;
   const held = rating?.held ?? 1;
-  if (use >= 1) return held >= 3 && use === 2 && title ? { full: `${title} only needs two of them`, short: "you've got a spare" } : same("you've got a spare");
-  if (title && r % 2 === 0 && !serves.includes(target!.patternId)) return { full: `${title} can do without it`, short: 'it does the least for your hand' };
+  if (use >= 1) return held >= 3 && use === 2 && title ? { full: [title, ' only needs two of them'], short: ["you've got a spare"] } : same("you've got a spare");
+  if (title && r % 2 === 0 && !serves.includes(target!.patternId)) return { full: [title, ' can do without it'], short: ['it does the least for your hand'] };
   return same('it does the least for your hand');
 }
 
@@ -178,45 +215,73 @@ function progressAfter(input: CoachInput, spec: ReturnType<Ruleset['handSpec']>,
   return ` One tile to go: you need ${waitList(live)}.`;
 }
 
-/** The name a complete hand will be announced under: the ruleset's own first match. */
-function winningTitle(input: CoachInput, concealed: readonly TileKind[]): string | null {
+/** The pattern a complete hand will be announced under: the ruleset's own first match. */
+function winningPattern(input: CoachInput, hand: HandInput): Pattern | null {
   const { view, ruleset } = input;
   const spec = ruleset.handSpec(view.progress);
-  const m = matchPatterns(spec.patterns, { concealed, melds: view.players[view.me].melds }, ctxOf(view), ruleset.guards)[0];
-  return m ? titleOf(m.pattern) : null;
+  return matchPatterns(spec.patterns, hand, ctxOf(view), ruleset.guards)[0]?.pattern ?? null;
+}
+
+/** The player's own winning hand, laid out, as theirs now (`yours`) or once they take the tile (`ifClaimed`). */
+function myWinRef(input: CoachInput, hand: HandInput, whose: 'yours' | 'ifClaimed'): CoachHandRef | null {
+  const pattern = winningPattern(input, hand);
+  return pattern ? asMine(winnerRef(hand, pattern, ctxOf(input.view), input.ruleset, 'You'), whose) : null;
 }
 
 function outcomeOf(input: CoachInput, target: CoachTarget | null, patterns: readonly Pattern[]): CoachOutcome | null {
-  const { view, names } = input;
+  const { view, names, ruleset } = input;
   const result = view.result;
   if (!result) return null;
   if (result.type === 'draw') return { type: 'draw', ...(target ? { myTarget: target } : {}) };
   const pattern = patterns.find((p) => p.id === result.patternId);
   const tiles = view.revealed[result.winner];
-  const meldTiles = view.players[result.winner].melds.flatMap((m) => m.tiles);
+  const melds = view.players[result.winner].melds;
+  const meldTiles = melds.flatMap((m) => m.tiles);
+  // The winner's own winds: the goulash's honour gate reads their seat wind, not the viewer's.
+  const winnerCtx: MatchCtx = { seatWind: view.players[result.winner].seatWind, roundWind: view.progress.roundWind };
+  const owner = result.winner === view.me ? 'You' : names[result.winner];
   return {
     type: 'win',
     winner: result.winner,
     winnerName: names[result.winner],
     winnerIsMe: result.winner === view.me,
     selfDrawn: result.selfDrawn,
-    ...(pattern ? { hand: { title: titleOf(pattern), shape: shapeOf(pattern.id, patterns) } } : {}),
+    ...(pattern
+      ? { hand: { title: titleOf(pattern), shape: shapeOf(pattern.id, patterns), ref: winnerRef({ concealed: tiles ?? [], melds }, pattern, winnerCtx, ruleset, owner) } }
+      : {}),
     tiles: sortTiles([...meldTiles, ...(tiles ?? [])]),
     ...(target ? { myTarget: target } : {}),
   };
 }
 
+/** E2 and E3: who won, with what, and how the last tile came. `hand` is the hand's name, or words when there's no pattern to name. */
+export function winnerLine(who: string, hand: Part, how: string): CoachSegment[] {
+  return line(`${isolate(who)} wins with `, hand, `, ${how}.`);
+}
+
+/** How the winning tile came: off the wall (no tile), on the player's own discard (no discarder), or on someone else's. */
+export function howWon(tile: string | null, discarder?: string): string {
+  if (tile === null) return 'off the wall';
+  return `on ${discarder === undefined ? 'your' : `${isolate(discarder)}'s`} ${tile}`;
+}
+
+/** E5, after the line that says how the hand ended: how close the player got. */
+export function shortOfLine(away: number, hand: Part): Part[] {
+  return [` You were ${tilesWord(away)} short of `, hand, '.'];
+}
+
 /** The first of `attempts` that fits the bubble, or the last one: the action is never cut, only the words after it. */
 function fitting(attempts: readonly CoachSegment[][]): CoachSegment[] {
-  return attempts.find((say) => textOf(say).length <= SAY_BUDGET) ?? attempts[attempts.length - 1]!;
+  return attempts.find((say) => visibleLength(textOf(say)) <= SAY_BUDGET) ?? attempts[attempts.length - 1]!;
 }
 
 export function coachFor(input: CoachInput): CoachState {
   const { view, ruleset, analysis, stage, names } = input;
   const spec = ruleset.handSpec(view.progress);
-  const goal = goalFor(spec, view.progress.roundWind, ruleset);
-  const target = targetOf(analysis.candidates[0], spec.patterns);
-  const runnerUp = targetOf(analysis.candidates[1], spec.patterns);
+  const ctx = ctxOf(view);
+  const goal: CoachGoal = { ...goalFor(spec, view.progress.roundWind, ruleset), hands: handsThisRound(spec, analysis, ruleset, ctx) };
+  const target = targetOf(analysis.candidates[0], spec.patterns, ruleset, ctx);
+  const runnerUp = targetOf(analysis.candidates[1], spec.patterns, ruleset, ctx);
   const plan = planLine(target);
   const quiet = stage === 'solid';
 
@@ -232,27 +297,24 @@ export function coachFor(input: CoachInput): CoachState {
   // --- hand end: the debrief, where a beginner learns most -------------------
   if (view.phase === 'finished') {
     const outcome = outcomeOf(input, target, spec.patterns);
-    const short = target && target.away > 0 ? seg(` You were ${tilesWord(target.away)} short of ${target.title}.`) : null;
-    const say: CoachSegment[] = [];
+    // How close the player got, when it fits after the line that says how the hand ended.
+    const withShort = (ended: CoachSegment[]) => fitting(target && target.away > 0 ? [line(...ended, ...shortOfLine(target.away, named(target.hand))), ended] : [ended]);
+    let say: CoachSegment[];
     let reason: string | null = null;
     if (outcome?.type === 'win' && outcome.winnerIsMe) {
-      say.push(seg(outcome.hand ? `Mahjong! That's ${outcome.hand.title}: ${outcome.hand.shape}.` : "Mahjong! That's a complete hand."));
+      say = outcome.hand ? line("Mahjong! That's ", named(outcome.hand.ref), `: ${outcome.hand.shape}.`) : [seg("Mahjong! That's a complete hand.")];
       reason = 'you completed the hand';
     } else if (outcome?.type === 'win') {
-      const who = isolate(outcome.winnerName ?? 'Someone');
-      const hand = outcome.hand?.title ?? 'a complete hand';
       const result = view.result?.type === 'win' ? view.result : null;
       const discarder = result?.discarder;
       const how =
         outcome.selfDrawn || discarder === undefined || !result?.patternId
-          ? 'off the wall'
-          : `on ${discarder === view.me ? 'your' : `${isolate(names[discarder])}'s`} ${lastDiscardName(view) ?? 'discard'}`;
-      say.push(seg(`${who} wins with ${hand}, ${how}.`));
-      if (short) say.push(short);
+          ? howWon(null)
+          : howWon(lastDiscardName(view) ?? 'discard', discarder === view.me ? undefined : names[discarder]);
+      say = withShort(winnerLine(outcome.winnerName ?? 'Someone', outcome.hand ? named(outcome.hand.ref) : 'a complete hand', how));
       reason = 'the hand is over';
     } else {
-      say.push(seg("Washed out: the wall's run dry and nobody won. No points change hands."));
-      if (short) say.push(short);
+      say = withShort(line("Washed out: the wall's run dry and nobody won. No points change hands."));
       reason = 'the wall ran dry';
     }
     return { ...base, moment: 'handEnd', action: { kind: 'wait' }, say, reason, highlight: [], outcome };
@@ -265,12 +327,12 @@ export function coachFor(input: CoachInput): CoachState {
     const loose = spare ? analysis.spare.slice(0, count) : analysis.ratings.slice(0, count).map((r) => r.kind);
     const action: CoachAction = { kind: 'exchange', tiles: loose };
     const n = countWord(count);
-    const text = !target
-      ? `I've lit up ${n} you can spare.`
+    const say = !target
+      ? [seg(`I've lit up ${n} you can spare.`)]
       : spare
-        ? `I've lit up ${n} you can spare: none of them helps ${target.title}.`
-        : `I've lit up the ${n} doing the least for ${target.title}.`;
-    return { ...base, moment: 'exchange', action, say: [seg(text)], reason: 'the exchange is a chance to shed dead tiles', highlight: loose };
+        ? line(`I've lit up ${n} you can spare: none of them helps `, named(target.hand), '.')
+        : line(`I've lit up the ${n} doing the least for `, named(target.hand), '.');
+    return { ...base, moment: 'exchange', action, say, reason: 'the exchange is a chance to shed dead tiles', highlight: loose };
   }
 
   // --- a claim window --------------------------------------------------------
@@ -279,12 +341,12 @@ export function coachFor(input: CoachInput): CoachState {
     const options = view.legal.claims;
     const win = options.find((o) => o.type === 'win');
     if (win) {
-      const title = winningTitle(input, [...view.concealed, discard.kind]);
+      const ref = myWinRef(input, { concealed: [...view.concealed, discard.kind], melds: view.players[view.me].melds }, 'ifClaimed');
       return {
         ...base,
         moment: 'claim',
         action: { kind: 'claim', option: win, tile: discard.kind },
-        say: title ? [seg(`That ${tileName(discard.kind)} finishes ${title}. Call `), act('Mahjong!')] : [seg('That tile completes your hand. Call '), act('Mahjong!')],
+        say: ref ? line(`That ${tileName(discard.kind)} finishes `, named(ref), '. Call ', act('Mahjong!')) : [seg('That tile completes your hand. Call '), act('Mahjong!')],
         reason: 'the discard is your winning tile',
         highlight: [],
       };
@@ -293,22 +355,24 @@ export function coachFor(input: CoachInput): CoachState {
     // would stand after the claim: an exposed pung can shut this hand out of every
     // run pattern the round allows, and only the analysis knows that.
     const baseAway = target?.away ?? Number.POSITIVE_INFINITY;
-    let best: { option: ClaimOption; away: number; leader: CoachTarget | null } | null = null;
+    let best: { option: ClaimOption; away: number; after: HandAnalysis } | null = null;
     for (const option of options) {
       const hand = handAfterClaim(handOf(view), option, discard.kind, discard.from);
       if (!hand) continue;
-      const after = analyseHand(hand, spec.patterns, ctxOf(view), ruleset.guards, { claims: ruleset.claims });
+      const after = analyseHand(hand, spec.patterns, ctx, ruleset.guards, { claims: ruleset.claims });
       const away = after.candidates[0]?.away ?? Number.POSITIVE_INFINITY;
-      if (!best || away < best.away) best = { option, away, leader: targetOf(after.candidates[0], spec.patterns) };
+      if (!best || away < best.away) best = { option, away, after };
     }
     if (best && best.away < baseAway) {
-      const from = best.leader ? ` from ${best.leader.title}` : '';
+      // The hand as it would stand after the claim, with the claimed set laid face up.
+      const leader = best.after.candidates[0];
+      const from: Part[] = leader ? [' from ', named(yoursRef(leader, spec.patterns, ruleset, ctx, 'ifClaimed'))] : [];
       const tail = best.option.type === 'kong' ? ', with a replacement tile to come.' : '.';
       return {
         ...base,
         moment: 'claim',
         action: { kind: 'claim', option: best.option, tile: discard.kind },
-        say: [act(CLAIM_VERB[best.option.type]), seg(` it: you'll be ${tilesWord(Math.max(1, best.away))}${from}${tail}`)],
+        say: line(act(CLAIM_VERB[best.option.type]), ` it: you'll be ${tilesWord(Math.max(1, best.away))}`, ...from, tail),
         reason: 'the claim moves the hand closer than leaving it',
         highlight: [],
       };
@@ -316,8 +380,8 @@ export function coachFor(input: CoachInput): CoachState {
     const say: CoachSegment[] = !target
       ? [seg("Nothing here's worth breaking your hand for. "), act('Pass'), seg('.')]
       : runNoteApplies(target, goal, spec.patterns, view.concealed, discard.kind)
-        ? [seg(`${target.title} wants that tile in a run, and you can't claim for a run here. `), act('Pass'), seg('.')]
-        : [seg(`That does nothing for ${target.title}. `), act('Pass'), seg('.')];
+        ? line(named(target.hand), " wants that tile in a run, and you can't claim for a run here. ", act('Pass'), '.')
+        : line('That does nothing for ', named(target.hand), '. ', act('Pass'), '.');
     return { ...base, moment: 'claim', action: { kind: 'pass', tile: discard.kind }, say, reason: 'no claim on this tile shortens the hand', highlight: [] };
   }
 
@@ -329,12 +393,12 @@ export function coachFor(input: CoachInput): CoachState {
   const beforeMyFirst = myDiscardCount(view) === 0 && view.players[view.me].melds.length === 0;
 
   if (myTurn && view.legal.win) {
-    const title = winningTitle(input, view.concealed);
+    const ref = myWinRef(input, handOf(view), 'yours');
     return {
       ...base,
       moment: 'turn',
       action: { kind: 'win' },
-      say: title ? [seg(`That's ${title}, complete. Call `), act('Mahjong!')] : [seg("That's a complete hand. Call "), act('Mahjong!')],
+      say: ref ? line("That's ", named(ref), ', complete. Call ', act('Mahjong!')) : [seg("That's a complete hand. Call "), act('Mahjong!')],
       reason: 'the hand is complete',
       highlight: [],
     };
@@ -364,12 +428,8 @@ export function coachFor(input: CoachInput): CoachState {
   const reason = discardReason(analysis, goal, target, view.concealed, action.tile, myDiscardCount(view));
   const lead = act(`Discard ${tileName(action.tile)}`);
   const progress = progressAfter(input, spec, target, action.tile);
-  const say = fitting([
-    [lead, seg(`: ${reason.full}.${progress}`)],
-    [lead, seg(`: ${reason.short}.${progress}`)],
-    [lead, seg(`: ${reason.short}.`)],
-  ]);
-  return { ...base, moment, action, say, reason: reason.full, highlight };
+  const say = fitting([line(lead, ': ', ...reason.full, `.${progress}`), line(lead, ': ', ...reason.short, `.${progress}`), line(lead, ': ', ...reason.short, '.')]);
+  return { ...base, moment, action, say, reason: textOf(line(...reason.full)), highlight };
 }
 
 /** The tile that was just thrown, from the river, for the debrief. */

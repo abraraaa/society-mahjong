@@ -40,7 +40,8 @@ const COPY: Readonly<Record<string, GoalCopy>> = {
   },
 };
 
-export function goalFor(spec: HandSpec, roundWind: Wind, ruleset: Ruleset): CoachGoal {
+/** Everything but `hands`, which needs the player's analysis: `coachFor` adds it. */
+export function goalFor(spec: HandSpec, roundWind: Wind, ruleset: Ruleset): Omit<CoachGoal, 'hands'> {
   const copy = COPY[spec.kind];
   return {
     roundWind,

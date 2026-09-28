@@ -71,7 +71,7 @@ export function ClaimSheet({
   return (
     <>
       <div className="scrim" />
-      <div className="sheet">
+      <div className="sheet" data-sheet="claim">
         <div className="grabber" />
         {timed && (
           <div className="timer mb-4" style={{ '--claim-seconds': `${Math.round(claimMs / 1000)}s` } as React.CSSProperties}>
@@ -85,7 +85,7 @@ export function ClaimSheet({
               <bdi>{discarderName}</bdi> discards {tileName(discardKind)}
             </h2>
             <p className="text-ivory-200/70 text-sm">
-              <CoachLine say={coach.say} />
+              <CoachLine say={coach.say} origin="claim" />
             </p>
           </div>
         </div>

@@ -1,10 +1,10 @@
 'use client';
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { acrossFrom, leftOf, rightOf, tileName, type Action, type PrivatePlayerView, type Seat, type TileKind } from '@society/engine';
 import { Tile } from '@/components/tile';
 import { SeatPill } from '@/components/seat-pill';
 import { ClaimSheet } from '@/components/claim-sheet';
-import { Coach, CoachLine, TermProvider, useOpenTerm } from '@/components/coach';
+import { Coach, CoachLine, TermProvider, TutorSheet, useOpenTerm, useSheetActions } from '@/components/coach';
 import { PlanStrip } from '@/components/plan-strip';
 import { River } from '@/components/river';
 import { riverOrder } from '@/lib/river';
@@ -129,6 +129,9 @@ function TableInner({
     boundaryAt.current = performance.now();
   }, [boundary]);
   const tooSoon = useCallback(() => settling(boundaryAt.current, performance.now()), []);
+  // A card or a word left open doesn't outlive the hand it was about.
+  const { close: closeSheet } = useSheetActions();
+  useEffect(() => closeSheet(), [boundary, closeSheet]);
   // A tap that only lifts a tile is let go sooner: it can be put straight back.
   const tooSoonToLift = useCallback(() => settling(boundaryAt.current, performance.now(), LIFT_SETTLE_MS), []);
 
@@ -189,7 +192,7 @@ function TableInner({
   // New and learning players see their plan laid out above their tiles; a regular gets the one line in the bubble.
   const withStrip = !!advice && advice.stage !== 'solid';
   const strip = withStrip ? <PlanStrip target={advice.target} /> : null;
-  const bubble = advice ? <Coach plan={advice.plan} say={advice.say} stage={coach.stage} planInStrip={withStrip} /> : null;
+  const bubble = advice ? <Coach plan={advice.plan} target={advice.target} say={advice.say} stage={coach.stage} planInStrip={withStrip} /> : null;
 
   const actions = (
     <>
@@ -427,6 +430,8 @@ function TableInner({
           busy={busy}
         />
       )}
+
+      <TutorSheet coach={coach} clock={null} />
     </>
   );
 }
@@ -467,7 +472,7 @@ function ExchangeSheet({
         <div className="grabber" />
         <h2 className="font-display mb-1 text-xl">Goulash exchange</h2>
         <p className="text-ivory-200/70 mb-3 text-sm">
-          Choose {count} tiles to pass. <CoachLine say={coach.say} />
+          Choose {count} tiles to pass. <CoachLine say={coach.say} origin="exchange" />
         </p>
         {/* Room above each row for a lifted tile and its ring (10px + 3px): the caption's margin and a pixel, and the row gap. */}
         <div className="flex flex-wrap justify-center gap-x-1 gap-y-[13px] pt-px">
@@ -535,7 +540,7 @@ function ResultSheet({
           </div>
         )}
         <p className="text-ivory-100/90 text-sm">
-          <CoachLine say={coach.say} />
+          <CoachLine say={coach.say} origin="result" />
         </p>
         <div className="standings mt-4">
           {order.map((seat) => (

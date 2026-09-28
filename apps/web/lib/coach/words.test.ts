@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { countWord, isLoner, myDiscardCount, orList, planCount, tilesWord, waitList } from './words';
+import { countWord, isLoner, isolate, myDiscardCount, orList, planCount, tilesWord, visibleLength, waitList } from './words';
 
 describe('the words the tutor counts in', () => {
   it('spells out small numbers and counts tiles, never "away"', () => {
@@ -39,5 +39,14 @@ describe('the words the tutor counts in', () => {
     ];
     expect(myDiscardCount({ me: 0, events })).toBe(1);
     expect(myDiscardCount({ me: 2, events })).toBe(0);
+  });
+});
+
+describe('visible length', () => {
+  it('counts what a reader sees: the isolates round a name take no room', () => {
+    expect(visibleLength('Sana wins')).toBe(9);
+    expect(visibleLength(`${isolate('Sana')} wins`)).toBe(9);
+    expect(`${isolate('Sana')} wins`.length).toBe(11);
+    expect(visibleLength('')).toBe(0);
   });
 });
