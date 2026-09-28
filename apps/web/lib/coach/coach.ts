@@ -161,13 +161,18 @@ export function runNoteApplies(
  * on the plan as it stands now, but only with tiles the player held when the
  * tile went by: every discard since their last move came before their draw,
  * and a run that the drawn tile has only just begun wasn't one the discard
- * would have finished. Whether the visit's been taught it already is for
- * `lessonFor` to decide.
+ * would have finished. Copies of a tile can't be told apart, so a run's tile
+ * counts as held then only if every copy of it the lay-out holds was: when the
+ * draw brought a second copy, the one held then may have been sitting in
+ * another set. Whether the visit's been taught it already is for `lessonFor`
+ * to decide.
  */
 function missedRun(view: PrivatePlayerView, target: CoachTarget, goal: CoachGoal, names: Readonly<Record<Seat, string>>): CoachTeach[] {
+  // The concealed copies the lay-out holds, kind by kind: a set laid face up isn't in the hand.
+  const inLayout = (target.layout ?? []).flatMap((g) => (g.exposed ? [] : g.tiles.filter((t) => t.held).map((t) => t.kind)));
   for (const passed of passedSince(view)) {
     const drawn = drawnSince(view, passed.seq);
-    const heldThen = (kind: TileKind) => countOf(view.concealed, kind) - countOf(drawn, kind) > 0;
+    const heldThen = (kind: TileKind) => countOf(inLayout, kind) <= countOf(view.concealed, kind) - countOf(drawn, kind);
     const group = runGroupsFor(target, goal, passed.tile).find((g) => g.tiles.every((t) => !t.held || heldThen(t.kind)));
     if (group) return [{ key: 'rule:runs', place: 'note', text: missedRunNote(names[passed.seat], passed.tile, group) }];
   }

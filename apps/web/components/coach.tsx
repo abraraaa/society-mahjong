@@ -330,16 +330,19 @@ export function CoachLine({ say, origin }: { say: readonly CoachSegment[]; origi
  * "Hands this round" goes back to the list.
  *
  * `clock` is what the sheet says about the clock under it: a claim held on the
- * bots, or a live clock still running. With a few seconds left on a live clock
- * the sheet closes itself, and won't open, so the player can still act in time.
+ * bots, or a live clock still running. As a live clock comes into its last few
+ * seconds, whatever's open closes, once, so the player can still act in time.
+ * A word or a card they open after that is their own choice: it opens, and its
+ * clock line says how little is left. A tap that did nothing would be worse.
  */
 export function TutorSheet({ coach, clock }: { coach: CoachState; clock: CardClock }) {
   const { open, close, current } = useTutorSheet();
   const aside = stepsAside(clock);
-  useEffect(() => {
-    if (aside && current) close();
-  }, [aside, current, close]);
-  if (!current || aside) return null;
+  // On the way in, not for as long as it lasts. Before paint, so the sheet is never drawn over the last seconds.
+  useLayoutEffect(() => {
+    if (aside) close();
+  }, [aside, close]);
+  if (!current) return null;
   if (current.kind === 'term') return <TermSheet term={current.term} clock={clock} onClose={() => close()} />;
   if (current.kind === 'hand') {
     const back = current.back;
@@ -354,7 +357,6 @@ function TermSheet({ term, clock, onClose }: { term: Term; clock: CardClock; onC
     <>
       <div className="scrim scrim-top" onClick={onClose} />
       <div className="sheet sheet-top" role="dialog" aria-label={GLOSSARY[term].label} data-sheet="term">
-        <div className="grabber" />
         <ClockLine clock={clock} />
         <div className="glossary">
           <Entry term={term} />
@@ -373,7 +375,6 @@ function HandsAndWords({ hands, clock, onHand, onClose }: { hands: readonly Coac
     <>
       <div className="scrim scrim-top" onClick={onClose} />
       <div className="sheet sheet-top" role="dialog" aria-label="Glossary" data-sheet="list">
-        <div className="grabber" />
         <ClockLine clock={clock} />
         {hands.length > 0 && (
           <>

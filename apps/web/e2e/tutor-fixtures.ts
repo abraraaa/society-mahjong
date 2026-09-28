@@ -17,6 +17,7 @@ import { lessonFor } from '../lib/coach/teach';
 import { flowerSinceMyLastMove, myDiscardCount, textOf } from '../lib/coach/words';
 import { liveStage } from '../lib/live/level';
 import type { GameSnapshot } from '../lib/live/snapshot';
+import type { StandIn } from '../lib/live/table';
 import type { Deadlines } from '../lib/live/types';
 import { riverOrder } from '../lib/river';
 import { GAME_ID, USER_NAME } from './fixtures';
@@ -129,6 +130,42 @@ function personMove(s: HandState, seat: Seat): Action {
   return { type: 'pass', seat };
 }
 
+/**
+ * A claim window's clock running out, by `resolveExpired`'s rules (lib/live/table.ts): each person still to answer is
+ * answered by the server's sharp bot standing in for them (it takes a win it's offered), then the bots play on.
+ */
+function runOut(s: HandState): { readonly state: HandState; readonly standIns: readonly StandIn[] } {
+  let out = s;
+  const standIns: StandIn[] = [];
+  for (const seat of pending(s)) {
+    if (out.phase !== 'claim') break;
+    const action = analysisBot(viewFor(out, karachi, seat), karachi) ?? { type: 'pass' as const, seat };
+    out = reduce(out, action, karachi);
+    standIns.push({ seat, action });
+  }
+  return { state: settle(out), standIns };
+}
+
+/**
+ * The first claim window of a hand dealt from `seed` for which `take` returns something, given the decision a person
+ * had before it, when that decision was someone else's: so on that table Amna has no clock running.
+ */
+function claimAfterOthers<T>(seed: string, take: (window: HandState, before: HandState) => T | null): T | null {
+  let s = settle(startHand(karachi, { seed, progress: EAST_HONOUR, dealer: 0 }));
+  let before: HandState | null = null;
+  for (let i = 0; i < 400 && s.phase !== 'finished'; i++) {
+    if (s.phase === 'claim' && before && !pending(before).includes(ME)) {
+      const found = take(s, before);
+      if (found) return found;
+    }
+    const seat = pending(s)[0];
+    if (seat === undefined) return null;
+    before = s;
+    s = settle(reduce(s, personMove(s, seat), karachi));
+  }
+  return null;
+}
+
 /** Plays a hand to its end, the people moving as the server's bot would for them. */
 function playOut(state: HandState): HandState {
   let s = settle(state);
@@ -186,12 +223,22 @@ const namesAHand = (snap: GameSnapshot) => liveCoach(snap).say.some((x) => x.han
 
 /** A claim window's clock short enough that a test sees it run out before the page's 12 s poll: 8.5 s before the sheet passes for Amna. */
 const SHORT_CLAIM = { claimMs: 10_000, turnMs: HOUR } as const;
+/** The same for a window that offers Amna a win, which runs on the turn clock. */
+const SHORT_WIN = { claimMs: HOUR, turnMs: 10_000 } as const;
 
 export interface TutorFixtures {
   /** A finished East hand won by one of the bots, for a first-timer: the result line names the winner's hand. */
   readonly otherWin: GameSnapshot;
-  /** Amna asked about a discard she could pung, not a win, on a short clock (`SHORT_CLAIM`). The tutor's line names a hand. */
-  readonly claim: GameSnapshot;
+  /**
+   * Someone else's move, and then the claim window that follows it, where Amna could pung a discard, not win on it,
+   * on a short clock (`SHORT_CLAIM`). The tutor's line names a hand. No clock of Amna's runs before the window.
+   */
+  readonly claim: { readonly before: GameSnapshot; readonly window: GameSnapshot };
+  /**
+   * The same, where the discard is Amna's winning tile, on a short clock (`SHORT_WIN`), and then the table once that
+   * clock has run out: the server's stand-in has called Mahjong for her, and the snapshot says so.
+   */
+  readonly winClaim: { readonly before: GameSnapshot; readonly window: GameSnapshot; readonly won: GameSnapshot };
   /**
    * Two claim windows for Amna, the second the table's answer once she's passed on the first (from her other phone,
    * say): the claim sheet stays up between them. Both clocks are an hour, so nothing runs out under an open card.
@@ -222,19 +269,30 @@ function build(): TutorFixtures {
     const snap = snapshot(end, 9, 'new');
     return liveCoach(snap).outcome?.hand?.ref.whose === 'winner' ? snap : null;
   });
-  const claim = search('a claim window where Amna could pung, whose line names a hand', (seed) => {
-    let s = settle(startHand(karachi, { seed, progress: EAST_HONOUR, dealer: 0 }));
-    for (let i = 0; i < 400 && s.phase !== 'finished'; i++) {
-      if (offered(s) && legalActions(s, karachi, ME).claims?.some((c) => c.type === 'pung')) {
-        const snap = snapshot(s, 9, 'new', 'active', deadlines(s, SHORT_CLAIM));
-        if (namesAHand(snap)) return snap;
-      }
-      const seat = pending(s)[0];
-      if (seat === undefined) return null;
-      s = settle(reduce(s, personMove(s, seat), karachi));
-    }
-    return null;
-  });
+  const claim = search("a claim window after someone else's move, where Amna could pung, whose line names a hand", (seed) =>
+    claimAfterOthers(seed, (s, before) => {
+      if (!offered(s) || !legalActions(s, karachi, ME).claims?.some((c) => c.type === 'pung')) return null;
+      const window = snapshot(s, 9, 'new', 'active', deadlines(s, SHORT_CLAIM));
+      return namesAHand(window) ? { before: snapshot(before, 8, 'new'), window } : null;
+    }),
+  );
+  // A win on a discard comes late in a hand: tutor-4 is the first seed that gives one today, so the search starts there
+  // rather than playing out four hands first. An engine change that moves the deal still searches on from it.
+  const winClaim = search(
+    "a claim window after someone else's move that offers Amna a win, whose line names a hand, and the stand-in's win",
+    (seed) =>
+      claimAfterOthers(seed, (s, before) => {
+        if (!legalActions(s, karachi, ME).claims?.some((c) => c.type === 'win')) return null;
+        const window = snapshot(s, 9, 'new', 'active', deadlines(s, SHORT_WIN));
+        if (!namesAHand(window)) return null;
+        const out = runOut(s);
+        // The server tells each person only the moves made for them.
+        const mine = out.standIns.filter((x) => x.seat === ME);
+        if (out.state.result?.type !== 'win' || out.state.result.winner !== ME || mine[0]?.action.type !== 'claim') return null;
+        return { before: snapshot(before, 8, 'new'), window, won: { ...snapshot(out.state, 10, 'new'), standIns: mine } };
+      }),
+    4,
+  );
   // Back-to-back windows are rare: tutor-51 is the first seed that gives them today, so the search starts there
   // rather than playing out fifty hands first. An engine change that moves the deal still searches on from it.
   const claimAgain = search(
@@ -302,7 +360,7 @@ function build(): TutorFixtures {
     const news = [a, b].every((c) => c.teach.some((t) => t.key === 'rule:flowers'));
     return same && news && riverOrder(next.view).length > 0 ? { first, next } : null;
   });
-  return { otherWin, claim, claimAgain, flowerTurn, missedRun, handStartTwice };
+  return { otherWin, claim, winClaim, claimAgain, flowerTurn, missedRun, handStartTwice };
 }
 
 let built: TutorFixtures | null = null;
