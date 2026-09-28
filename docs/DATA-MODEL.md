@@ -184,7 +184,7 @@ pushed by an agent.
      `SUPABASE_DB_URL` and `VERCEL_DEPLOY_HOOK`.
 4. **Adopt what was run by hand**:
    - Actions, then *Migrate and deploy*, then Run workflow from `main`, with
-     "adopt" ticked.
+     the box "Adopt (first run only): record 0001-0004…" ticked.
    - This records 0001–0004 as applied and pushes anything newer.
    - It's safe to run more than once.
 5. **Turn off Vercel's own production deploy** (a one-line change to
