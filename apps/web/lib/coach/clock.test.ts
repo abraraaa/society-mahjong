@@ -3,6 +3,7 @@ import {
   STEP_ASIDE_MS,
   cardClockFor,
   cardClockLine,
+  claimBar,
   claimSheetClock,
   claimTimer,
   mmss,
@@ -92,6 +93,26 @@ describe('when the claim sheet passes for the player', () => {
 
   it("shows a live win's clock but never passes on it: the table's stand-in takes the win when the clock runs out", () => {
     expect(claimTimer('server', true)).toEqual({ bar: true, passes: false });
+  });
+});
+
+describe("the claim sheet's bar", () => {
+  it('drains over the whole window and is empty when the table runs out, however late a fresh table comes', () => {
+    // A win on a new player's turn clock: ninety seconds. The page looks again every twelve.
+    expect(claimBar(90_000, 90_000)).toEqual({ durationMs: 90_000, delayMs: 0 });
+    for (const gone of [12_000, 24_000, 36_000, 48_000, 84_000]) {
+      const { durationMs, delayMs } = claimBar(90_000, 90_000 - gone);
+      // Drawn part-drained, as far in as the time already gone ...
+      expect(-delayMs / durationMs).toBeCloseTo(gone / 90_000);
+      // ... with exactly what's left to run.
+      expect(durationMs + delayMs).toBe(90_000 - gone);
+    }
+  });
+
+  it('is full, never over, when a fresh table brings more time than the first; and empty at nought', () => {
+    expect(claimBar(8_000, 9_000)).toEqual({ durationMs: 9_000, delayMs: 0 });
+    expect(claimBar(8_000, 0)).toEqual({ durationMs: 8_000, delayMs: -8_000 });
+    expect(claimBar(8_000, -500)).toEqual({ durationMs: 8_000, delayMs: -8_000 });
   });
 });
 

@@ -14,13 +14,18 @@ import { HandGroups } from './hand-card';
  * faded tiles you can watch light up. Tapping it opens the hand card.
  *
  * The slot keeps its height from the deal: a turn with no plan to show keeps
- * the last one, so the table never jumps.
+ * the last one, so the table never jumps. When the plan becomes another hand,
+ * on whatever view, the new hand's tiles fade in, so the change is seen
+ * without anything moving.
  */
 export const PlanStrip = memo(function PlanStrip({ target }: { target: CoachTarget | null }) {
   // The last plan that had a lay-out, kept for a turn that has none (React's "store what you saw" pattern).
   const [last, setLast] = useState<CoachTarget | null>(target?.layout ? target : null);
   if (target?.layout && target !== last) setLast(target);
   const shown = target?.layout ? target : last;
+  // Which hand it shows, and how many times that's changed: the row is drawn afresh on each change, to fade in.
+  const [plan, setPlan] = useState({ title: shown?.title ?? null, n: 0 });
+  if (shown && shown.title !== plan.title) setPlan({ title: shown.title, n: plan.title === null ? 0 : plan.n + 1 });
   const { open } = useSheetActions();
 
   if (!shown?.layout) return <div className="plan-strip" aria-hidden="true" />;
@@ -31,13 +36,14 @@ export const PlanStrip = memo(function PlanStrip({ target }: { target: CoachTarg
       type="button"
       className="plan-strip"
       onClick={() => open({ kind: 'hand', ref: shown.hand, origin: 'table' })}
+      data-new-plan={plan.n > 0 ? '' : undefined}
       aria-label={`Your plan: ${shown.title}. ${held} of ${total} tiles in place, ${count}. Show the hand.`}
     >
       <span className="plan">
         <span className="plan-title">{shown.title}</span>
         <span className="plan-count">{` · ${count}`}</span>
       </span>
-      <HandGroups layout={shown.layout} className="strip-row" />
+      <HandGroups key={plan.n} layout={shown.layout} className="strip-row" />
     </button>
   );
 });

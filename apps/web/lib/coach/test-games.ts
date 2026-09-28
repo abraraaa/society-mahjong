@@ -14,6 +14,7 @@ import {
   type Seat,
 } from '@society/engine';
 import { analyseFor, coachFor } from './coach';
+import { nextPlanMark, preferFor, samePlanMark, type PlanMark } from './plan-mark';
 import type { CoachStage, CoachState } from './types';
 
 /**
@@ -39,9 +40,36 @@ export const LONG_NAME = 'Abcdefghijklmnopqrstuvwx';
 /** Display names as the solo table has them, with one seat at the longest name allowed. */
 export const NAMES: Readonly<Record<Seat, string>> = { 0: 'You', 1: 'Bilal', 2: LONG_NAME, 3: 'Ayesha' };
 
-/** What the tutor says to seat 0 on this view. */
-export function coachOf(view: PrivatePlayerView, stage: CoachStage = 'learning', analysis: HandAnalysis = analyseFor(view, karachi)): CoachState {
-  return coachFor({ view, ruleset: karachi, analysis, stage, names: NAMES });
+/** What the tutor says to seat 0 on this view: to someone who has just taken the seat over, with `firstLook`; holding the player to a plan, with `mark`. */
+export function coachOf(
+  view: PrivatePlayerView,
+  stage: CoachStage = 'learning',
+  analysis: HandAnalysis = analyseFor(view, karachi),
+  firstLook = false,
+  mark: PlanMark | null = null,
+): CoachState {
+  return coachFor({ view, ruleset: karachi, analysis, stage, names: NAMES, firstLook, mark });
+}
+
+/**
+ * The tutor as a table has it (`useCoach`), for one game: it holds the player
+ * to a plan from one view to the next. Give it every view seat 0 sees, in
+ * order. When a view moves the plan, it plans again with the new one in
+ * front, as the hook's second render does, and that must settle at once.
+ */
+export function stickyCoach(game: string | number): (view: PrivatePlayerView, stage?: CoachStage) => CoachState {
+  let mark: PlanMark | null = null;
+  return (view, stage = 'learning') => {
+    let analysis = analyseFor(view, karachi, preferFor(mark, game, view));
+    let next = nextPlanMark(mark, game, view, analysis.candidates[0]);
+    for (let again = 0; !samePlanMark(next, mark); again++) {
+      if (again === 2) throw new Error(`the plan didn't settle at seq ${view.seq}`);
+      mark = next;
+      analysis = analyseFor(view, karachi, preferFor(mark, game, view));
+      next = nextPlanMark(mark, game, view, analysis.candidates[0]);
+    }
+    return coachOf(view, stage, analysis, false, mark);
+  };
 }
 
 /** Seat 0's move: the tutor's advice, or a pass or a discard when the advice is only to wait. */

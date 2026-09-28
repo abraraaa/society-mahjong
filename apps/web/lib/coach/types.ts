@@ -151,4 +151,10 @@ export interface CoachState {
   readonly teach: readonly CoachTeach[];
   /** which view this is: `view.progress.handIndex` and `view.seq`, so a note is decided once per view */
   readonly at: { readonly hand: number; readonly seq: number };
+  /**
+   * The plan this turn's line says the tutor has switched from, on the turn that says so (plan-mark.ts): its
+   * hand, and how many tiles closer the new plan is. `null` when the old hand can't be made now; 0 when the two
+   * are as close and the new one won the tie (the round's general hand, which is easier). Null on every other view.
+   */
+  readonly planSwitch: { readonly from: CoachHandRef; readonly closerBy: number | null } | null;
 }

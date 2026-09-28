@@ -1,8 +1,8 @@
 'use client';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { tileName, type ClaimOption, type TileKind } from '@society/engine';
 import type { CoachState } from '@/lib/coach';
-import { claimTimer, msLeft, pauseCountdown, resumeCountdown, startCountdown, type Countdown } from '@/lib/coach/clock';
+import { claimBar, claimTimer, msLeft, pauseCountdown, resumeCountdown, startCountdown, type Countdown } from '@/lib/coach/clock';
 import type { Lesson } from '@/lib/coach/teach';
 import { CoachLine, CoachNotes, useSheetOpen } from './coach';
 import { Tile } from './tile';
@@ -58,7 +58,7 @@ export function ClaimSheet({
   options: readonly ClaimOption[];
   onClaim: (option: ClaimOption) => void;
   onPass: () => void;
-  /** how long the countdown runs: until the sheet passes for the player, or on a win at a live table, until the table's clock runs out */
+  /** how long the countdown runs, from now: until the sheet passes for the player, or on a win at a live table, until the table's clock runs out. A live table sends it afresh with each table it gets */
   claimMs?: number;
   /** whose clock: the sheet's own eight seconds, or a server deadline that applies to a win too */
   clock?: 'solo' | 'server';
@@ -81,6 +81,12 @@ export function ClaimSheet({
   // clock can't be held, so a live sheet runs on, and the card shows that clock.
   const sheetOpen = useSheetOpen();
   const paused = clock === 'solo' && timed && sheetOpen;
+  // The window's whole length, for the bar: what it had when this discard's sheet first showed. A fresh table from a
+  // live table only says what's left, and the bar is drawn again from there, part-drained (`claimBar`), so it's
+  // empty when the table's clock runs out. Stored as seen, React's "store what you saw" pattern.
+  const [full, setFull] = useState({ discardCount, ms: claimMs });
+  if (full.discardCount !== discardCount) setFull({ discardCount, ms: claimMs });
+  const bar = claimBar(full.discardCount === discardCount ? full.ms : claimMs, claimMs);
   // Kept on Date.now(), which is the clock Playwright drives.
   const countdown = useRef<Countdown | null>(null);
   // One countdown per discard, started again when the server sends a fresh
@@ -112,8 +118,13 @@ export function ClaimSheet({
       <div className="sheet" data-sheet="claim">
         <div className="grabber" />
         {timed && (
-          <div key={discardCount} className="timer mb-4" data-paused={paused || undefined} style={{ '--claim-seconds': `${Math.round(claimMs / 1000)}s` } as React.CSSProperties}>
-            <i />
+          <div
+            key={`${discardCount}:${claimMs}`}
+            className="timer mb-4"
+            data-paused={paused || undefined}
+            style={{ '--claim-seconds': `${bar.durationMs / 1000}s` } as React.CSSProperties}
+          >
+            <i style={bar.delayMs < 0 ? { animationDelay: `${bar.delayMs}ms` } : undefined} />
           </div>
         )}
         <div className="mb-4 flex items-center gap-4">

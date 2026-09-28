@@ -9,7 +9,8 @@ import { AwayNote } from '@/components/away-note';
 import { ConfirmSheet } from '@/components/confirm-sheet';
 import { Notice } from '@/components/notice';
 import { Trouble, Waiting } from '@/components/trouble';
-import { analyseFor, coachFor, type CoachState } from '@/lib/coach';
+import { firstLookFor, joinedAtOf } from '@/lib/coach/first-look';
+import { useCoach } from '@/lib/coach/use-coach';
 import { retryCanHelp } from '@/lib/front-door';
 import { ApiError, api, listen } from '@/lib/live/client';
 import { finalStandings } from '@/lib/live/final';
@@ -248,13 +249,10 @@ export function LiveTable({ gameId }: { gameId: string }) {
     }
     return out;
   }, [snap]);
-  const analysis = useMemo(() => (view && ruleset ? analyseFor(view, ruleset) : null), [view, ruleset]);
   // The level the server has tallied for this player, so a refresh or a second phone never starts the tutor from scratch.
   const stage = view ? liveStage(snap?.stage, view) : 'new';
-  const coach: CoachState | null = useMemo(
-    () => (view && ruleset && analysis ? coachFor({ view, ruleset, analysis, stage, names }) : null),
-    [view, ruleset, analysis, stage, names],
-  );
+  // Someone who has just taken a bot's seat over mid-hand gets the round's aim first, until they make a move of their own.
+  const coach = useCoach(view && ruleset ? { view, ruleset, stage, names, game: gameId, firstLook: firstLookFor(view, joinedAtOf(snap)) } : null);
 
   // One move at a time: a second tap while one is on its way is ignored.
   // A 409 means the table changed under us. The newer table it carries is
