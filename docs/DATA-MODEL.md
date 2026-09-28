@@ -187,10 +187,11 @@ pushed by an agent.
      the box "Adopt (first run only): record 0001-0004…" ticked.
    - This records 0001–0004 as applied and pushes anything newer.
    - It's safe to run more than once.
-5. **Turn off Vercel's own production deploy** (a one-line change to
-   `vercel.json`: `"git": { "deploymentEnabled": { "main": false } }`).
-   Production then deploys only after migrations are in. Previews still deploy
-   from every branch.
+5. **Vercel's own production deploy is off** (`apps/web/vercel.json`:
+   `"git": { "deploymentEnabled": { "main": false } }`), so production deploys
+   only through the workflow, after migrations are in. If a migration fails,
+   production stays on the last good deploy. Previews still deploy from every
+   branch.
 
 If the database password is ever reset, update `SUPABASE_DB_URL` to match.
 Nothing else expires.
