@@ -13,6 +13,11 @@ import { Tile, type TileSize } from './tile';
  * summarises each meld as a single tile (plus a 4 for a kong) rather than
  * laying every tile out — the suit an opponent is chasing is the part that
  * changes how you play, and the full strip is what used to run off both edges.
+ *
+ * A seat a bot plays says so after the name ("Sana · bot"), and the marker
+ * stays whole when a long name has to be cut short. The row pill gives the
+ * name its whole first line, with the score below beside the tile count
+ * (globals.css), so the name still shows next to a four-digit score.
  */
 export const SeatPill = memo(function SeatPill({
   wind,
@@ -24,6 +29,7 @@ export const SeatPill = memo(function SeatPill({
   score,
   clock,
   urgent,
+  mark,
 }: {
   wind: Wind;
   name: string;
@@ -37,6 +43,8 @@ export const SeatPill = memo(function SeatPill({
   clock?: string | undefined;
   /** under twenty seconds: the clock turns brass and pulses */
   urgent?: boolean | undefined;
+  /** what plays the seat when a person doesn't: shown after the name; live tables only */
+  mark?: 'bot' | 'away' | undefined;
 }) {
   const isColumn = orientation === 'column';
   const setSize: TileSize = isColumn ? 'sm' : '2xs';
@@ -44,7 +52,17 @@ export const SeatPill = memo(function SeatPill({
   return (
     <div className={`seat${isTurn ? ' is-turn' : ''}${isColumn ? ' is-column' : ''}`}>
       <span className="wind">{wind}</span>
-      <span className="name">{name}</span>
+      {/* Never wider than the pill, even centred in the tablet's side seat, so a long name is cut short and the marker stays whole. */}
+      <span className="name flex max-w-full min-w-0 items-baseline gap-1">
+        <span className="truncate">{name}</span>
+        {mark && (
+          <small className="flex-none text-[10px] opacity-60">
+            {' '}
+            <span aria-hidden="true">· </span>
+            {mark}
+          </small>
+        )}
+      </span>
       {score !== undefined && <span className="score">{score}</span>}
       {!isColumn && (
         <span className="held">

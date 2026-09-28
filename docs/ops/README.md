@@ -50,7 +50,12 @@ The report's `schema` line checks that the database has what migration 0005 adde
 
 - `ok`: all there.
 - `missing: …`: names what isn't there, which means the database is behind the code, and every live table fails until it's fixed. Run the _Migrate and deploy_ workflow (GitHub, then Actions, then _Migrate and deploy_, then Run workflow; set up as in docs/DATA-MODEL.md, "Setting up the pipeline"), then reload the report.
-- `could not check: …`: the database didn't answer at all, which is a different problem. The `tables` lines will say the same, and a paused project is the usual cause (see the 500 above).
+- `no access: …`: the database refused the server, and every live table fails until it's fixed. The line says which of two things it is:
+  - **The key is wrong.** Some `tables` lines start `no access` too. Supabase says `Invalid API key` to a wrong or rotated key, and `permission denied` to the anon or publishable key where the service key should be (it can read a few tables, but not `live_state`, `games` or 0005's). In Vercel, check `SUPABASE_SERVICE_ROLE_KEY` (or `SUPABASE_SECRET_KEY`) against the project's **service_role** or **secret** key (Supabase, then Project Settings, then API Keys), fix it for Production, redeploy, and reload the report.
+  - **`commit_table` has lost its grant.** Every `tables` line reads `ok` and only `commit_table` is refused, so the key is right but the function may not be run by it. In Supabase's SQL editor, run the `grant execute on function public.commit_table(…) to service_role;` line from `supabase/migrations/0005_settled_model.sql`, then reload the report.
+- `could not check: …`: the database said something else, or nothing at all. Usually it didn't answer, the `tables` lines say the same, and a paused project is the usual cause (see the 500 above). If the tables all read `ok`, the words in brackets are the clue.
+
+When more than one of these applies, the line gives each in turn, in that order.
 
 **While you're in Supabase**, check the plan under the organisation's billing settings. A paid plan doesn't pause, so this check matters only on Free.
 
@@ -102,7 +107,7 @@ When a phone forgets someone:
 
 ## 3. Run the funnel queries
 
-`docs/ops/funnel.sql` answers "is anyone actually playing?" from the tables the game already keeps. The file has eight queries, each with a plain-English comment:
+`docs/ops/funnel.sql` answers "is anyone actually playing?" from the tables the game already keeps. The file has nine queries, each with a plain-English comment:
 
 1. Rooms created per week.
 2. Rooms where at least two people sat down.
@@ -112,12 +117,13 @@ When a phone forgets someone:
 6. Distinct players per week, split into new and returning.
 7. Time from making a room to dealing its first game.
 8. The whole funnel in one row per week.
+9. The same moments as the app counted them when they happened: rooms made, people who took a seat, games dealt, games finished (split by how they ended) and abandoned.
 
 Every statement is a read. Nothing is changed.
 
 1. In the Supabase dashboard, open the project, then **SQL Editor**, then **New query**.
 2. Paste in the whole of `docs/ops/funnel.sql`.
-3. Highlight **one** query, from its numbered comment down to its semicolon, and press **Run** (Cmd+Enter, or Ctrl+Enter). The editor runs only what's highlighted. With nothing highlighted it runs the whole file and shows only the last result, which is query 8.
+3. Highlight **one** query, from its numbered comment down to its semicolon, and press **Run** (Cmd+Enter, or Ctrl+Enter). The editor runs only what's highlighted. With nothing highlighted it runs the whole file and shows only the last result, which is query 9.
 4. Read the grid. To keep a copy, use the export button above the results to save a CSV. Save the snippet as **Funnel** so it's in the sidebar next time.
 
 **Reading it**
@@ -127,6 +133,7 @@ Every statement is a read. Nothing is changed.
 - Your own test tables count. The top of the file shows how to leave them out.
 - Counts of people come from who is sitting in each room now, so they're a floor. Someone who stood up is no longer in a seat. The file's header explains this.
 - Start with query 8 and read left to right to see where tables drop off. Query 4 splits **finished** by how the game ended: **complete** (the last hand was scored), **by_host** (the host ended it) and **idle** (nobody played it for six hours, so it ended by itself). Games that finished before the reason was recorded count only in **finished**. Its **stalled** column counts games still marked in play with no hand finished for a day. Now that a game nobody plays ends after six hours, it should stay at or near zero: a count that keeps growing means the daily sweep isn't running (section 1) or can't settle those games (`sweep_game_failed` below). In query 6, if **names_given** keeps outrunning **returning**, phones may be forgetting people. Check that against the iPhone test above.
+- Query 9 doesn't rebuild anything from who's sitting where now: the app writes each moment down as it happens (the `app_events` table). Its counts start the week the app began writing them, so earlier weeks aren't there and that first week is only part of one. **people_who_sat** is people who took a seat by the room's link; a host sits by making the room, so they're in **rooms_made** instead. A game's end is counted in the week it ended. Once a few weeks have built up, its **games_dealt** should be close to query 3's **games_started** for the same weeks, and its finished and abandoned counts close to query 4's; they differ by games that ended in a different week from the one they were dealt, and by deals that failed part way (`drop_game_failed` below), which only query 3 sees. A column that falls well short means the app couldn't write some of them (`event_write_failed` below).
 
 Once a week, on a Monday, is enough to start with.
 
@@ -149,4 +156,5 @@ Not a launch check: a key for when something looks wrong. The server writes each
 - **`profile_missing`**: someone sitting down to a new game, or at the table when a game ended, has no profile row, which every signed-in person gets when they first sign in (the `on_auth_user_created` trigger). The deal or the finish went ahead anyway: who sat where, or who finished where (`game_players`), was written for that game by name, without anyone's id, or the game's row without who ended it. `gameId` names the game. One now and then is harmless; if it keeps appearing, check the trigger is still in place.
 - **`leave_settle_failed`**: someone stood up and the bot in their seat couldn't move straight away. The next clock or the sweep plays its move.
 - **`poke_failed`**: the others weren't told the table moved. It's rare, because a failed Realtime call is caught first and logged as `broadcast failed`. Their next refresh or clock catches them up.
+- **`event_write_failed`**: one of the moments the funnel's query 9 counts couldn't be written. `type` says which (`room_made`, `seat_taken`, `game_dealt`, `game_finished` or `game_abandoned`), with `roomId` and `gameId` where they apply. Nothing else was affected: the room was still made, the seat taken, the game dealt or ended, and the player never knew. Query 9 is one short for that week, and stays so: a game's end is counted only by the request that ended it, never written later. One now and then is harmless. If they all fail, check `/api/health` (section 1): under `tables`, `app_events` should read `ok`.
 - **`table_state_newer`**: a table's bookkeeping (`live_state.table_state`) was written by a newer version of the app than the one running, which usually means production was rolled back. The older code won't save over what it can't read, so that table's moves, clocks and sweep answer "something went wrong" (each also logged as `route_error`, or `sweep_game_failed` from the sweep) until the newer version is deployed again. Players can still open the table and look. `gameId` names the table, and the line says which version wrote it. Roll forward, not back.

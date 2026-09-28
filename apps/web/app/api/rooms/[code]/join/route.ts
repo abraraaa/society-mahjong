@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server';
 // Relative, not '@/lib', so vitest can load this handler without an alias.
 import { currentUser } from '../../../../../lib/live/auth';
 import { broadcast, roomPoke } from '../../../../../lib/live/broadcast';
+import { recordEvent } from '../../../../../lib/live/events';
 import { errorResponse, json } from '../../../../../lib/live/http';
 import { joinRoom, requireRoom, roomSnapshot } from '../../../../../lib/live/rooms';
 import { HttpError, settleRoomGame } from '../../../../../lib/live/service';
@@ -21,7 +22,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ code: stri
     const name = cleanDisplayName(body?.name) ?? user.name;
     const { room, seated } = await joinRoom(await settleRoomGame(await requireRoom(code)), user.id, name);
     const snap = roomSnapshot(room, user.id);
-    if (seated) await broadcast([roomPoke(room.id, 'seats', { seats: snap.seats })]);
+    if (seated) {
+      await broadcast([roomPoke(room.id, 'seats', { seats: snap.seats })]);
+      // Only a new seat counts: someone coming back to the seat they already had took nothing. The status says whether they sat
+      // down before the room's first game or between games.
+      await recordEvent({ type: 'seat_taken', roomId: room.id, userId: user.id, data: { how: 'join', status: room.status } });
+    }
     return json(snap);
   } catch (err) {
     return errorResponse(err, '/api/rooms/[code]/join');

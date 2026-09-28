@@ -3,6 +3,9 @@
 /**
  * A bottom sheet with one question and two answers. The scrim is the second "no". `extras` are quieter answers
  * besides those two, each drawn above the "no", such as the host's "End the game for everyone" in the Leave sheet.
+ *
+ * It opens on the top layer, over whatever sheet the table already has up (the result sheet, a claim, the exchange),
+ * and its scrim dims that sheet too, so nothing under the question can be tapped until it's answered.
  */
 export function ConfirmSheet({
   title,
@@ -25,8 +28,8 @@ export function ConfirmSheet({
 }) {
   return (
     <>
-      <div className="scrim" onClick={onCancel} />
-      <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+      <div className="scrim scrim-top" onClick={onCancel} />
+      <div className="sheet sheet-top" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
         <div className="grabber" />
         <h2 id="confirm-title" className="font-display mb-2 text-xl">
           {title}

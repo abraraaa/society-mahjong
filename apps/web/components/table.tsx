@@ -67,7 +67,7 @@ export interface TableProps {
   readonly clock?: { readonly kind: 'turn' | 'claim'; readonly ms: number } | null;
   /** a move is on its way to the table: the action buttons are disabled, and a second tap does nothing until it lands */
   readonly busy?: boolean;
-  /** what plays each seat that a person doesn't: the final table marks a bot's row */
+  /** what plays each seat that a person doesn't: a bot's seat is marked on its pill, in the result sheet's rows and on the final table */
   readonly marks?: Readonly<Partial<Record<Seat, 'bot' | 'away'>>>;
   /** the line under the final scores, when the page knows how the game ended; "That's the game." and who finished top otherwise */
   readonly endLine?: string;
@@ -317,6 +317,7 @@ function TableInner({
       score={signed(scores[p.seat])}
       clock={clock && clock.kind === 'turn' && view.phase === 'turn' && view.turn === p.seat ? mmss(clock.ms) : undefined}
       urgent={urgent}
+      mark={marks?.[p.seat]}
       {...(orientation ? { orientation } : {})}
     />
   );
@@ -585,7 +586,9 @@ function ResultSheet({
   return (
     <>
       <div className="scrim" />
-      <div className="sheet">
+      {/* Never taller than the screen: on a phone lying down a won hand's tiles and the scores don't fit, so the sheet scrolls
+          from its title, and its buttons stay pinned to its foot (their row carries the sheet's bottom padding). */}
+      <div className="sheet max-h-[calc(100dvh_-_var(--safe-top)_-_8px)] overflow-y-auto overscroll-contain pb-0!">
         <div className="grabber" />
         {view.phase === 'finished' && (
           <>
@@ -631,16 +634,19 @@ function ResultSheet({
             </div>
             {order.map((seat) => (
               <div key={seat} className={`row${seat === view.me ? ' is-me' : ''}`}>
-                <span className="who">{names[seat]}</span>
+                <span className="who">
+                  {names[seat]}
+                  {marks?.[seat] === 'bot' && ' · bot'}
+                </span>
                 <span className="delta">{paid ? signed(deltas[seat]) : ''}</span>
                 <span className="total">{signed(scores[seat])}</span>
               </div>
             ))}
           </div>
         )}
-        {/* A phone lying down has no height to spare (the sheet already reaches its top), so there the host's End shares a row
-            with Next hand rather than pushing the hand's title off the screen. */}
-        <div className="mt-4 flex flex-col gap-2 [@media(orientation:landscape)_and_(height<32rem)]:flex-row">
+        {/* A phone lying down has no height to spare, so there the host's End shares a row with Next hand rather than taking
+            more of the room the hand and the scores need. */}
+        <div className="bg-felt-900 sticky bottom-0 mt-2 flex flex-col gap-2 pt-2 pb-[calc(20px_+_var(--safe-bottom))] [@media(orientation:landscape)_and_(height<32rem)]:flex-row">
           <button className="btn btn-primary btn-block" disabled={busy} onClick={onNext}>
             {gameOver ? (nextLabel ?? 'Play again') : 'Next hand'}
           </button>

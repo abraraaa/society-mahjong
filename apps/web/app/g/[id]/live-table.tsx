@@ -15,6 +15,7 @@ import { finalStandings } from '@/lib/live/final';
 import { handsPlayed } from '@/lib/live/lifecycle';
 import { HOST_LEAVE, endLine, endSheet } from '@/lib/live/lifecycle-copy';
 import { plainError } from '@/lib/live/plain';
+import { clockMoveNotice, seatMarks, tableNews } from '@/lib/live/presence';
 import { isPrivate, type GameSnapshot } from '@/lib/live/snapshot';
 import type { ClientAction } from '@/lib/live/types';
 import { NeedsCaptcha, ensureSession } from '@/lib/supabase/session';
@@ -23,7 +24,7 @@ import { liveStage } from '@/lib/live/level';
 import { claimMsLeft } from '@/lib/live/timing';
 import { useTutorOn } from '@/lib/live/tutor-toggle';
 import { scoresFrom } from '@/lib/ledger';
-import { canDiscard, discardRefusal, standInNotice } from '@/lib/table-flow';
+import { canDiscard, discardRefusal } from '@/lib/table-flow';
 import { POLL_MS, afterFailedLook, sendMove, shouldPoll, singleFlight, type LookQueue } from '@/lib/table-sync';
 
 /**
@@ -68,8 +69,13 @@ export function LiveTable({ gameId }: { gameId: string }) {
   const [sync, setSync] = useState<{ serverNow: number; at: number } | null>(null);
   const [now, setNow] = useState<number | null>(null);
 
-  const take = useCallback((s: GameSnapshot) => {
-    if (latestRef.current && s.version < latestRef.current.version) return; // an older reply arriving late
+  // Takes a snapshot, and says what changed at the table since the one before (someone left, say) in the line at the top.
+  // A tap's own failure, told after this, still has the last word. Returns what it said, for a caller with more to add.
+  const take = useCallback((s: GameSnapshot): string | null => {
+    const prev = latestRef.current;
+    if (prev && s.version < prev.version) return null; // an older reply arriving late
+    const news = prev ? tableNews(prev, s) : null;
+    if (news) setNotice(news);
     latestRef.current = s;
     // A table in hand answers whatever went wrong before it.
     setError(null);
@@ -79,6 +85,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
     setSync({ serverNow: s.now, at });
     setNow(at);
     setSnap(s);
+    return news;
   }, []);
 
   // A once-a-second tick while any clock is running, for the countdown.
@@ -210,9 +217,10 @@ export function LiveTable({ gameId }: { gameId: string }) {
         api
           .tick(gameId)
           .then((s) => {
-            take(s);
+            const news = take(s);
+            // This tick ran the reader's own clock out, and a bot moved for them: that comes first, then anything else that changed.
             const mine = s.standIns?.find((x) => x.seat === s.me);
-            if (mine) setNotice(standInNotice(mine.action));
+            if (mine) setNotice([clockMoveNotice({ by: 'clock', seat: mine.seat, a: mine.action }), news].filter((x) => x).join(' '));
           })
           .catch(() => refetch()),
       wait,
@@ -359,10 +367,6 @@ export function LiveTable({ gameId }: { gameId: string }) {
   // snapshot of a finished hand already carries them, and a finished game's
   // are its final scores.
   const scores = scoresFrom(snap.scores);
-  const marks: Partial<Record<Seat, 'bot'>> = {};
-  snap.seats.forEach((s, i) => {
-    if (s?.kind === 'bot') marks[i as Seat] = 'bot';
-  });
   // How the game ended, and who finished top, by their own names: the reader is "You" by seat.
   const ending = gameOver
     ? endLine(
@@ -412,10 +416,10 @@ export function LiveTable({ gameId }: { gameId: string }) {
         gameOver={gameOver}
         scores={scores}
         handsPerRound={ruleset.handsPerRound}
-        marks={marks}
+        marks={seatMarks(snap)}
         {...(ending !== undefined ? { endLine: ending } : {})}
       />
-      {/* After the table, so a sheet opened from the result sheet is drawn over it. */}
+      {/* Each question opens on the top layer (ConfirmSheet), over the result sheet or whatever other sheet the table has up. */}
       {open?.kind === 'leave' &&
         (snap.isHost ? (
           <ConfirmSheet

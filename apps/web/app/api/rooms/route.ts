@@ -1,10 +1,12 @@
 import type { NextRequest } from 'next/server';
-import { currentUser } from '@/lib/live/auth';
-import { errorResponse, json } from '@/lib/live/http';
-import { HttpError } from '@/lib/live/service';
-import { createRoom, roomByCode } from '@/lib/live/store';
-import { parseRoomRequest } from '@/lib/live/validate';
-import { generateRoomCode } from '@/lib/room-code';
+// Relative, not '@/lib', so vitest can load this handler without an alias.
+import { currentUser } from '../../../lib/live/auth';
+import { recordEvent } from '../../../lib/live/events';
+import { errorResponse, json } from '../../../lib/live/http';
+import { HttpError } from '../../../lib/live/service';
+import { createRoom, roomByCode } from '../../../lib/live/store';
+import { parseRoomRequest } from '../../../lib/live/validate';
+import { generateRoomCode } from '../../../lib/room-code';
 
 /** Create a room. Guests may host. Only Karachi is offered, and only the options the server reads are kept. */
 export async function POST(req: NextRequest) {
@@ -17,6 +19,7 @@ export async function POST(req: NextRequest) {
     let code = generateRoomCode();
     for (let i = 0; i < 5 && (await roomByCode(code)); i++) code = generateRoomCode();
     const room = await createRoom({ code, hostId: user.id, hostName: user.name, rulesetId: request.rulesetId, options: request.options });
+    await recordEvent({ type: 'room_made', roomId: room.id, userId: user.id, data: { ruleset: request.rulesetId, guest: user.isGuest } });
     return json({ id: room.id, code: room.code }, 201);
   } catch (err) {
     return errorResponse(err, '/api/rooms');

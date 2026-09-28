@@ -7,6 +7,7 @@ import type { CoachStage } from '../coach/types';
 import type { GameSnapshot } from './snapshot';
 import { broadcast, gamePoke, roomPoke } from './broadcast';
 import { afterCommit, type CommitStep } from './commit';
+import { gameEnded, recordEvent } from './events';
 import { handWrites, stamp } from './hand-log';
 import { STALE_GAME_MS, isStale, presentAtEnd, publicGameOver } from './lifecycle';
 import { logError } from './log';
@@ -182,9 +183,9 @@ export async function viewGame(gameId: string, userId: string, now = Date.now())
  * together or not at all. Before it, a failure goes back to the caller and
  * nothing has changed. After it, the move counts: the rest of the
  * bookkeeping (the game's hand count, the players' tallies, the game's
- * finish) is attempted and any failure logged, the others are always poked,
- * and the caller always gets the new table, never a 500 for a move that
- * landed.
+ * finish and the funnel's count of its end) is attempted and any failure
+ * logged, the others are always poked, and the caller always gets the new
+ * table, never a 500 for a move that landed.
  *
  * A game that has ended but isn't all recorded yet is finished again here
  * (healFinish): a tick, the sweep included, then gets the final table, and a
@@ -288,6 +289,9 @@ async function applyStep(c: Caller, live: LiveRow, input: { readonly action: Cli
     // The game's own status is finishGame's last write, so a finish that fails part way leaves the game active, and the next
     // request that looks at it finishes it again (healFinish). The game is over either way: its end is committed.
     steps.push({ what: 'finish the game', run: () => finishGame(game.id, room, over) });
+    // Counted here, by the request that ended the game, whether or not its finish landed, and never by a heal: each end once.
+    // recordEvent never throws; a failed write is its own event_write_failed line.
+    steps.push({ what: 'count the end', run: () => recordEvent(gameEnded({ roomId: room.id, gameId: game.id, over, leaver: userId })) });
   }
   const poke = gamePoke(game.id, version, {
     phase: next.phase,
@@ -383,7 +387,9 @@ export async function endIfStale(gameId: string, now = Date.now()): Promise<bool
  * so the others can carry on. When the last human leaves, the game ends as
  * abandoned, saved with the table like any other end (an unfinished hand
  * doesn't count, and there's no final table), and is finished: the room
- * closes. Idempotent for someone already gone.
+ * closes. A game whose end is already saved has nothing left to leave: its
+ * finish is run again (healFinish) and the seat stays where it is, whoever
+ * else is seated. Idempotent for someone already gone.
  */
 export async function leaveGame(gameId: string, userId: string, now = Date.now()): Promise<{ abandoned: boolean }> {
   for (let attempt = 1; ; attempt++) {
@@ -409,6 +415,13 @@ export async function leaveGame(gameId: string, userId: string, now = Date.now()
       if (attempt >= SEAT_ATTEMPTS) throw new HttpError(409, 'the table changed under you; try again');
       continue;
     }
+    // The others are still playing, unless the game ended just now (its last hand scored) and the finish hasn't landed yet:
+    // then there's no game left to leave, and the seat stays theirs for the host's next deal. Record the end instead.
+    const meta = await liveMeta(gameId);
+    if (meta?.table.over) {
+      await healFinish(gameId, room, meta.table.over, meta.version);
+      return { abandoned: meta.table.over.how === 'abandoned' };
+    }
     const seats = withBots(vacated);
     // Optimistic on the room's updated_at: two people standing up at once means the second reads again and empties only their own seat.
     if (await saveSeats(room.id, seats, room.updated_at)) {
@@ -431,9 +444,11 @@ export async function leaveGame(gameId: string, userId: string, now = Date.now()
  * The daily sweep: settle each table it's given (dueGames), one at a time,
  * so one stuck table never stops the rest. A game nobody has played for
  * STALE_GAME_MS is ended as idle first ('ended'), rather than having its
- * clocks run for nobody; otherwise a clock that has run out is resolved, and
- * a game whose end didn't fully record is finished ('ok'). Returns what
- * happened to each.
+ * clocks run for nobody; otherwise a clock that has run out is resolved, a
+ * game whose end didn't fully record is finished, and a table with nothing
+ * due yet (one with no wake time, last saved by older code) is left as it
+ * is, with nothing written: each of those is 'ok'. Returns what happened to
+ * each.
  *
  * A refusal (a 4xx) means the table moved on its own between the query and
  * the settle: a player or a tick saved first, or the game ended. That is

@@ -10,6 +10,7 @@ import type { GameOver } from '../../../../../lib/live/table-state';
  * ran (it's finished first), and one whose game nobody has played for hours
  * (it's ended first), can all be dealt again. "The host" is whoever has the
  * host's powers: the room's host while seated, else whoever has sat longest.
+ * A deal is one of the funnel's moments, counted once the room points at it.
  */
 const db = vi.hoisted(() => ({ room: null as unknown, game: null as unknown, meta: null as unknown, after: null as unknown, live: null as unknown, user: 'u-abrar' }));
 
@@ -23,6 +24,10 @@ vi.mock('../../../../../lib/live/broadcast', () => ({
 vi.mock('../../../../../lib/live/table', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../../../lib/live/table')>();
   return { ...actual, dealFirstHand: vi.fn(actual.dealFirstHand) };
+});
+vi.mock('../../../../../lib/live/events', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../../../lib/live/events')>();
+  return { ...actual, recordEvent: vi.fn(async () => {}) };
 });
 vi.mock('../../../../../lib/live/store', () => ({
   roomByCode: vi.fn(async () => db.room),
@@ -40,6 +45,8 @@ vi.mock('../../../../../lib/live/store', () => ({
 
 import { karachi } from '@society/engine';
 import { POST } from './route';
+import { HttpError } from '../../../../../lib/live/errors';
+import * as events from '../../../../../lib/live/events';
 import { STALE_GAME_MS } from '../../../../../lib/live/lifecycle';
 import { policyFor } from '../../../../../lib/live/policy';
 import * as store from '../../../../../lib/live/store';
@@ -227,5 +234,43 @@ describe('POST /api/rooms/[code]/start, who may', () => {
     expect((await start()).status).toBe(201);
     db.user = 'u-bilal';
     expect((await start()).status).toBe(403);
+  });
+});
+
+describe('POST /api/rooms/[code]/start, counted for the funnel', () => {
+  const hana = { kind: 'human', userId: 'u-hana', name: 'Hana' } as const;
+
+  it('counts the deal once the room points at it: who dealt, who sat down to it, how new they are, and that the room had dealt before', async () => {
+    db.room = { ...room, status: 'finished', seats: [room.seats[0], null, hana, null] };
+    db.game = game('finished');
+    vi.mocked(store.stagesBySeat).mockResolvedValueOnce(['solid', null, 'learning', null]);
+    expect((await start()).status).toBe(201);
+    expect(events.recordEvent).toHaveBeenCalledTimes(1);
+    expect(events.recordEvent).toHaveBeenCalledWith({
+      type: 'game_dealt',
+      roomId: 'r-1',
+      gameId: NEXT,
+      userId: 'u-abrar',
+      data: { humans: 2, bots: 2, again: true, levels: { new: 0, first_hand: 0, learning: 1, solid: 1 } },
+    });
+    const order = [store.startGame, events.recordEvent].map((fn) => vi.mocked(fn).mock.invocationCallOrder[0]!);
+    expect(order[0]).toBeLessThan(order[1]!);
+  });
+
+  it('counts a room’s first deal as not again', async () => {
+    db.room = { ...room, status: 'lobby', current_game_id: null };
+    db.game = null;
+    expect((await start()).status).toBe(201);
+    expect(events.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'game_dealt', data: expect.objectContaining({ humans: 1, bots: 3, again: false }) }));
+  });
+
+  it('counts nothing for a deal that lost to a seat change, or one refused before it began', async () => {
+    db.room = { ...room, status: 'finished' };
+    db.game = game('finished');
+    vi.mocked(store.startGame).mockRejectedValueOnce(new HttpError(409, 'the seats changed; start again'));
+    expect((await start()).status).toBe(409);
+    db.user = 'u-zed';
+    expect((await start()).status).toBe(403);
+    expect(events.recordEvent).not.toHaveBeenCalled();
   });
 });
