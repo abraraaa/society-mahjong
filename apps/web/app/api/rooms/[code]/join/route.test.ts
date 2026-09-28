@@ -60,7 +60,7 @@ const over: GameOver = { how: 'complete', by: null, at: 1, hands: 16, scores: [9
 /** The table, last moved by a person a minute ago: a game in play, not one left for hours. */
 const meta = (o: GameOver | null): LiveMeta => ({
   version: 40,
-  table: { v: 1, scores: [9, -3, -3, -3], over: o, absence: EVERYONE_HERE, extra: {} },
+  table: { v: 1, scores: [9, -3, -3, -3], over: o, absence: EVERYONE_HERE, ready: null, extra: {} },
   legacy: false,
   actedAt: Date.now() - 60_000,
   updatedAt: Date.now() - 60_000,

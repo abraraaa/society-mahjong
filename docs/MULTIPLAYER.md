@@ -142,7 +142,8 @@ creates it, and the server does everything else with the service role.
 ```
 client  POST /api/games/:id/act  { action, expectedVersion }
 server  session → seat
-        load live_state (version = expectedVersion, else 409 carrying the current snapshot)
+        load live_state (version = expectedVersion, else 409 carrying the current snapshot;
+          a Next hand tap that names its hand skips this, and is a vote, below)
         any move of the player's own but a pass marks them here (misses back
           to nought, back from being away)
         resolve any expired deadline first (a bot stands in for an absent
@@ -154,6 +155,8 @@ server  session → seat
         settle: bots, and the bot playing each away seat, act inline until a
           person here has a real decision; a person with nothing to claim is
           passed for, so windows only open when someone can use them
+        on a finished hand, the next one starts once everyone here has tapped
+          Next hand or the 20-second wait has run out, whatever the request
         a hand won in this request adds its points to the running scores;
           the last hand scored also ends the game (no tap), and a game
           that has ended takes no more moves (409)
@@ -212,8 +215,10 @@ volume; the number to watch as tables multiply.
 
 ### Timers without a server clock
 
-Deadlines live on `live_state`: `claim_deadline` and `turn_deadline`,
-with `wake_at` saved in the same write: the earliest of the two clocks and
+Deadlines live on `live_state`: `claim_deadline` and `turn_deadline`
+(on a finished hand someone has tapped Next hand on, the turn clock is
+when the next hand starts regardless), with `wake_at` saved in the same
+write: the earliest of the two clocks and
 the moment the game would end as idle, six hours after a person last moved
 it (null once the game is over). `wake_at` is the next moment the server
 has to act on the table unasked, and it's what the sweep below reads.
@@ -239,7 +244,8 @@ has to act on the table unasked, and it's what the sweep below reads.
   code). Due tables come first, so parked ones can never crowd out a table
   whose clock has run out. For each table it first ends the game as idle
   if nobody has played it for six hours, and otherwise resolves whatever
-  clock ran out. On the Hobby plan crons run at most daily, which is why
+  clock ran out, including starting a next hand whose 20-second wait ran
+  out with no phone open. On the Hobby plan crons run at most daily, which is why
   the tick above does the real work; Pro makes the sweep per-minute.
 
 **Claim windows are adaptive, and rarely open.** Three things keep the
@@ -290,11 +296,30 @@ never say pung, chow, kong or exchange (`lib/live/presence.ts`). The host
 also hears when someone's clock runs out for the first time, with what they
 can do about it ("tap their name to let a bot play for them").
 
-**Next hand.** Any seated human may deal the next hand, not only the host:
-the finished phase runs no clock, so a host who has wandered off would
-otherwise wedge the table for everyone. A second tap cannot skip a hand;
-it is rejected as stale (409) and the table shows a notice. After the last
-hand there is no next hand to deal: the game has already ended.
+**Next hand.** A tap of Next hand is a vote, from any seated human, not
+only the host. The next hand starts as soon as everyone here has tapped
+(anyone a bot is playing for, and the bots, aren't waited on), or 20
+seconds after the first tap (`NEXT_HAND_WAIT_MS`), whichever comes first.
+Once you've tapped, your button reads "Waiting for Sana" and can't be
+tapped again, and a line under it counts down ("The next hand starts in
+0:14, or as soon as everyone's ready."); someone still to tap reads who's
+ready and "or as soon as you tap" when they're the last. The votes are
+kept in `table_state.ready` (the hand, who has tapped, and when it starts
+regardless), and that start time is the finished hand's turn clock, so the
+page's own tick, `wake_at` and the sweep start it with nothing new: the
+start happens in whichever request comes first once the table is ready (a
+tap, a tick, someone coming back or being handed to a bot), so someone who
+leaves or goes away during the wait doesn't hold it up. One person with
+three bots starts at once, as before. The tap names the hand it was made
+on (`{ type: 'nextHand', hand }`), so it needs no particular version: it
+skips the version check, and a commit that loses to another request is
+tried again on a fresh read (five tries, `VOTE_ATTEMPTS`), so four people
+tapping together while their phones tick never bounce off each other. A
+tap on a hand that has already started does nothing, except bring its
+person back like any tap; one from a phone on the same person counts once.
+A page loaded before votes sends no hand: its tap is checked against the
+version it saw, as any move is, and then counts as a vote. After the last
+hand there is no next hand: the game has already ended.
 
 **The host's powers** (starting a game, ending one, and letting a bot play
 for someone who's stepped away) are worked out, never stored (`seating.ts`
@@ -397,7 +422,9 @@ changing either are in `docs/DATA-MODEL.md`. What a live table keeps:
   dealt; who's away (`absence`, per seat: whose sitting it is, missed turns
   in a row, whether a bot is playing for them and why, the clock moves made
   for them, when they last tapped and what the bot has played while they've
-  been away; written once any seat has something in it); and, once the
+  been away; written once any seat has something in it); who has tapped
+  Next hand on a finished hand (`ready`: the hand, their ids and when the
+  next hand starts regardless; written only while someone has); and, once the
   game has ended, how it ended (`over`: how, by whom, when, how many hands,
   the final scores and who sat where). A table last
   saved before it existed reads its scores from `rooms.ledger` until its

@@ -15,8 +15,8 @@ import {
   type Seat,
 } from '@society/engine';
 import type { CoachStage } from '../coach/types';
-import { EVERYONE_HERE, awaySeats, isAway, markAway, markPresent, noteClockMove, noteHandEnd, notePlayed, reconcileAbsence } from './absence';
-import { addHandScores, endOfGame, isLastHand } from './lifecycle';
+import { EVERYONE_HERE, awaySeats, isAway, markAway, markPresent, noteClockMove, noteHandEnd, notePlayed, presentUserIds, reconcileAbsence } from './absence';
+import { addHandScores, endOfGame, everyoneReady, isLastHand, voteNextHand } from './lifecycle';
 import { policyFor, presentLevels } from './policy';
 import { NEW_TABLE, sameTableState, type Absence, type TableState } from './table-state';
 import {
@@ -273,7 +273,7 @@ export interface StepInput {
   /** the caller's action, already validated by parseClientAction; omit for a sweep */
   readonly action?: ClientAction;
   readonly actor?: Seat;
-  /** the game's seed, needed only to deal the next hand */
+  /** the game's seed, needed only to start the next hand */
   readonly seed?: string;
   /** how the bots in empty seats play (policy.ts emptySeatBots); sharp when omitted */
   readonly bots?: 'sharp' | 'gentle';
@@ -335,6 +335,15 @@ export interface StepResult extends LiveGame {
  * the table still waits on the same decision, for no new person, its clock
  * keeps running (R7).
  *
+ * Next hand (R15, R16). On a finished hand that isn't the last, a tap is a
+ * vote (`tableState.ready`), and the next hand starts in the step that finds
+ * everyone here has voted, or the first step at or after NEXT_HAND_WAIT_MS
+ * from the first vote: a vote, a tick, a change, anything, so someone leaving
+ * or going away during the wait never holds it up. That start time is the
+ * finished hand's turn clock, so the page's tick and the sweep come for it.
+ * A tap names the hand it was made on; one for a hand that has already
+ * started does nothing but bring its person back (R4).
+ *
  * The game ends in the step that ends it (R12), with `tableState.over` set:
  * when its last hand is scored, however that happened (a move, a clock, the
  * bots), with no tap needed; or on `end` (the host, six idle hours, or the
@@ -352,9 +361,18 @@ export function step(input: StepInput): StepResult {
     if (input.action || input.end || input.change) throw new GameIsOver();
     return { ...input.game, tableState: tableBefore, changed: false, gameOver: false, moves: [], dealt: false, finishedHand: false, awayAtEnd: null, dropped: false };
   }
-  // A hand that ends inside this step, its clock run out, must be recorded as it closes, never dealt over. A finished
-  // hand has no clock to resolve, so this refuses nothing the client offers.
-  if (input.action?.type === 'nextHand' && before.phase !== 'finished') throw new IllegalAction('hand not finished');
+  // Next hand is a person's own tap, on the hand it names (a page loaded before taps named one means the hand it's on). A hand
+  // that ends inside this step, its clock run out, must be recorded as it closes, never voted past; a finished hand has no clock
+  // to resolve, so this refuses nothing the client offers. A tap on a hand that has already started is too late to matter.
+  const h0 = before.progress.handIndex;
+  let lateVote = false;
+  if (input.action?.type === 'nextHand') {
+    if (input.actor === undefined) throw new NotYourMove('action is not for your seat');
+    if (seats[input.actor]?.kind !== 'human') throw new NotYourMove('that seat is a bot');
+    const hand = input.action.hand ?? h0;
+    if (hand > h0 || (hand === h0 && before.phase !== 'finished')) throw new IllegalAction('hand not finished');
+    lateVote = hand < h0;
+  }
   let s = before;
   let table = tableBefore;
   let changed = false;
@@ -396,7 +414,8 @@ export function step(input: StepInput): StepResult {
     if (!table.over && isLastHand(s, ruleset)) table = { ...table, over: endOfGame('complete', s, table, seats, null, now) };
   }
 
-  const expired = resolveExpiredWith(input.game, ruleset, seats, now, absence);
+  // A tap on a hand that has already started changes nothing but its person's presence, above (R16): no clock, no start.
+  const expired = lateVote ? null : resolveExpiredWith(input.game, ruleset, seats, now, absence);
   if (expired) {
     s = expired.state;
     for (const m of expired.moves) {
@@ -449,14 +468,17 @@ export function step(input: StepInput): StepResult {
     // once) is never a player's to make, whichever seat it names.
     if (!isClientActionType((action as { readonly type: unknown }).type)) throw new NotYourMove('only the table makes that move');
     if (action.type === 'nextHand') {
-      if (s.phase !== 'finished') throw new IllegalAction('hand not finished');
-      const n = nextHand(s, ruleset);
-      if (n === null) {
-        // A finished last hand the natural end never saw (saved before it existed): the tap ends the game.
-        table = { ...table, over: endOfGame('complete', s, table, seats, null, now) };
-      } else {
-        if (input.seed === undefined) throw new Error('nextHand needs the seed');
-        settleNow(startHand(ruleset, { seed: input.seed, ...n }));
+      // Nothing to do for a tap on a hand already started (lateVote); otherwise the tap is a vote, and the start comes below.
+      if (!lateVote) {
+        if (s.phase !== 'finished') throw new IllegalAction('hand not finished');
+        const entry = seats[actor!];
+        if (nextHand(s, ruleset) === null) {
+          // A finished last hand the natural end never saw (saved before it existed): the tap ends the game.
+          table = { ...table, over: endOfGame('complete', s, table, seats, null, now) };
+        } else if (entry?.kind === 'human') {
+          // Counted once per person, however many phones or taps; a second one changes nothing, and saves nothing.
+          table = voteNextHand(table, h0, entry.userId, now);
+        }
       }
     } else {
       if (actor === undefined || action.seat !== actor) throw new NotYourMove('action is not for your seat');
@@ -467,17 +489,37 @@ export function step(input: StepInput): StepResult {
         moves.push({ by: 'player', seat: actor, userId: entry.userId, a: action });
         settleNow(reduce(s, action, ruleset));
       }
+      changed = true;
     }
-    changed = true;
   } else if (!expired && !change) {
     // A sweep or a first load: still make sure nothing is waiting on a bot.
     settleNow(s);
   }
 
+  // Start the next hand (R15) once everyone here has tapped Next hand on this one, or its wait has run out, whatever brought
+  // this step: a vote, a tick, someone back or handed to a bot. The people here are counted as they are now, so someone who
+  // left or went away during the wait isn't waited on. Never in a step that ends the game.
+  const votes = table.ready;
+  if (
+    !lateVote &&
+    !table.over &&
+    !input.end &&
+    s.phase === 'finished' &&
+    votes?.hand === s.progress.handIndex &&
+    (now >= votes.dealAt || everyoneReady(votes, votes.hand, presentUserIds(seats, absence)))
+  ) {
+    const n = nextHand(s, ruleset);
+    if (n !== null) {
+      if (input.seed === undefined) throw new Error('starting a hand needs the seed');
+      table = { ...table, ready: null };
+      settleNow(startHand(ruleset, { seed: input.seed, ...n }));
+    }
+  }
+
   if (absence !== table.absence) table = { ...table, absence };
   const dealt = s.progress.handIndex > before.progress.handIndex;
   // Anything new in the table itself or its bookkeeping is a change too: a move, the running scores, someone's absence
-  // (a reset of a seat's old entry included), or the game's end.
+  // (a reset of a seat's old entry included), a vote for the next hand, or the game's end.
   if (s !== before || !sameTableState(table, tableBefore)) changed = true;
   const policy = input.levels ? policyFor(presentLevels(input.levels, seats, absence), input.strict ?? false) : input.policy;
   // The same decision as before, waiting on nobody new (one person answered and another still owes theirs, someone came
@@ -486,10 +528,12 @@ export function step(input: StepInput): StepResult {
   const pendingNow = personsPending(s, ruleset, seats, absence);
   const clockRunning = input.game.deadlines.claim !== null || input.game.deadlines.turn !== null;
   const sameWait = !expired && clockRunning && sameDecision(before, s) && pendingNow.every((seat) => pendingBefore.includes(seat));
+  // A finished hand runs no clock of its own; once someone has tapped Next hand, its turn clock is when the next one starts
+  // regardless, so whichever phone is open ticks then, and wake_at sends the sweep if none is.
   const deadlines = table.over
     ? { claim: null, turn: null }
     : s.phase === 'finished'
-      ? { claim: null, turn: null }
+      ? { claim: null, turn: table.ready?.hand === s.progress.handIndex ? table.ready.dealAt : null }
       : !changed || sameWait
         ? input.game.deadlines
         : deadlinesFor(s, ruleset, seats, policy, now, absence);

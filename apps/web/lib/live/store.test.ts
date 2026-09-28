@@ -155,7 +155,7 @@ const dealAnswers = (q: Query): unknown => (q.target === 'games' ? newGame : q.t
 /** Hana's win, as one request writes it: the hand ends, its points are in the running totals, and a clock waits on nobody. */
 const write: TableWrite = {
   state: wonHand,
-  table: { v: 1, scores: [-8, 8, 0, 0], over: null, absence: EVERYONE_HERE, extra: {} },
+  table: { v: 1, scores: [-8, 8, 0, 0], over: null, absence: EVERYONE_HERE, ready: null, extra: {} },
   deadlines: { claim: null, turn: null },
   wakeAt: null,
   acted: true,
@@ -206,7 +206,7 @@ describe('reads', () => {
       state: wonHand,
       claim_deadline: null,
       turn_deadline: '2026-09-24T20:01:30.000Z',
-      table_state: { v: 1, scores: [-8, 8, 0, 0], ready: { hand: 2 } },
+      table_state: { v: 1, scores: [-8, 8, 0, 0], ready: { hand: 2, userIds: ['u-a'], dealAt: T + 20_000 }, later: { hand: 2 } },
       wake_at: '2026-09-24T20:01:30.000Z',
       acted_at: '2026-09-24T19:59:00.000Z',
       updated_at: '2026-09-24T20:00:00.000Z',
@@ -216,7 +216,7 @@ describe('reads', () => {
       version: 7,
       state: wonHand,
       deadlines: { claim: null, turn: T + 90_000 },
-      table: { v: 1, scores: [-8, 8, 0, 0], over: null, absence: EVERYONE_HERE, extra: { ready: { hand: 2 } } },
+      table: { v: 1, scores: [-8, 8, 0, 0], over: null, absence: EVERYONE_HERE, ready: { hand: 2, userIds: ['u-a'], dealAt: T + 20_000 }, extra: { later: { hand: 2 } } },
       legacy: false,
       wakeAt: T + 90_000,
       actedAt: T - 60_000,
@@ -730,7 +730,7 @@ describe('what the room routes read of a live table', () => {
     }));
     expect(await liveMeta(GAME)).toEqual({
       version: 12,
-      table: { v: 1, scores: OVER.scores, over: JSON.parse(JSON.stringify(OVER)), absence: EVERYONE_HERE, extra: {} },
+      table: { v: 1, scores: OVER.scores, over: JSON.parse(JSON.stringify(OVER)), absence: EVERYONE_HERE, ready: null, extra: {} },
       legacy: false,
       actedAt: T - 60_000,
       updatedAt: T,

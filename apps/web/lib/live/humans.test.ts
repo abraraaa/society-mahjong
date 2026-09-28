@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { SEATS, analysisBot, karachi, legalActions, startHand, viewFor, type Action, type Seat } from '@society/engine';
-import { EVERYONE_HERE, isAway, noteClockMove } from './absence';
+import { IllegalAction, SEATS, analysisBot, karachi, legalActions, nextHand, startHand, viewFor, type Action, type Seat } from '@society/engine';
+import { EVERYONE_HERE, isAway, markAway, noteClockMove, presentHumans } from './absence';
+import { NEXT_HAND_WAIT_MS, nextHandWait } from './lifecycle';
 import { NotYourMove, dealFirstHand, deadlinesFor, resolveExpired, settle, step, type StepResult } from './table';
 import { NEW_TABLE } from './table-state';
 import { CLAIM_PASS_MARGIN_MS } from './timing';
@@ -287,11 +288,17 @@ describe('two humans, and one of them stops playing', () => {
       const who = waiting(game);
       let r: StepResult;
       let by: 'A' | 'B' | 'tick';
-      if (game.state.phase === 'finished') {
+      if (game.state.phase === 'finished' && game.tableState?.ready?.hand === game.state.progress.handIndex) {
+        // A has tapped and B is still here, so the table waits for B until the wait runs out; A's phone ticks then.
+        expect(game.deadlines.turn, `seed ${seed}: a wait with no start time`).toBe(game.tableState.ready.dealAt);
+        now = Math.max(now, game.deadlines.turn!) + 1;
+        r = step({ game, ruleset: karachi, seats: two, policy, now, seed });
+        by = 'tick';
+      } else if (game.state.phase === 'finished') {
         hands++;
         if (hands >= opts.hands) break;
         now += 1000;
-        r = step({ game, ruleset: karachi, seats: two, policy, now, action: { type: 'nextHand' }, actor: A, seed });
+        r = step({ game, ruleset: karachi, seats: two, policy, now, action: { type: 'nextHand', hand: game.state.progress.handIndex }, actor: A, seed });
         by = 'A';
       } else if (who.includes(A)) {
         now += 1000;
@@ -400,5 +407,118 @@ describe('two humans, and one of them stops playing', () => {
     const passed = step({ game: west!, ruleset: karachi, seats: two, policy, now: T0 + 5_000, action: { type: 'exchange', seat: 0, tiles }, actor: 0 });
     expect(passed.state.phase).toBe('preplay');
     expect(passed.deadlines).toBe(west!.deadlines);
+  });
+});
+
+/**
+ * The next hand at a friends' table (R15, R16): a tap of Next hand is a vote,
+ * and the next hand starts once everyone here has voted, or twenty seconds
+ * after the first vote, on whatever step comes then. Someone who goes, or
+ * whom a bot is playing for, isn't waited on.
+ */
+describe('the next hand, with two people at the table', () => {
+  const A: Seat = 0;
+  const B: Seat = 1;
+  const T1 = T0 + 3_600_000;
+  const seed = 'vote-1';
+  let finished: LiveGame | null = null;
+  /** The first hand at Abrar and Bilal's table, played out and finished, nobody away. */
+  function done(): LiveGame {
+    finished ??= { ...playHand(two, seed).game, tableState: NEW_TABLE };
+    return finished;
+  }
+  const vote = (game: LiveGame, seat: Seat, now: number, seats: Seats = two) =>
+    step({ game, ruleset: karachi, seats, policy, now, action: { type: 'nextHand', hand: game.state.progress.handIndex }, actor: seat, seed });
+
+  it('waits on Bilal after Abrar taps, with the start twenty seconds on as its clock, and starts at once when Bilal taps', { timeout: 120_000 }, () => {
+    const a = vote(done(), A, T1);
+    expect(a).toMatchObject({ changed: true, dealt: false, finishedHand: false, moves: [], gameOver: false });
+    expect(a.state).toBe(done().state);
+    expect(a.tableState.ready).toEqual({ hand: 0, userIds: ['u-a'], dealAt: T1 + NEXT_HAND_WAIT_MS });
+    expect(a.deadlines).toEqual({ claim: null, turn: T1 + NEXT_HAND_WAIT_MS });
+    expect(nextHandWait(a.state, two, presentHumans(two, a.tableState.absence), a.tableState)).toEqual({ ready: [A], waiting: [B], startsAt: T1 + NEXT_HAND_WAIT_MS });
+
+    // Abrar again, from his other phone: counted once, so nothing to save.
+    const again = vote(a, A, T1 + 2_000);
+    expect(again.changed).toBe(false);
+    expect(again.deadlines).toEqual(a.deadlines);
+    // A look before the wait is up changes nothing either.
+    expect(step({ game: a, ruleset: karachi, seats: two, policy, now: T1 + 19_000, seed }).changed).toBe(false);
+
+    const b = vote(a, B, T1 + 5_000);
+    expect(b).toMatchObject({ changed: true, dealt: true });
+    expect(b.state.progress.handIndex).toBe(1);
+    expect(b.state.phase).not.toBe('finished');
+    expect(b.tableState.ready).toBeNull();
+    // The new hand's clock is its own: on whichever person it waits on, sized as ever.
+    expect(b.deadlines).toEqual(deadlinesFor(b.state, karachi, two, policy, T1 + 5_000, b.tableState.absence));
+    expect(b.moves.every((m) => m.by === 'bot' || m.by === 'table')).toBe(true);
+  });
+
+  it('starts at once on Abrar’s tap while a bot is playing for Bilal', { timeout: 120_000 }, () => {
+    const away: LiveGame = { ...done(), tableState: { ...NEW_TABLE, absence: markAway(EVERYONE_HERE, two, B, 'clock') } };
+    const a = vote(away, A, T1);
+    expect(a.dealt).toBe(true);
+    expect(a.tableState.ready).toBeNull();
+    // Bilal is still away: his tap alone would bring him back.
+    expect(isAway(a.tableState.absence, two, B)).toBe(true);
+  });
+
+  it('starts on the next look once Bilal has gone and a bot has his seat, or the host lets a bot play for him', { timeout: 120_000 }, () => {
+    const a = vote(done(), A, T1);
+    const left: Seats = [two[0], { kind: 'bot', name: 'Bilal' }, two[2], two[3]];
+    const tick = step({ game: a, ruleset: karachi, seats: left, policy, now: T1 + 1_000, seed });
+    expect(tick).toMatchObject({ changed: true, dealt: true });
+    expect(tick.state.progress.handIndex).toBe(1);
+
+    const handed = step({ game: a, ruleset: karachi, seats: two, policy, now: T1 + 1_000, seed, change: { type: 'letBotPlay', seat: B, bySeat: A, sawAt: null } });
+    expect(handed).toMatchObject({ changed: true, dealt: true });
+    expect(isAway(handed.tableState.absence, two, B)).toBe(true);
+  });
+
+  it('starts when the wait runs out, on the tick that finds it has, and the new hand replays from its seed', { timeout: 120_000 }, () => {
+    const a = vote(done(), A, T1);
+    const dealAt = a.tableState.ready!.dealAt;
+    expect(step({ game: a, ruleset: karachi, seats: two, policy, now: dealAt - 1, seed }).changed).toBe(false);
+    const late = step({ game: a, ruleset: karachi, seats: two, policy, now: dealAt + 1, seed });
+    expect(late).toMatchObject({ changed: true, dealt: true, finishedHand: false });
+    expect(late.tableState.ready).toBeNull();
+    // Bilal never tapped, and a look isn't a tap: his absence is as it was.
+    expect(late.tableState.absence[B]).toEqual(a.tableState.absence[B]);
+    const start = nextHand(done().state, karachi)!;
+    expect(replayHand(karachi, seed, start, stamp(late.moves, 9))).toEqual(late.state);
+  });
+
+  it('does nothing for a tap on a hand that has already started but bring its person back, and refuses one on a hand not yet finished', { timeout: 120_000 }, () => {
+    const a = vote(done(), A, T1);
+    const started = vote(a, B, T1 + 5_000);
+    const stale = step({ game: started, ruleset: karachi, seats: two, policy, now: T1 + 6_000, action: { type: 'nextHand', hand: 0 }, actor: B, seed });
+    expect(stale).toMatchObject({ changed: false, dealt: false, moves: [] });
+    expect(stale.state).toBe(started.state);
+    expect(stale.deadlines).toBe(started.deadlines);
+
+    // Bilal had missed a turn: the late tap is still a tap (R4), and that's all it is.
+    const missed: LiveGame = {
+      ...started,
+      tableState: { ...started.tableState, absence: noteClockMove(started.tableState.absence, two, { by: 'clock', seat: B, a: { type: 'pass', seat: B } }, true) },
+    };
+    const back = step({ game: missed, ruleset: karachi, seats: two, policy, now: T1 + 6_000, action: { type: 'nextHand', hand: 0 }, actor: B, seed });
+    expect(back).toMatchObject({ changed: true, dealt: false, moves: [] });
+    expect(back.state).toBe(started.state);
+    expect(back.deadlines).toEqual(started.deadlines);
+    expect(back.tableState.absence[B]).toMatchObject({ misses: 0, lastTap: T1 + 6_000 });
+
+    // The hand being played, or one not yet dealt, isn't finished.
+    for (const hand of [1, 2]) {
+      expect(() => step({ game: started, ruleset: karachi, seats: two, policy, now: T1 + 6_000, action: { type: 'nextHand', hand }, actor: A, seed }), String(hand)).toThrow(
+        IllegalAction,
+      );
+    }
+    expect(() => step({ game: done(), ruleset: karachi, seats: two, policy, now: T1, action: { type: 'nextHand', hand: 1 }, actor: A, seed })).toThrow(IllegalAction);
+  });
+
+  it('takes a tap only from a person in their own seat', { timeout: 120_000 }, () => {
+    expect(() => step({ game: done(), ruleset: karachi, seats: two, policy, now: T1, action: { type: 'nextHand', hand: 0 }, actor: 2, seed })).toThrow(NotYourMove);
+    expect(() => step({ game: done(), ruleset: karachi, seats: two, policy, now: T1, action: { type: 'nextHand', hand: 0 }, seed })).toThrow(NotYourMove);
   });
 });

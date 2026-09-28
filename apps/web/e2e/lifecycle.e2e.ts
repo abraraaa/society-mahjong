@@ -1,16 +1,28 @@
 import { expect, test } from '@playwright/test';
 import { finalStandings } from '../lib/live/final';
-import { HOST_LEAVE, endLine, endSheet } from '../lib/live/lifecycle-copy';
+import { HOST_LEAVE, endLine, endSheet, waitCopy } from '../lib/live/lifecycle-copy';
 import { plainError } from '../lib/live/plain';
 import type { GameSnapshot } from '../lib/live/snapshot';
 import { fixtures, serve } from './fixtures';
-import { flush, ok, openTable } from './live';
+import { flush, ok, openTable, pauseClock } from './live';
 
 /**
  * A game's life at the table: the last hand ends the game with no tap, and
  * the result sheet becomes the final table. The host can end it sooner, from
- * the result sheet between hands or from their Leave sheet mid-hand.
+ * the result sheet between hands or from their Leave sheet mid-hand. Between
+ * hands, Next hand waits for everyone here, or twenty seconds after the first
+ * tap.
  */
+
+/** The wait for the next hand, in the page's words for Amna (seat 0), with `msLeft` on the clock. */
+function waitOf(s: GameSnapshot, msLeft: number) {
+  return waitCopy(s.nextHand!, 0, { 0: 'You', 1: 'Bilal', 2: 'Sana', 3: 'Omar' }, msLeft);
+}
+
+/** A line with its countdown left open, since the page counts it down as the test watches. */
+function counting(line: string): RegExp {
+  return new RegExp(`^${line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\d+:\d\d/, '\\d+:\\d\\d')}$`);
+}
 
 /** The line under the final scores, in the page's own words. */
 function endLineOf(s: GameSnapshot): string {
@@ -189,6 +201,71 @@ test.describe('the end of a game', () => {
     const t = await openTable(page, { view: () => ok({ ...fx.handDone, isHost: false }) });
     await expect(page.locator('.sheet').getByRole('button', { name: 'Next hand' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'End the game here' })).toHaveCount(0);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(b) Next hand is one tap naming its hand; then it waits for Bilal, counts down, and the tick when the wait runs out starts the next hand', async ({ page }) => {
+    const fx = fixtures();
+    let voted = false;
+    const t = await openTable(
+      page,
+      {
+        // The tick's answer (n = 0) is the next hand, started. A look before the tap gives the result sheet; one after it (the slow
+        // poll) gets no answer, since the served table would restart the wait on this page's stopped clock.
+        view: (n) => (n === 0 ? ok(fx.nextDealt) : voted ? 'hold' : ok(fx.handDone)),
+        act: () => {
+          voted = true;
+          return ok(fx.readyWaiting);
+        },
+      },
+      { clock: true },
+    );
+    // The first look, and the one on SUBSCRIBED; from here the page's timers fire only when the test says.
+    await expect.poll(() => t.count('view')).toBe(2);
+    await pauseClock(page);
+    await flush(page);
+    const sheet = page.locator('.sheet');
+    const next = sheet.getByRole('button', { name: 'Next hand' });
+    await expect(next).toBeEnabled();
+    await expect(sheet.getByText('The next hand starts in')).toHaveCount(0);
+    // Past the moment after a hand ends when a tap is taken for one meant for the table.
+    await page.clock.runFor(500);
+
+    await next.click();
+    const copy = waitOf(fx.readyWaiting, 20_000);
+    expect(copy).toEqual({ button: 'Waiting for ⁨Bilal⁩', line: "The next hand starts in 0:20, or as soon as everyone's ready.", ready: true });
+    const waiting = sheet.getByRole('button', { name: /^Waiting for/ });
+    await expect(waiting).toHaveText(copy.button);
+    await expect(waiting).toBeDisabled();
+    await expect(sheet.getByText(/^The next hand starts in 0:/)).toHaveText(counting(copy.line!));
+    await flush(page);
+    expect(t.of('act').map((c) => c.body?.action)).toEqual([{ type: 'nextHand', hand: fx.handDone.view.progress.handIndex }]);
+    expect(t.count('tick')).toBe(0);
+
+    // The countdown runs on the table's clock; when it's out, the page asks the table, once, and the next hand is dealt.
+    await page.clock.runFor(10_000);
+    await expect(sheet.getByText(/^The next hand starts in 0:/)).toHaveText(counting(waitOf(fx.readyWaiting, 10_000).line!));
+    expect(t.count('tick')).toBe(0);
+    await page.clock.runFor(11_000);
+    await expect(page.locator('.sheet')).toHaveCount(0);
+    await flush(page);
+    expect(t.count('tick')).toBe(1);
+    expect(t.count('act')).toBe(1);
+    // The look left unanswered gets the table as it now stands, which the page already has.
+    for (const held of t.of('view').slice(2)) await t.release(held, ok(fx.nextDealt));
+    await flush(page);
+    await expect(page.locator('.sheet')).toHaveCount(0);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(c) when Bilal has tapped and Amna hasn’t, it says he’s ready and that it starts as soon as she taps', async ({ page }) => {
+    const fx = fixtures();
+    const t = await openTable(page, { view: () => ok(fx.bilalReady) });
+    const sheet = page.locator('.sheet');
+    const copy = waitOf(fx.bilalReady, 20_000);
+    expect(copy).toEqual({ button: 'Next hand', line: "⁨Bilal⁩'s ready. The next hand starts in 0:20, or as soon as you tap.", ready: false });
+    await expect(sheet.getByRole('button', { name: 'Next hand' })).toBeEnabled();
+    await expect(sheet.getByText(/ready\. The next hand starts in/)).toHaveText(counting(copy.line!));
     expect(t.pageErrors).toEqual([]);
   });
 

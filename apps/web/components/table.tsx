@@ -74,6 +74,8 @@ export interface TableProps {
   readonly endLine?: string;
   /** the host ends the game here, from the result sheet: shown only between hands of a game still in play; the page asks first */
   readonly onEndGame?: () => void;
+  /** the wait for the next hand at a live table: what Next hand says, the line under it, and whether the reader has tapped it already (then it can't be again) */
+  readonly wait?: { readonly button: string; readonly line: string | null; readonly ready: boolean } | null;
 }
 
 /** Under this much time left, the clock turns brass and pulses. */
@@ -121,6 +123,7 @@ function TableInner({
   awayNote,
   endLine,
   onEndGame,
+  wait,
 }: TableProps) {
   const ME = view.me;
   const openTerm = useOpenTerm();
@@ -448,6 +451,7 @@ function TableInner({
           marks={marks}
           endLine={endLine}
           onEndGame={gameOver ? undefined : onEndGame}
+          wait={gameOver ? null : wait}
         />
       )}
 
@@ -537,6 +541,7 @@ function ResultSheet({
   marks,
   endLine,
   onEndGame,
+  wait,
 }: {
   coach: CoachState;
   gameOver: boolean;
@@ -549,6 +554,7 @@ function ResultSheet({
   marks?: Readonly<Partial<Record<Seat, 'bot' | 'away'>>> | undefined;
   endLine?: string | undefined;
   onEndGame?: (() => void) | undefined;
+  wait?: TableProps['wait'];
 }) {
   const outcome = coach.outcome;
   const deltas = handDeltas(view.result);
@@ -621,11 +627,14 @@ function ResultSheet({
           </div>
         )}
         {/* A phone lying down has no height to spare, so there the host's End shares a row with Next hand rather than taking
-            more of the room the hand and the scores need. */}
-        <div className="bg-felt-900 sticky bottom-0 mt-2 flex flex-col gap-2 pt-2 pb-[calc(20px_+_var(--safe-bottom))] [@media(orientation:landscape)_and_(height<32rem)]:flex-row">
-          <button className="btn btn-primary btn-block" disabled={busy} onClick={onNext}>
-            {gameOver ? (nextLabel ?? 'Play again') : 'Next hand'}
-          </button>
+            more of the room the hand and the scores need. The wait's line goes under Next hand, in its own column. */}
+        <div className="bg-felt-900 sticky bottom-0 mt-2 flex flex-col gap-2 pt-2 pb-[calc(20px_+_var(--safe-bottom))] [@media(orientation:landscape)_and_(height<32rem)]:flex-row [@media(orientation:landscape)_and_(height<32rem)]:items-start">
+          <div className="w-full">
+            <button className="btn btn-primary btn-block" disabled={busy || !!wait?.ready} onClick={onNext}>
+              {gameOver ? (nextLabel ?? 'Play again') : (wait?.button ?? 'Next hand')}
+            </button>
+            {wait?.line && <p className="text-ivory-200/70 mt-2 text-center text-sm">{wait.line}</p>}
+          </div>
           {onEndGame && (
             <button className="btn btn-quiet btn-block" disabled={busy} onClick={onEndGame}>
               End the game here

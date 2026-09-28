@@ -272,7 +272,17 @@ export async function flush(page: Page): Promise<void> {
   await page.evaluate(() => fetch('/robots.txt', { cache: 'no-store' }).then((r) => r.text()));
 }
 
-/** Stops the page's clock (a moment on, so the time asked for is never already past): from here its timers fire only when the test moves time on. */
+/**
+ * Stops the page's clock (a moment on, so the time asked for is never already past): from here its timers fire only when the
+ * test moves time on. On a busy machine that moment can pass before the pause lands, so it reads the time again and retries.
+ */
 export async function pauseClock(page: Page): Promise<void> {
-  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 100);
+  for (let tries = 1; ; tries++) {
+    try {
+      await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 100);
+      return;
+    } catch (err) {
+      if (tries >= 3 || !String(err).includes('to the past')) throw err;
+    }
+  }
 }

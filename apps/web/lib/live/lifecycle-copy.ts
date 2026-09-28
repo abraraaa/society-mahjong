@@ -2,7 +2,7 @@ import type { Seat } from '@society/engine';
 // Relative rather than '@/': vitest runs without the path alias, and the tests load this.
 import { signed } from '../ledger';
 import type { Standing } from './final';
-import type { PublicGameOver } from './lifecycle';
+import type { NextHandWait, PublicGameOver } from './lifecycle';
 import { countOf, isolate, nameList } from './words';
 
 /**
@@ -69,6 +69,34 @@ export function endSheet(midHand: boolean, hands: number): { title: string; body
       ? 'No hands have finished yet, so nobody has any points.'
       : `This hand won't count. Everyone will see the final scores from the ${counted} you've finished.`;
   return { title: midHand ? 'End the game now?' : 'End the game here?', body, confirmLabel: 'End the game', cancelLabel: 'Keep playing' };
+}
+
+/** Time left as the table's clocks show it, whole seconds rounded up: '0:14', '1:05'. Nothing left, or less, is '0:00'. */
+export function countdown(ms: number): string {
+  const s = Number.isFinite(ms) ? Math.max(0, Math.ceil(ms / 1000)) : 0;
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/**
+ * The result sheet's Next hand button and the line under it, while the table
+ * waits for everyone here to tap it (R15). `me` is the reader's seat, `names`
+ * who sits where, and `msLeft` how long until the next hand starts regardless
+ * (null when nobody has tapped yet, so nothing has set a start). Once the
+ * reader has tapped, the button says who it's waiting for and can't be
+ * tapped again (`ready`). The line appears only while a start time is set.
+ */
+export function waitCopy(wait: NextHandWait, me: Seat, names: Readonly<Record<Seat, string>>, msLeft: number | null): { button: string; line: string | null; ready: boolean } {
+  const listOf = (seats: readonly Seat[]) => nameList(seats.filter((s) => s !== me).map((s) => isolate(names[s])));
+  const tapped = wait.ready.includes(me);
+  const others = wait.waiting.filter((s) => s !== me);
+  const button = tapped && others.length > 0 ? `Waiting for ${listOf(others)}` : 'Next hand';
+  if (wait.startsAt === null || msLeft === null) return { button, line: null, ready: tapped };
+  const starts = `The next hand starts in ${countdown(msLeft)}, or as soon as`;
+  const ready = wait.ready.filter((s) => s !== me);
+  // Whoever tapped first may have gone since: with nobody here ready to name, it's the plain line.
+  if (tapped || ready.length === 0) return { button, line: `${starts} everyone's ready.`, ready: tapped };
+  const who = `${listOf(ready)}${ready.length === 1 ? "'s" : ' are'} ready.`;
+  return { button, line: `${who} ${starts} ${others.length === 0 ? 'you tap' : "everyone's ready"}.`, ready: false };
 }
 
 /** The host's Leave sheet, while the game is in play: leave (a bot takes the seat), end the game for everyone, or stay. */

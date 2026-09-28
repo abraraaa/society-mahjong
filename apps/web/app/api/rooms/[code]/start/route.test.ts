@@ -117,7 +117,7 @@ describe('POST /api/rooms/[code]/start', () => {
     db.game = game('active');
     db.meta = {
       version: 40,
-      table: { v: 1, scores: [0, 0, 0, 0], over, absence: EVERYONE_HERE, extra: {} },
+      table: { v: 1, scores: [0, 0, 0, 0], over, absence: EVERYONE_HERE, ready: null, extra: {} },
       legacy: false,
       actedAt: 0,
       updatedAt: 0,
@@ -167,7 +167,7 @@ describe('POST /api/rooms/[code]/start, a room nobody is playing in', () => {
     db.game = game('active');
     db.meta = {
       version: 7,
-      table: { v: 1, scores: [0, 0, 0, 0], over: null, absence: EVERYONE_HERE, extra: {} },
+      table: { v: 1, scores: [0, 0, 0, 0], over: null, absence: EVERYONE_HERE, ready: null, extra: {} },
       legacy: false,
       actedAt: stale,
       updatedAt: stale,
@@ -178,7 +178,7 @@ describe('POST /api/rooms/[code]/start, a room nobody is playing in', () => {
       version: 7,
       state: first.state,
       deadlines: first.deadlines,
-      table: { v: 1, scores: [0, 0, 0, 0], over: null, absence: EVERYONE_HERE, extra: {} },
+      table: { v: 1, scores: [0, 0, 0, 0], over: null, absence: EVERYONE_HERE, ready: null, extra: {} },
       legacy: false,
       wakeAt: null,
       actedAt: stale,
@@ -204,7 +204,7 @@ describe('POST /api/rooms/[code]/start, a room nobody is playing in', () => {
     db.game = game('active');
     db.meta = {
       version: 7,
-      table: { v: 1, scores: [0, 0, 0, 0], over: null, absence: EVERYONE_HERE, extra: {} },
+      table: { v: 1, scores: [0, 0, 0, 0], over: null, absence: EVERYONE_HERE, ready: null, extra: {} },
       legacy: false,
       actedAt: Date.now() - 60_000,
       updatedAt: 0,

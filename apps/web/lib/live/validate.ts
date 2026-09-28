@@ -28,6 +28,14 @@ export function parseSeat(x: unknown): Seat | null {
   return typeof x === 'number' && Number.isInteger(x) && x >= 0 && x <= 3 ? (x as Seat) : null;
 }
 
+/** The most hands a game could have: a bound on a Next hand tap's `hand`, not a rule (Karachi deals sixteen). */
+const MAX_HAND_INDEX = 999;
+
+/** A hand's index as a Next hand tap names it: a whole number from 0 to MAX_HAND_INDEX. */
+function parseHandIndex(x: unknown): number | null {
+  return typeof x === 'number' && Number.isInteger(x) && x >= 0 && x <= MAX_HAND_INDEX ? x : null;
+}
+
 export function parseTile(x: unknown): TileKind | null {
   return typeof x === 'string' && TILE_KINDS.has(x) ? (x as TileKind) : null;
 }
@@ -73,7 +81,11 @@ export function isUuid(x: unknown): x is string {
 export function parseClientAction(input: unknown): ClientAction | null {
   if (!isObject(input)) return null;
   const { type } = input;
-  if (type === 'nextHand') return { type };
+  if (type === 'nextHand') {
+    // The hand the tap was made on: an index, or nothing at all (a page loaded before votes existed). Anything else fails the lot.
+    if (input.hand === undefined) return { type };
+    return parseHandIndex(input.hand) === null ? null : { type, hand: input.hand as number };
+  }
   const seat = parseSeat(input.seat);
   if (seat === null) return null;
   if (type === 'declareWin' || type === 'pass') return { type, seat };

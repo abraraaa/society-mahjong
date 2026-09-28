@@ -1,7 +1,7 @@
 import { SEATS, type PrivatePlayerView, type PublicGameView, type Seat } from '@society/engine';
 import type { CoachStage } from '../coach/types';
 import { reconcileAbsence } from './absence';
-import type { PublicGameOver } from './lifecycle';
+import type { NextHandWait, PublicGameOver } from './lifecycle';
 import type { Absence, AwayPlayed } from './table-state';
 import type { AwayReason, Deadlines, Move, Seats } from './types';
 
@@ -58,6 +58,8 @@ export interface GameSnapshot {
   readonly mine?: OwnAbsence | null;
   /** how the game ended, once it has (and whether it was the caller who ended it); null while it's in play, or for a game that ended before this was kept */
   readonly ended?: PublicGameOver | null;
+  /** on a finished hand of a game in play, who here has tapped Next hand, who hasn't, and when the next hand starts regardless (NextHandWait); null otherwise */
+  readonly nextHand?: NextHandWait | null;
 }
 
 /** The seats as the table shows them to everyone (PublicSeat), each absence first matched to who sits there now. */

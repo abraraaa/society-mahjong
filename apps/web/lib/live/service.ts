@@ -4,13 +4,13 @@ export { HttpError };
 import { withBots } from './rooms';
 import { getRuleset, publicView, viewFor, type HandState, type Seat } from '@society/engine';
 import type { CoachStage } from '../coach/types';
-import { isAway } from './absence';
+import { isAway, presentHumans } from './absence';
 import { ownAbsence, publicSeats, type GameSnapshot } from './snapshot';
 import { broadcast, gamePoke, roomPoke } from './broadcast';
 import { afterCommit, type CommitStep } from './commit';
 import { gameEnded, recordEvent } from './events';
 import { handWrites, stamp } from './hand-log';
-import { STALE_GAME_MS, isStale, presentAtEnd, publicGameOver } from './lifecycle';
+import { STALE_GAME_MS, VOTE_ATTEMPTS, isStale, nextHandWait, presentAtEnd, publicGameOver } from './lifecycle';
 import { logError } from './log';
 import { emptySeatBots, policyFor, presentLevels } from './policy';
 import { SEAT_ATTEMPTS, hostOf, vacate } from './seating';
@@ -113,6 +113,8 @@ function snapshot(c: Caller, shown: Shown, now: number): GameSnapshot {
     stage: me === null ? null : ((roomSeat === null ? null : levels[roomSeat]) ?? 'new'),
     ended: over ? publicGameOver(over, userId) : null,
     mine: over ? null : ownAbsence(room.seats, absence, me),
+    // Who the next hand waits on: the people here, in the room's seats as they are now.
+    nextHand: over || game.status !== 'active' ? null : nextHandWait(shown.state, room.seats, presentHumans(room.seats, absence), shown.table),
   };
 }
 
@@ -191,11 +193,45 @@ export async function viewGame(gameId: string, userId: string, now = Date.now())
  * A game that has ended but isn't all recorded yet is finished again here
  * (healFinish): a tick, the sweep included, then gets the final table, and a
  * move gets 409 "game is over" with it.
+ *
+ * A Next hand tap that names its hand (R16) is a vote, and a vote needs no
+ * particular version: it skips the version check, and a commit that loses
+ * is tried again on a fresh read, up to VOTE_ATTEMPTS, so four people
+ * tapping together while their phones tick never bounce off each other. One
+ * for a hand that has already started changes nothing but its person's
+ * presence. A tap without a hand (a page loaded before votes) is judged
+ * against its version, as any move is.
  */
 export async function actOnGame(gameId: string, userId: string | null, clientAction: ClientAction | null, expectedVersion: number | null, now = Date.now()): Promise<GameSnapshot> {
   // Rebuilt from its checked fields whoever the caller is, so the table and the hand log only ever see a validated move.
   const action = clientAction === null ? null : parseClientAction(clientAction);
   if (clientAction !== null && action === null) throw new HttpError(400, 'that is not a move a player can make');
+  if (action?.type === 'nextHand' && action.hand !== undefined) {
+    return retryOnLost(VOTE_ATTEMPTS, async () => {
+      const out = await actOnce(gameId, userId, action, null, now);
+      return out.kind === 'done' ? out.snap : 'lost';
+    });
+  }
+  const out = await actOnce(gameId, userId, action, expectedVersion, now);
+  if (out.kind === 'done') return out.snap;
+  // Someone else saved first, and nothing of this request was written: the caller gets the table as it now stands.
+  const fresh = await loadLive(gameId);
+  throw new HttpError(409, 'lost the race', fresh ? snapshot(out.caller, shownOf(fresh, out.caller.room), now) : undefined);
+}
+
+/**
+ * One go at actOnGame's request, on a fresh read: the checks, a heal, the
+ * version check (unless `expectedVersion` is null), then the step and its
+ * commit. 'lost' when someone else saved first, with the caller it was
+ * judged as, for the table the loser is shown.
+ */
+async function actOnce(
+  gameId: string,
+  userId: string | null,
+  action: ClientAction | null,
+  expectedVersion: number | null,
+  now: number,
+): Promise<{ readonly kind: 'done'; readonly snap: GameSnapshot } | { readonly kind: 'lost'; readonly caller: Caller }> {
   const { game, room } = await loadGame(gameId);
   const me = userId === null ? null : seatOf(room.seats, userId);
   if (action && me === null) throw new HttpError(403, 'not seated at this table');
@@ -211,15 +247,12 @@ export async function actOnGame(gameId: string, userId: string | null, clientAct
     await healFinish(game.id, room, over, live.version);
     const snap = snapshot(caller, shownOf(live, room), now);
     if (action) throw new HttpError(409, 'game is over', snap);
-    return snap;
+    return { kind: 'done', snap };
   }
   if (expectedVersion !== null && live.version !== expectedVersion) throw new HttpError(409, 'stale version', snapshot(caller, shownOf(live, room), now));
 
   const out = await applyStep(caller, live, { action }, now);
-  if (out !== 'lost') return out;
-  // Someone else saved first, and nothing of this request was written: the caller gets the table as it now stands.
-  const fresh = await loadLive(gameId);
-  throw new HttpError(409, 'lost the race', fresh ? snapshot(caller, shownOf(fresh, room), now) : undefined);
+  return out === 'lost' ? { kind: 'lost', caller } : { kind: 'done', snap: out };
 }
 
 /**
