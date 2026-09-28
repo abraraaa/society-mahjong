@@ -936,7 +936,7 @@ describe('a plan that holds steady, and says when it switches', () => {
             }
             seen.switches++;
             expect(view.phase === 'turn' && view.turn === view.me, where).toBe(true);
-            expect(textOf(coach.say), where).toMatch(new RegExp(`^Discard [^.]+\\. Switching to ${coach.target!.title.replace(/[+()]/g, '\\$&')}`));
+            expect(textOf(coach.say), where).toMatch(new RegExp(`^Discard [^.]+\\. Switching to ${coach.target!.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
             expect(visibleLength(textOf(coach.say)), where).toBeLessThanOrEqual(SAY_BUDGET);
             expect(coach.planSwitch.from.title, where).not.toBe(coach.target!.title);
             expect(
