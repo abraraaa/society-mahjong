@@ -633,6 +633,31 @@ h3 {
   font-variant-numeric: tabular-nums;
   color: rgb(243 236 219 / 0.55);
 }
+/* A row pill gives the name its whole first line, so "Sana · bot" still reads
+   beside a four-digit score on a phone: sharing the line left the name 30px
+   at 393 wide, and the marker took all of it. The score drops to the second
+   line, level with the tile count, and the count (with the turn clock) spans
+   the badge's column and the name's, so the clock never narrows the name.
+   Where the clock, the count and a long score can't share the line (a 320px
+   phone), the count wraps out of sight rather than running under the score.
+   The landscape phone keeps its one-line pill, laid out above. */
+@media (orientation: portrait), (height >= 32rem) {
+  .seat:not(.is-column) .name {
+    grid-column: 2 / -1;
+  }
+  .seat:not(.is-column) .held {
+    grid-row: 2;
+    grid-column: 1 / 3;
+    display: flex;
+    flex-wrap: wrap;
+    height: 1lh;
+    overflow: hidden;
+  }
+  .seat:not(.is-column) .score {
+    grid-row: 2;
+    grid-column: 3;
+  }
+}
 .seat .pips {
   display: flex;
   gap: 1px;

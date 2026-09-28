@@ -15,7 +15,9 @@ import { Tile, type TileSize } from './tile';
  * changes how you play, and the full strip is what used to run off both edges.
  *
  * A seat a bot plays says so after the name ("Sana · bot"), and the marker
- * stays whole when a long name has to be cut short.
+ * stays whole when a long name has to be cut short. The row pill gives the
+ * name its whole first line, with the score below beside the tile count
+ * (globals.css), so the name still shows next to a four-digit score.
  */
 export const SeatPill = memo(function SeatPill({
   wind,
