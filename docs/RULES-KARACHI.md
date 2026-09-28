@@ -47,13 +47,15 @@ Five honours means either NEWS with one wind paired, or an honour pung plus an h
 
 ## Catalogue (engine ids in `packages/engine/src/rulesets/karachi/patterns.ts`)
 
-Every example below is a golden fixture in `packages/engine/test/karachi-catalogue.test.ts`, together with a one-tile mutation that must fail.
+Every example below is a golden fixture in `packages/engine/test/karachi-fixtures.ts`, together with a one-tile mutation that must fail; `karachi-catalogue.test.ts` checks both.
+
+When a hand fits more than one entry, it's announced under the most specific: named hands before the round's general hand. While a hand is being built, the tutor names the round's general hand when a named one is only equally close.
 
 ### East
 
 | Hand | Guide example | Definition in the engine |
 |---|---|---|
-| Chow + 5 Honours | 123b 123d 123c EEE RR | The general East chow form (article) |
+| Chow + 5 Honours | 123b 123d 123c EEE RR | The general East chow form (article). The guide's example is also a Hovering Angel by the engine's reading, and is announced as one |
 | Apple Blossom | 123b 123d 123c WhWhWh GG | 123 in each suit, or three mixed chows (Sloper on T&M), white dragon pung, green dragon pair |
 | Windy Wonders | 123b 123d 123c EEE SS | Chows one per suit, wind pung, wind pair |
 | Windyfly | 111b 444d 777c E W N S(paired) | Pungs one per suit, NEWS with a wind paired (T&M Windvane) |
@@ -97,7 +99,7 @@ Every example below is a golden fixture in `packages/engine/test/karachi-catalog
 | Royal Coral | RRR 333c 555c 888c 99c | Red dragon pung, three character pungs, character pair (T&M Red Coral) |
 | Royal Ruby | RRR 111b 555b 777b 99b | Red dragon pung, red bamboo (1,5,7,9) pungs and pair |
 | Ruby Jade | RRR GGG 111b 222b 66b | Red and green dragon pungs, two bamboo pungs, bamboo pair |
-| Lilly of the Valley (Monty ver) | WhWhWh 222d 666d 999d 44d | T&M White Opal: white dragon pung, three dots pungs, dots pair |
+| Lilly of the Valley (Monty ver) | WhWhWh 222d 666d 999d 44d | T&M White Opal: white dragon pung, three dots pungs, dots pair. Shown as "Lilly of the Valley" |
 | Lillypilly | GGG WhWh 444d 666d 999d | Green dragon pung, white dragon pair, three dots pungs |
 | Run, Pung & Pair | 1–9d 888d 22d | One suit |
 | Monty Unique Wonders | 1b 1d 9d 1c 9c E S W N R G Wh 9b(paired) | Thirteen orphans |

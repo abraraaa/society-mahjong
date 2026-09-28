@@ -208,15 +208,8 @@ export const EAST_NAMED: readonly Pattern[] = [
 // South: no honours
 // ---------------------------------------------------------------------------
 
+/** Named hands first and the general hand last: a hand that is both is announced under its name. */
 export const SOUTH: readonly Pattern[] = [
-  {
-    id: 'karachi.south.anyDamnHand',
-    name: 'Any Damn Hand',
-    source: `${GUIDE}; ${ARTICLE}`,
-    notes: 'Four sets and a pair with no honours; chows and pungs may mix. Guide example: 123b 456b 123d 456d 77c.',
-    components: [{ c: 'set', of: 'any', n: 4, filter: { suitTile: true } }, { c: 'pair', filter: { suitTile: true } }],
-    tags: ['south', 'general'],
-  },
   {
     id: 'karachi.south.dirtyPairs',
     name: 'Dirty Pairs',
@@ -260,6 +253,14 @@ export const SOUTH: readonly Pattern[] = [
     notes: 'Four mixed chows in one suit order across the hand (the guide example runs bamboo, dots, characters in every chow, as mixedSeq promises), plus two suit tiles. ⚠ The guide example ends 3b 7d, which is not a pair of any kind; the tail is left as any two suit tiles.',
     components: [{ c: 'mixedSeq', n: 4, order: '$O' }, { c: 'tiles', n: 2, filter: { suitTile: true } }],
     tags: ['south', 'named'],
+  },
+  {
+    id: 'karachi.south.anyDamnHand',
+    name: 'Any Damn Hand',
+    source: `${GUIDE}; ${ARTICLE}`,
+    notes: 'Four sets and a pair with no honours; chows and pungs may mix. Guide example: 123b 456b 123d 456d 77c.',
+    components: [{ c: 'set', of: 'any', n: 4, filter: { suitTile: true } }, { c: 'pair', filter: { suitTile: true } }],
+    tags: ['south', 'general'],
   },
 ];
 
@@ -423,12 +424,25 @@ export const NORTH: readonly Pattern[] = [
     distinct: [['$X', '$Y']],
     tags: ['north', 'named'],
   },
-  dragonSuitHand('karachi.north.greenJade', 'Green Jade', 'DG', null, 's', `${GUIDE}; T&M p35`, 'Guide example: GGG 111b 444b 777b 88b. Green dragon pung, three bamboo pungs, bamboo pair. The guide lists "Ruby Jade" as its Karachi alias.'),
+  // Every Imperial Jade is also a Green Jade, so the narrower hand comes first and is the one announced.
   dragonSuitHand('karachi.north.imperialJade', 'Imperial Jade', 'DG', ['DG', ...GREEN_BAMS], 's', `${GUIDE}; T&M p36`, 'Guide example: GGG 222b 333b 444b 66b. Green tiles only.'),
+  dragonSuitHand('karachi.north.greenJade', 'Green Jade', 'DG', null, 's', `${GUIDE}; T&M p35`, 'Guide example: GGG 111b 444b 777b 88b. Green dragon pung, three bamboo pungs, bamboo pair. The guide lists "Ruby Jade" as its Karachi alias.'),
   dragonSuitHand('karachi.north.royalCoral', 'Royal Coral', 'DR', null, 'm', `${GUIDE}; T&M Red Coral p35`, 'Guide example: RRR 333c 555c 888c 99c. Red dragon pung, three character pungs, character pair.'),
   dragonSuitHand('karachi.north.royalRuby', 'Royal Ruby', 'DR', ['DR', ...RED_BAMS], 's', `${GUIDE}; T&M p37`, 'Guide example: RRR 111b 555b 777b 99b. Red dragon pung, red bamboo pungs and pair.'),
   dragonSuitHand('karachi.north.rubyJade', 'Ruby Jade', 'DR', null, 's', `${GUIDE}; T&M p37`, 'Guide example: RRR GGG 111b 222b 66b. Red and green dragon pungs, two bamboo pungs, bamboo pair.', [{ c: 'set', of: 'pungOrKong', filter: { kinds: ['DG'] } }]),
-  dragonSuitHand('karachi.north.lillyOfTheValley', 'Lilly of the Valley (Monty ver)', 'DW', null, 'p', `${GUIDE} White Opal; mapping PDF`, 'T&M White Opal maps to this Karachi name: white dragon pung, three dots pungs, dots pair. Guide example: WhWhWh 222d 666d 999d 44d.'),
+  {
+    ...dragonSuitHand(
+      'karachi.north.lillyOfTheValley',
+      'Lilly of the Valley (Monty ver)',
+      'DW',
+      null,
+      'p',
+      `${GUIDE} White Opal; mapping PDF`,
+      'T&M White Opal maps to this Karachi name: white dragon pung, three dots pungs, dots pair. Guide example: WhWhWh 222d 666d 999d 44d.',
+    ),
+    // Shown without the guide's "(Monty ver)": no other hand is called Lilly of the Valley.
+    localName: 'Lilly of the Valley',
+  },
   {
     id: 'karachi.north.lillypilly',
     name: 'Lillypilly',

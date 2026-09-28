@@ -38,6 +38,7 @@ const GOULASH_SPEC: HandSpec = {
   patterns: [GOULASH],
 };
 
+/** Patterns are listed most specific first: the reducer announces the first match, and the analyser uses spec order to break ties. */
 export function karachiHandSpec(p: GameProgress): HandSpec {
   switch (p.roundWind) {
     case 'E':
@@ -46,7 +47,7 @@ export function karachiHandSpec(p: GameProgress): HandSpec {
         kind: 'honour',
         label: 'East: the honour hand',
         description: 'Three chows or three pungs, all one suit or one per suit, plus five honours.',
-        patterns: [...EAST_GENERAL, ...EAST_NAMED],
+        patterns: [...EAST_NAMED, ...EAST_GENERAL],
       };
     case 'S':
       return {
