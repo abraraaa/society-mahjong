@@ -1022,7 +1022,6 @@ b .term {
   .sheet-ask .answers {
     padding-bottom: calc(12px + var(--safe-bottom));
   }
-  }
 }
 /* The exchange sheet stays up from the first pass to the last. Its scrim keeps the tint without the blur, which cost
    frames as its tiles lifted. */
