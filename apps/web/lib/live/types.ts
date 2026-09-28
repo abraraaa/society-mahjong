@@ -86,14 +86,17 @@ export interface GameEnd {
  * since the host's table was sent: judged by the version of the table the
  * host was looking at (`sawVersion`) against the one that saved the tap, and
  * only for a tap saved without one, or a page that sends none, by the
- * server's clock on the host's table (`sawAt`); or the seat's person has just
+ * server's clock on the host's table (`sawAt`); the seat's person has just
  * taken it over from a bot mid-game (`took`), which the table notes with the
- * hand and the moment they took it (table-state.ts TakeOver).
+ * hand and the moment they took it (table-state.ts TakeOver); or the seat's
+ * own person is taking a break (`break`), and a bot plays their tiles until
+ * they're back.
  */
 export type SeatChange =
   | { readonly type: 'back'; readonly seat: Seat }
   | { readonly type: 'letBotPlay'; readonly seat: Seat; readonly bySeat: Seat; readonly sawAt: number | null; readonly sawVersion?: number | null }
-  | { readonly type: 'took'; readonly seat: Seat };
+  | { readonly type: 'took'; readonly seat: Seat }
+  | { readonly type: 'break'; readonly seat: Seat };
 
 /**
  * Who made a move, as the hand log records it: the seat's own person, by

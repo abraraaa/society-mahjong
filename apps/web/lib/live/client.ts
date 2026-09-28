@@ -63,6 +63,8 @@ export const api = {
   /** the host hands someone's seat to a bot; `sawAt` and `sawVersion` are the server's clock on the table the host was looking at, and its version */
   letBotPlay: (gameId: string, seat: number, sawAt: number, sawVersion: number) =>
     call<GameSnapshot>(`/api/games/${gameId}/away`, { method: 'POST', body: JSON.stringify({ seat, sawAt, sawVersion }) }),
+  /** "Take a break": a bot plays the reader's own seat until they tap "I'm back" */
+  takeBreak: (gameId: string) => call<GameSnapshot>(`/api/games/${gameId}/away`, { method: 'POST', body: JSON.stringify({ self: true }) }),
   leaveRoom: (code: string) => call<RoomSnapshot>(`/api/rooms/${encodeURIComponent(code)}/leave`, { method: 'POST' }),
   /** Take over a bot's seat at the game in play (the take-over screen's offer), or, if the game has ended since, join the room. */
   sit: (code: string, seat: number, name: string) => call<RoomSnapshot>(`/api/rooms/${encodeURIComponent(code)}/sit`, { method: 'POST', body: JSON.stringify({ seat, name }) }),

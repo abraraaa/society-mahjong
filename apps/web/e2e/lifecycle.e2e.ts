@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { finalStandings } from '../lib/live/final';
-import { HOST_LEAVE, LEAVE, NO_SEAT, endLine, endSheet, takeSeatCopy, waitCopy } from '../lib/live/lifecycle-copy';
+import { HOST_LEAVE, LEAVE, NO_SEAT, TAKE_A_BREAK, endLine, endSheet, takeSeatCopy, waitCopy } from '../lib/live/lifecycle-copy';
 import { plainError } from '../lib/live/plain';
 import type { GameSnapshot } from '../lib/live/snapshot';
 import { fixtures, serve } from './fixtures';
@@ -269,14 +269,14 @@ test.describe('the end of a game', () => {
     expect(t.pageErrors).toEqual([]);
   });
 
-  test('(e) mid-hand, the host’s Leave sheet offers to end the game for everyone, and asks first', async ({ page }) => {
+  test('(e) mid-hand, the host’s Leave sheet offers a break and to end the game for everyone, and asks before the end', async ({ page }) => {
     const fx = fixtures();
     const t = await openTable(page, { view: () => ok(fx.turn), end: () => ok(fx.endedByHost) });
     await t.stage().getByRole('button', { name: 'Leave' }).click();
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByRole('heading', { name: HOST_LEAVE.title })).toBeVisible();
     await expect(dialog.getByText(HOST_LEAVE.body)).toBeVisible();
-    await expect(dialog.getByRole('button')).toHaveText([HOST_LEAVE.leave, HOST_LEAVE.end, HOST_LEAVE.stay]);
+    await expect(dialog.getByRole('button')).toHaveText([HOST_LEAVE.leave, TAKE_A_BREAK, HOST_LEAVE.end, HOST_LEAVE.stay]);
 
     await dialog.getByRole('button', { name: HOST_LEAVE.end }).click();
     // One hand has finished, and this one won't count.
@@ -299,7 +299,7 @@ test.describe('the end of a game', () => {
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByRole('heading', { name: LEAVE.title })).toBeVisible();
     await expect(dialog.getByText(LEAVE.body)).toBeVisible();
-    await expect(dialog.getByRole('button')).toHaveText([LEAVE.confirmLabel, LEAVE.cancelLabel]);
+    await expect(dialog.getByRole('button')).toHaveText([LEAVE.confirmLabel, TAKE_A_BREAK, LEAVE.cancelLabel]);
     expect(t.pageErrors).toEqual([]);
   });
 
@@ -356,7 +356,7 @@ test.describe('the end of a game', () => {
       await page.setViewportSize({ width, height });
       await t.stage().getByRole('button', { name: 'Leave' }).click();
       await expect(dialog.getByRole('heading', { name: HOST_LEAVE.title })).toBeVisible();
-      await whole([HOST_LEAVE.leave, HOST_LEAVE.end, HOST_LEAVE.stay]);
+      await whole([HOST_LEAVE.leave, TAKE_A_BREAK, HOST_LEAVE.end, HOST_LEAVE.stay]);
       await dialog.getByRole('button', { name: HOST_LEAVE.stay }).click();
       await expect(dialog).toHaveCount(0);
 

@@ -1,5 +1,6 @@
 import { expect, test, type Locator } from '@playwright/test';
 import { signed } from '../lib/ledger';
+import { HOST_LEAVE, LEAVE, TAKE_A_BREAK } from '../lib/live/lifecycle-copy';
 import { IM_BACK, WELCOME_BACK, awaySummary, awayTitle, clockMoveNotice, letBotPlayLabel, letBotPlaySheet, tableNews } from '../lib/live/presence';
 import type { GameSnapshot } from '../lib/live/snapshot';
 import { POLL_MS } from '../lib/table-sync';
@@ -12,7 +13,8 @@ import { flush, ok, openTable, pauseClock } from './live';
  * by name, and see a bot in their seat. When a clock runs out on someone,
  * their own table says what the bot did for them, in plain words. Twice in a
  * row, and a bot plays their tiles until they tap "I'm back"; the host can
- * hand someone's seat to a bot by tapping their name.
+ * hand someone's seat to a bot by tapping their name; and anyone can take a
+ * break from their Leave sheet.
  */
 
 /** Amna's turn, its clock already run out when the page gets it: the page asks the table to resolve it straight away. */
@@ -258,6 +260,51 @@ test.describe('bots and people at the table', () => {
     const t = await openTable(page, { view: () => ok(fx.notHost) });
     await expect(t.stage().locator('.seat .name')).toHaveText(['Omar · bot', 'Sana · bot', 'Bilal']);
     await expect(page.getByRole('button', { name: /Let a bot play for/ })).toHaveCount(0);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(f) "Take a break" in the host’s Leave sheet sends one request for a break, and the note that comes back says so', async ({ page }) => {
+    const fx = fixtures();
+    expect(fx.onBreak.mine?.away).toBe('self');
+    let broke = false;
+    const t = await openTable(page, { view: () => ok(broke ? fx.onBreak : fx.turn), away: () => ok(fx.onBreak), back: () => ok(fx.awayBack) });
+    await t.stage().getByRole('button', { name: 'Leave' }).click();
+    const dialog = page.getByRole('dialog', { name: HOST_LEAVE.title });
+    await expect(dialog.getByRole('button')).toHaveText([HOST_LEAVE.leave, TAKE_A_BREAK, HOST_LEAVE.end, HOST_LEAVE.stay]);
+    await dialog.getByRole('button', { name: TAKE_A_BREAK }).click();
+    broke = true;
+    // The sheet goes at once, and the note comes with the table.
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    const note = page.getByRole('region', { name: awayTitle('self') });
+    await expect(note).toBeVisible();
+    await expect(note).toContainText(awaySummary(fx.onBreak.mine!.played));
+    await expect(note.getByRole('button', { name: IM_BACK })).toBeVisible();
+    expect(t.count('away')).toBe(1);
+    expect(t.of('away')[0]!.sent).toEqual({ self: true });
+    // Nobody leaves: the break is all it sent.
+    await flush(page);
+    expect(t.count('away')).toBe(1);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(f) everyone else’s Leave sheet offers a break too', async ({ page }) => {
+    const fx = fixtures();
+    const t = await openTable(page, { view: () => ok(fx.notHost), away: () => ok(fx.onBreak) });
+    await t.stage().getByRole('button', { name: 'Leave' }).click();
+    const dialog = page.getByRole('dialog', { name: LEAVE.title });
+    await expect(dialog.getByRole('button')).toHaveText([LEAVE.confirmLabel, TAKE_A_BREAK, LEAVE.cancelLabel]);
+    await dialog.getByRole('button', { name: TAKE_A_BREAK }).click();
+    await expect(page.getByRole('region', { name: awayTitle('self') })).toBeVisible();
+    expect(t.of('away').map((c) => c.sent)).toEqual([{ self: true }]);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(f) nobody is offered a break while a bot already plays for them: Leave asks only whether to leave', async ({ page }) => {
+    const fx = fixtures();
+    const t = await openTable(page, { view: () => ok(fx.awayTurn) });
+    await expect(page.getByRole('region', { name: awayTitle('clock') })).toBeVisible();
+    await t.stage().getByRole('button', { name: 'Leave' }).click();
+    await expect(page.getByRole('dialog', { name: LEAVE.title }).getByRole('button')).toHaveText([LEAVE.confirmLabel, LEAVE.cancelLabel]);
     expect(t.pageErrors).toEqual([]);
   });
 

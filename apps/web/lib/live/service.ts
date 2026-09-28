@@ -542,25 +542,30 @@ export async function endIfStale(gameId: string, now = Date.now()): Promise<bool
   return (await idleEnd(gameId, now)) !== null;
 }
 
-/** What a page asks of changeSeat, before it's checked: its own person back, or (the host) a bot for someone else's seat. */
-export type SeatChangeRequest = { readonly type: 'back' } | { readonly type: 'letBotPlay'; readonly seat: unknown; readonly sawAt: unknown; readonly sawVersion?: unknown };
+/** What a page asks of changeSeat, before it's checked: its own person back, or taking a break, or (the host) a bot for someone else's seat. */
+export type SeatChangeRequest =
+  | { readonly type: 'back' }
+  | { readonly type: 'break' }
+  | { readonly type: 'letBotPlay'; readonly seat: unknown; readonly sawAt: unknown; readonly sawVersion?: unknown };
 
 /**
  * Who plays a seat (R4, R8): "I'm back" from someone a bot has been playing
- * for, or the host handing another person's seat to a bot straight away,
+ * for, "Take a break" from someone who wants a bot to play for them for a
+ * while, or the host handing another person's seat to a bot straight away,
  * after they've stepped away. Saved with the table, like a move, on a fresh
  * read each time someone else's commit lands first (three tries). The host's
  * hand-over is refused when its person has tapped since the host's table was
  * sent (`sawVersion`, that table's version; `sawAt`, the server's clock on
  * it, for a page that sends no version): 409 with the table, so the host
  * sees them still playing. One that changes nothing (back when already here,
- * a seat already away) writes nothing and gives the table as it is.
+ * a break or a hand-over for a seat already away) writes nothing and gives
+ * the table as it is.
  */
 export async function changeSeat(gameId: string, userId: string, request: SeatChangeRequest, now = Date.now()): Promise<GameSnapshot> {
   return retryOnLost(SEAT_ATTEMPTS, async () => {
     const { game, room } = await loadGame(gameId);
     const me = seatOf(room.seats, userId);
-    if (request.type === 'back' && me === null) throw new HttpError(403, 'not seated at this table');
+    if ((request.type === 'back' || request.type === 'break') && me === null) throw new HttpError(403, 'not seated at this table');
     if (request.type === 'letBotPlay' && me === null) throw new HttpError(403, 'only the host can hand a seat to a bot');
     if (game.status !== 'active') throw new HttpError(409, 'game is over');
     const [live, levels] = await Promise.all([loadLive(gameId), stagesBySeat(room.seats)]);
@@ -573,8 +578,8 @@ export async function changeSeat(gameId: string, userId: string, request: SeatCh
     }
     const seat = me!;
     let change: SeatChange;
-    if (request.type === 'back') {
-      change = { type: 'back', seat };
+    if (request.type === 'back' || request.type === 'break') {
+      change = { type: request.type, seat };
     } else {
       if (powersAt(room, null, tableOf(live, room).absence) !== userId) throw new HttpError(403, 'only the host can hand a seat to a bot');
       const target = parseSeat(request.seat);

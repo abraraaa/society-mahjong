@@ -7,6 +7,7 @@ import {
   NO_SEAT,
   NO_SEAT_OVER,
   SHARE,
+  TAKE_A_BREAK,
   countdown,
   endLine,
   endSheet,
@@ -337,6 +338,10 @@ describe('keeping seats', () => {
       link: 'Back to the start',
     });
     expect(NO_SEAT_OVER).toEqual({ heading: "This game's over.", line: 'Head back to the room for the next one.', link: 'Back to the room' });
+  });
+
+  it('offers a break in the Leave sheets, in two plain words', () => {
+    expect(TAKE_A_BREAK).toBe('Take a break');
   });
 
   it('never meets a newcomer with a word they can’t decode', () => {

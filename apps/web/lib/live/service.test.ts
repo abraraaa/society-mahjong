@@ -1616,6 +1616,49 @@ describe('someone away, and the host handing a seat over', () => {
     expect(again.version).toBe(live.version + 1);
   });
 
+  it('lets someone take a break, saved as their own move, and a bot plays their seat until they’re back', async () => {
+    const live = hosted();
+    const snap = await changeSeat(GAME, 'u-hana', { type: 'break' }, T0 + 50);
+    const { w, hand } = theCommit();
+    expect(w.acted).toBe(true);
+    expect(hand.moves).toEqual([{ v: live.version + 1, by: 'player', seat: 1, userId: 'u-hana', a: { type: 'away', reason: 'self' } }]);
+    // Nobody was waiting on Hana, so Abrar's clock runs on as it was.
+    expect(w.deadlines).toEqual(live.deadlines);
+    expect(w.table.absence[1]).toMatchObject({ userId: 'u-hana', away: 'self' });
+    // Her own table says why; everyone else's says only that a bot's playing for her.
+    expect(snap.mine).toMatchObject({ away: 'self' });
+    expect((await viewGame(GAME, 'u-abrar', T0 + 60)).seats[1]).toEqual({ kind: 'human', name: 'Hana', presence: 'away' });
+    // A second tap writes nothing.
+    vi.mocked(store.commitTable).mockClear();
+    const again = await changeSeat(GAME, 'u-hana', { type: 'break' }, T0 + 70);
+    expect(store.commitTable).not.toHaveBeenCalled();
+    expect(again.version).toBe(live.version + 1);
+  });
+
+  it('plays a seat on a break at once when it’s that seat’s turn', async () => {
+    hosted();
+    await changeSeat(GAME, 'u-abrar', { type: 'break' }, T0 + 50);
+    const { hand } = theCommit();
+    expect(hand.moves[0]).toMatchObject({ by: 'player', seat: 0, userId: 'u-abrar', a: { type: 'away', reason: 'self' } });
+    expect(hand.moves[1]).toMatchObject({ by: 'away', seat: 0 });
+  });
+
+  it('refuses a break for someone not seated, and once the game is over', async () => {
+    hosted();
+    expect(await rejection(changeSeat(GAME, 'u-zed', { type: 'break' }, T0))).toMatchObject({ status: 403, message: 'not seated at this table' });
+    db.game = { ...(db.game as GameRow), status: 'finished' };
+    expect(await rejection(changeSeat(GAME, 'u-hana', { type: 'break' }, T0))).toMatchObject({ status: 409, message: 'game is over' });
+    expect(store.commitTable).not.toHaveBeenCalled();
+  });
+
+  it('passes the host’s powers on while the host takes a break', async () => {
+    hosted();
+    await changeSeat(GAME, 'u-hana', { type: 'break' }, T0 + 10);
+    expect((await viewGame(GAME, 'u-hana', T0 + 20)).isHost).toBe(false);
+    expect((await viewGame(GAME, 'u-abrar', T0 + 20)).isHost).toBe(true);
+    expect(await rejection(changeSeat(GAME, 'u-hana', letBotPlay(0), T0 + 30))).toMatchObject({ status: 403 });
+  });
+
   it('tries again on a fresh table when someone else saved first, and gives up after three', async () => {
     const live = hosted();
     db.lose = 1;

@@ -679,6 +679,7 @@ describe('the end of the game', () => {
       { end: { how: 'abandoned', by: null } },
       { change: { type: 'back', seat: ME } },
       { change: { type: 'letBotPlay', seat: 1, bySeat: ME, sawAt: null } },
+      { change: { type: 'break', seat: ME } },
     ];
     for (const t of tries) {
       const err = (() => {
@@ -1009,6 +1010,47 @@ describe('away seats', () => {
     expect(r.moves[0]).toEqual({ by: 'host', seat: ME, userId: 'u-bilal', a: { type: 'away', reason: 'host' } });
     expect(r.moves[1]).toMatchObject({ by: 'away', seat: ME });
     if (r.state.phase !== 'finished') expect(r.deadlines).toEqual(deadlinesFor(r.state, karachi, two, policy, T0 + 50, r.tableState.absence));
+  });
+
+  it('hands someone’s own seat to a bot on a break, noted as theirs, keeping every running clock; a second break is no change', { timeout: 60_000 }, () => {
+    const g = first(SEEDS, (seed) => driveTo(seed, two, bilalsTurn));
+    const tapped: LiveGame = { ...g, tableState: { ...NEW_TABLE, absence: markPresent(EVERYONE_HERE, two, ME, T0 + 10, 4) } };
+    const r = step({ game: tapped, ruleset: karachi, seats: two, policy, now: T0 + 50, version: 9, change: { type: 'break', seat: ME } });
+    expect(r).toMatchObject({ changed: true, dealt: false, finishedHand: false, dropped: false });
+    expect(r.moves).toEqual([{ by: 'player', seat: ME, userId: 'u-me', a: { type: 'away', reason: 'self' } }]);
+    expect(r.state).toBe(g.state);
+    // Nobody was waiting on me, so Bilal's clock runs on as it was (R7).
+    expect(r.deadlines).toBe(g.deadlines);
+    // Away for a break, and not a tap: the last one stays as it was.
+    expect(r.tableState.absence[ME]).toMatchObject({ away: 'self', lastTap: T0 + 10, tapVersion: 4 });
+    const again = step({ game: r, ruleset: karachi, seats: two, policy, now: T0 + 60, change: { type: 'break', seat: ME } });
+    expect(again).toMatchObject({ changed: false, moves: [] });
+    // "I'm back" ends it, as for any other reason.
+    const back = step({ game: r, ruleset: karachi, seats: two, policy, now: T0 + 70, change: { type: 'back', seat: ME } });
+    expect(back.moves).toEqual([{ by: 'player', seat: ME, userId: 'u-me', a: { type: 'back' } }]);
+    expect(isAway(back.tableState.absence, two, ME)).toBe(false);
+  });
+
+  it('keeps the reason a seat already went away for when its person then asks for a break', { timeout: 60_000 }, () => {
+    const g = first(SEEDS, (seed) => driveTo(seed, two, bilalsTurn));
+    const away: LiveGame = { ...g, tableState: { ...NEW_TABLE, absence: markAway(EVERYONE_HERE, two, ME, 'clock') } };
+    const r = step({ game: away, ruleset: karachi, seats: two, policy, now: T0 + 50, change: { type: 'break', seat: ME } });
+    expect(r).toMatchObject({ changed: false, moves: [] });
+    expect(r.tableState.absence[ME].away).toBe('clock');
+  });
+
+  it('plays a seat on a break at once when it’s that seat’s turn, and starts a clock for whoever is next', { timeout: 60_000 }, () => {
+    const g = first(SEEDS, (seed) => driveTo(seed, two, myTurn));
+    const r = step({ game: g, ruleset: karachi, seats: two, policy, now: T0 + 50, change: { type: 'break', seat: ME } });
+    expect(r.moves[0]).toEqual({ by: 'player', seat: ME, userId: 'u-me', a: { type: 'away', reason: 'self' } });
+    expect(r.moves[1]).toMatchObject({ by: 'away', seat: ME });
+    expect(r.tableState.absence[ME].played.turns).toBeGreaterThan(0);
+    if (r.state.phase !== 'finished') expect(r.deadlines).toEqual(deadlinesFor(r.state, karachi, two, policy, T0 + 50, r.tableState.absence));
+  });
+
+  it('refuses a break for a bot’s seat', { timeout: 60_000 }, () => {
+    const g = first(SEEDS, (seed) => driveTo(seed, two, bilalsTurn));
+    expect(() => step({ game: g, ruleset: karachi, seats: two, policy, now: T0, change: { type: 'break', seat: 2 } })).toThrow(NotYourMove);
   });
 
   it('drops a move that comes in after its own clock ran out, counts no miss for it, and logs what the clock did', () => {

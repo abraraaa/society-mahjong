@@ -467,6 +467,16 @@ describe('the next hand, with two people at the table', () => {
     expect(isAway(a.tableState.absence, two, B)).toBe(true);
   });
 
+  it('starts at once when Bilal, the only one still to tap, takes a break instead', { timeout: 120_000 }, () => {
+    const a = vote(done(), A, T1);
+    const r = step({ game: a, ruleset: karachi, seats: two, policy, now: T1 + 1_000, seed, change: { type: 'break', seat: B } });
+    expect(r).toMatchObject({ changed: true, dealt: true });
+    expect(r.state.progress.handIndex).toBe(1);
+    expect(r.tableState.absence[B].away).toBe('self');
+    // Taken between hands, the break has no hand to note it in.
+    expect(r.moves.some((m) => m.a.type === 'away')).toBe(false);
+  });
+
   it('starts on the next look once Bilal has gone and a bot has his seat, or the host lets a bot play for him', { timeout: 120_000 }, () => {
     const a = vote(done(), A, T1);
     const left: Seats = [two[0], { kind: 'bot', name: 'Bilal' }, two[2], two[3]];

@@ -206,11 +206,11 @@ server  session → seat
         respond with the actor's private view and version
 ```
 
-"I'm back" (`POST /api/games/:id/back`) and the host's "let a bot play"
-(`POST /api/games/:id/away`, `{ seat, sawAt, sawVersion }`) go the same
-way, as a change to who plays a seat instead of a move, through the same
-commit, and are tried again on a fresh read if another request saves first
-(three tries).
+"I'm back" (`POST /api/games/:id/back`), the host's "let a bot play"
+(`POST /api/games/:id/away`, `{ seat, sawAt, sawVersion }`) and "Take a
+break" (the same route, `{ self: true }`) go the same way, as a change to
+who plays a seat instead of a move, through the same commit, and are tried
+again on a fresh read if another request saves first (three tries).
 
 Implemented in `apps/web/lib/live/`: `table.ts` is the pure part (settle,
 deadlines, expiry, `step`), covered by tests that play whole hands through
@@ -409,11 +409,11 @@ and the seat's `game_players` row follows it. Everyone else's table says so the 
 is at the next move (the bot's own, if the seat owed one) or the slow
 poll: getting up changes the seats, not the table, so it pokes no game
 channel by itself. Every seat a bot plays is marked "Sana · bot", on its
-pill, in the result sheet's rows and on the final table. The host's Leave
-sheet has a third answer, "End the game for everyone", which asks again
-("End the game now?", saying the hand being played won't count) before
-ending it for the whole table. When the
-last human leaves, the game ends as `abandoned`, saved with the table like
+pill, in the result sheet's rows and on the final table. Both Leave sheets
+also offer "Take a break" (below), and the host's has one more answer,
+"End the game for everyone", which asks again ("End the game now?", saying
+the hand being played won't count) before ending it for the whole table.
+When the last human leaves, the game ends as `abandoned`, saved with the table like
 any other end (a hand cut short doesn't count), and the room goes back to
 `finished`; anyone still on the page sees "The table has closed". A Leave
 that lands just after the game's end is saved (the last hand scored, its
@@ -484,6 +484,18 @@ auto-discards, which would feel punitive at a friends' table: a room that
 opts into "strict" only gets the shorter clocks (7 s claims for everyone,
 30 s turns).
 
+**Take a break.** Anyone seated can step away on purpose: "Take a break",
+a quiet button in their Leave sheet, makes their seat away at once (reason
+`self`, noted in the hand's log as their own move), with no sheet of its
+own. Their table then shows the same panel, headed "You're taking a break,
+so a bot's playing your tiles for now.", and "I'm back" (or any move but a
+pass, or a Next hand tap) ends it; everyone else sees them away, as above.
+A break is not a tap: it stamps nothing the host's hand-over reads. It
+isn't offered to someone a bot is already playing for, and one that
+arrives for a seat already away changes nothing. Taken between hands, it
+means the next hand doesn't wait for them. While the host is on a break,
+their powers pass on, as for any away host.
+
 ### Reconnect and presence
 
 Reconnect = subscribe to both channels, then `GET /api/games/:id/view`,
@@ -535,8 +547,8 @@ changing either are in `docs/DATA-MODEL.md`. What a live table keeps:
   `{ v, by, seat?, userId?, a }`. `v` is the `live_state` version its
   request produced; `by` says who made it (`player`, `bot`, `clock`, `away`,
   `table` or `host`); `a` is the engine move, or a table note (a seat going
-  away, and why; someone back; the game ending), so a hand's log explains
-  every bot move in it.
+  away, and why: two missed clocks, the host, or a break; someone back; the
+  game ending), so a hand's log explains every bot move in it.
 - `rooms.seats`: who sits where now. A bot may be keeping the seat for
   someone (`heldFor`, their id; `keptName`, their name; `kept`: `left` or
   `late`), so the room can offer it back to them.

@@ -281,7 +281,7 @@ export interface StepInput {
   readonly levels?: readonly (CoachStage | null)[];
   /** a strict room's clocks, with `levels` */
   readonly strict?: boolean;
-  /** a change to who plays a seat (someone back, the host handing a seat to a bot, or someone who has just taken a bot's seat over); never with an action or an end */
+  /** a change to who plays a seat (someone back, the host handing a seat to a bot, someone who has just taken a bot's seat over, or someone taking a break); never with an action or an end */
   readonly change?: SeatChange;
   /** end the game here, before its last hand is scored: the host ending it, nobody playing it for hours, or the last person leaving; never with an action */
   readonly end?: GameEnd;
@@ -334,9 +334,10 @@ export interface StepResult extends LiveGame {
  * its own clock ran out in this same step isn't played, nor counted as a miss
  * (`dropped`, R5). The host's `change: letBotPlay` hands another person's
  * seat to a bot, unless they've tapped since the host's table was sent
- * (judged by `version`, when given, against the host's `sawVersion`). When
- * the table still waits on the same decision, for no new person, its clock
- * keeps running (R7).
+ * (judged by `version`, when given, against the host's `sawVersion`), and
+ * `change: break` hands someone's own seat to a bot while they take a break.
+ * When the table still waits on the same decision, for no new person, its
+ * clock keeps running (R7).
  *
  * Take-overs (R21). `change: took` is someone who has just taken a bot's seat
  * over mid-game, the seats already saying so: they're here from that moment,
@@ -463,6 +464,13 @@ export function step(input: StepInput): StepResult {
       const wasAway = isAway(absence, seats, change.seat);
       absence = markPresent(markAway(absence, seats, change.seat, 'host'), seats, change.bySeat, now, saving);
       if (!wasAway && live()) moves.push({ by: 'host', seat: change.seat, ...(host?.kind === 'human' ? { userId: host.userId } : {}), a: { type: 'away', reason: 'host' } });
+    } else if (change.type === 'break') {
+      // Taking a break: a bot plays their tiles from now until they're back, as for any away seat. It isn't a tap (R4), so it
+      // notes none. A seat already away stays as it is, with the reason it went away for.
+      if (target?.kind !== 'human') throw new NotYourMove('a bot already plays that seat');
+      const wasAway = isAway(absence, seats, change.seat);
+      absence = markAway(absence, seats, change.seat, 'self');
+      if (!wasAway && live()) moves.push({ by: 'player', seat: change.seat, userId: target.userId, a: { type: 'away', reason: 'self' } });
     } else {
       // Taken over from a bot: the seats say who has it now, and they're at the table from this moment.
       if (target?.kind !== 'human') throw new NotYourMove('a bot already plays that seat');

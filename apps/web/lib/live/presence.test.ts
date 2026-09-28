@@ -236,6 +236,12 @@ describe('tableNews: away and back', () => {
     expect(WELCOME_BACK).toBe('Welcome back.');
   });
 
+  it('tells the reader nothing when they take a break, since the away note says it, and welcomes them back from one', () => {
+    const onBreak = snap(FOUR, { version: 6, mine: own({ away: 'self' }) });
+    expect(tableNews(snap(FOUR, { mine: own() }), onBreak)).toBeNull();
+    expect(tableNews(onBreak, snap(FOUR, { version: 7, mine: own() }))).toBe(WELCOME_BACK);
+  });
+
   it('tells the reader what a clock did for them, whichever phone found it, once', () => {
     const before = snap(FOUR, { mine: own() });
     const after = snap(FOUR, { version: 6, mine: own({ misses: 1, clockMoves: 1, lastClockMove: DISCARD }) });
