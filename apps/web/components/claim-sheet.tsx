@@ -28,6 +28,7 @@ const LABEL: Record<ClaimType, string> = { pung: 'Pung', chow: 'Chow', kong: 'Ko
 export function ClaimSheet({
   discardKind,
   discarderName,
+  discardCount,
   coach,
   options,
   onClaim,
@@ -38,6 +39,13 @@ export function ClaimSheet({
 }: {
   discardKind: TileKind;
   discarderName: string;
+  /**
+   * Which discard of the hand this is. A new one is a new claim window, even when
+   * the sheet stays up for it (a live table's reply to a pass can bring the next
+   * window straight away), so the caption and the timer start again with it, and
+   * a card opened from the last window's caption closes.
+   */
+  discardCount: number;
   coach: CoachState;
   options: readonly ClaimOption[];
   onClaim: (option: ClaimOption) => void;
@@ -62,8 +70,8 @@ export function ClaimSheet({
     if (!timed) return;
     const t = setTimeout(() => onPassRef.current(), claimMs);
     return () => clearTimeout(t);
-    // one countdown per discard: discardKind + discarderName changes whenever a new one arrives
-  }, [discardKind, discarderName, claimMs, timed]);
+    // one countdown per discard
+  }, [discardCount, claimMs, timed]);
   const byType = (t: ClaimType) => options.find((o) => o.type === t);
   const advised = coach.action.kind === 'claim' ? coach.action.option : null;
   const grid = GRID.filter((type) => type !== 'chow' || coach.goal.chowsClaimable);
@@ -71,10 +79,10 @@ export function ClaimSheet({
   return (
     <>
       <div className="scrim" />
-      <div className="sheet">
+      <div className="sheet" data-sheet="claim">
         <div className="grabber" />
         {timed && (
-          <div className="timer mb-4" style={{ '--claim-seconds': `${Math.round(claimMs / 1000)}s` } as React.CSSProperties}>
+          <div key={discardCount} className="timer mb-4" style={{ '--claim-seconds': `${Math.round(claimMs / 1000)}s` } as React.CSSProperties}>
             <i />
           </div>
         )}
@@ -85,7 +93,7 @@ export function ClaimSheet({
               <bdi>{discarderName}</bdi> discards {tileName(discardKind)}
             </h2>
             <p className="text-ivory-200/70 text-sm">
-              <CoachLine say={coach.say} />
+              <CoachLine key={discardCount} say={coach.say} origin="claim" />
             </p>
           </div>
         </div>

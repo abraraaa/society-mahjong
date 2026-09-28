@@ -1,46 +1,154 @@
 'use client';
-import { createContext, memo, useContext, useEffect, useRef, useState } from 'react';
-import type { CoachSegment, CoachStage } from '@/lib/coach';
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import type { CoachHandRef, CoachSegment, CoachStage, CoachState, CoachTarget } from '@/lib/coach';
 import { GLOSSARY, TERMS, annotate, termsIn, type Term } from '@/lib/coach/glossary';
+import { resolveHandRef } from '@/lib/coach/hand-card';
+import { planCount } from '@/lib/coach/words';
+import { HandCard } from './hand-card';
 import { Tile } from './tile';
 
 /**
- * Tapping a term anywhere the coach speaks opens its definition. The provider
- * sits at the table root so a term inside a claim sheet opens the same sheet
- * as one in the bubble.
+ * The tutor's sheets: a word's definition, "Hands this round" with the words
+ * at the table, and a hand's card. Tapping a word or a hand's name anywhere
+ * the tutor speaks opens one. The provider sits at the table root so a name
+ * inside a claim sheet opens the same card as one in the bubble; each sheet
+ * remembers where it was opened from, so it can go when that place goes.
  */
-const TermContext = createContext<(term: Term | 'all') => void>(() => {});
+export type SheetOrigin = 'table' | 'claim' | 'exchange' | 'result' | 'list';
+export type SheetState =
+  | { readonly kind: 'term'; readonly term: Term; readonly origin: SheetOrigin }
+  | { readonly kind: 'all'; readonly origin: SheetOrigin }
+  | { readonly kind: 'hand'; readonly ref: CoachHandRef; readonly origin: SheetOrigin; readonly back?: SheetState };
 
+interface SheetActions {
+  readonly open: (s: SheetState) => void;
+  /** closes the open sheet, or only one opened from `origin` */
+  readonly close: (origin?: SheetOrigin) => void;
+}
+
+// Two contexts: the actions never change, so a word or a strip that only opens
+// sheets isn't redrawn every time one opens or closes.
+const ActionsContext = createContext<SheetActions>({ open: () => {}, close: () => {} });
+const CurrentContext = createContext<SheetState | null>(null);
+
+/** Holds which tutor sheet is open, if any. Draws nothing: `TutorSheet` does, last in the table. */
 export function TermProvider({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useState<Term | 'all' | null>(null);
+  const [current, setCurrent] = useState<SheetState | null>(null);
+  // Stable for the provider's life. `CoachLine`'s cleanup depends on `close`: if
+  // `close` changed whenever a sheet opened, that cleanup would run again and shut
+  // the card that had just opened.
+  const open = useCallback((s: SheetState) => setCurrent(s), []);
+  const close = useCallback((origin?: SheetOrigin) => setCurrent((s) => (origin === undefined || s?.origin === origin ? null : s)), []);
+  const actions = useMemo(() => ({ open, close }), [open, close]);
   return (
-    <TermContext.Provider value={setOpen}>
-      {children}
-      {open && <TermSheet term={open} onClose={() => setOpen(null)} />}
-    </TermContext.Provider>
+    <ActionsContext.Provider value={actions}>
+      <CurrentContext.Provider value={current}>{children}</CurrentContext.Provider>
+    </ActionsContext.Provider>
   );
 }
 
-export function useOpenTerm() {
-  return useContext(TermContext);
+/** Opens a word's definition, or with 'all' the ? sheet. */
+export function useOpenTerm(): (term: Term | 'all') => void {
+  const { open } = useContext(ActionsContext);
+  return useCallback((term: Term | 'all') => open(term === 'all' ? { kind: 'all', origin: 'table' } : { kind: 'term', term, origin: 'table' }), [open]);
+}
+
+/** Open and close, without the open sheet: stable, so a component that only opens sheets isn't redrawn when one opens. */
+export function useSheetActions(): SheetActions {
+  return useContext(ActionsContext);
+}
+
+export function useTutorSheet(): SheetActions & { readonly current: SheetState | null } {
+  const actions = useContext(ActionsContext);
+  const current = useContext(CurrentContext);
+  return useMemo(() => ({ ...actions, current }), [actions, current]);
+}
+
+/** Whether any tutor sheet is open. */
+export function useSheetOpen(): boolean {
+  return useContext(CurrentContext) !== null;
+}
+
+type DataProps = { readonly [key: `data-${string}`]: string | undefined };
+
+/**
+ * A tappable word. A span with the button role rather than a button: a button
+ * is laid out as an inline block, so a two-word hand name can't break across
+ * lines and moves whole to the next one, which costs the bubble a fourth line.
+ * A span wraps exactly like the words round it.
+ */
+export function TapWord({ className, onTap, children, ...data }: { className: string; onTap: () => void; children: React.ReactNode } & DataProps) {
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      className={className}
+      onClick={onTap}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onTap();
+        }
+      }}
+      {...data}
+    >
+      {children}
+    </span>
+  );
 }
 
 /** Text with its glossary words tappable. */
-function Words({ text }: { text: string }) {
-  const open = useOpenTerm();
+function Words({ text, origin }: { text: string; origin: SheetOrigin }) {
+  const { open } = useContext(ActionsContext);
   return (
     <>
-      {annotate(text).map((run, i) =>
-        run.term ? (
-          <button key={i} type="button" className="term" onClick={() => open(run.term!)}>
+      {annotate(text).map((run, i) => {
+        const term = run.term;
+        return term ? (
+          <TapWord key={i} className="term" data-term={term} onTap={() => open({ kind: 'term', term, origin })}>
             {run.text}
-          </button>
+          </TapWord>
         ) : (
           <span key={i}>{run.text}</span>
-        ),
-      )}
+        );
+      })}
     </>
   );
+}
+
+/** What the tutor says: the bold action, hand names that open their card, and words that open their definition. */
+function Segments({ say, origin }: { say: readonly CoachSegment[]; origin: SheetOrigin }) {
+  const { open } = useContext(ActionsContext);
+  return (
+    <>
+      {say.map((s, i) => {
+        const hand = s.hand;
+        if (hand) {
+          const name = (
+            <TapWord key={i} className="term hand" onTap={() => open({ kind: 'hand', ref: hand, origin })}>
+              {s.text}
+            </TapWord>
+          );
+          return s.action ? <b key={i}>{name}</b> : name;
+        }
+        return s.action ? (
+          <b key={i}>
+            <Words text={s.text} origin={origin} />
+          </b>
+        ) : (
+          <Words key={i} text={s.text} origin={origin} />
+        );
+      })}
+    </>
+  );
+}
+
+/** The words of the bubble a glossary footnote can be about: never inside a hand's name, which is a word of its own. */
+function plainText(say: readonly CoachSegment[]): string {
+  return say
+    .filter((s) => !s.hand)
+    .map((s) => s.text)
+    .join('');
 }
 
 /**
@@ -48,24 +156,30 @@ function Words({ text }: { text: string }) {
  * prose is assembled in the coach layer so a later conversational tutor can be
  * given the same structured state instead of a formatted string.
  *
- * `plan` is the one-line status ("Windy Chows · 3 away"); `say` is one or two
- * sentences with a single bold action, mirrored by the primary button below.
- * For a new player, the first time a word like "pung" appears it gets a
- * footnote; after that it is only underlined, and a tap explains it.
+ * `plan` is the one-line status ("Windy Chows · 3 tiles to go"), a button that
+ * opens the plan's card; `say` is one or two sentences with a single bold
+ * action, mirrored by the primary button below. For a new player, the first
+ * time a word like "pung" appears it gets a footnote; after that it is only
+ * underlined, and a tap explains it.
  */
 export const Coach = memo(function Coach({
   plan,
+  target = null,
   say,
   stage = 'solid',
   planInStrip = false,
 }: {
   plan?: string | null;
+  /** the plan's hand, for the plan line's card */
+  target?: CoachTarget | null;
   say: readonly CoachSegment[];
   stage?: CoachStage;
   /** the plan strip shows the plan line, so the bubble keeps it only where the strip isn't drawn */
   planInStrip?: boolean;
 }) {
+  const { open } = useContext(ActionsContext);
   const text = say.map((s) => s.text).join('');
+  const plain = plainText(say);
   const [expanded, setExpanded] = useState(false);
   const [clipped, setClipped] = useState(false);
   const bodyRef = useRef<HTMLParagraphElement>(null);
@@ -80,14 +194,16 @@ export const Coach = memo(function Coach({
   const [notes, setNotes] = useState<Term[]>([]);
   useEffect(() => {
     if (!teach) return;
-    let fresh = decided.current.get(text);
+    let fresh = decided.current.get(plain);
     if (!fresh) {
-      fresh = termsIn(text).filter((t) => !seen.current.has(t)).slice(0, 2);
+      fresh = termsIn(plain)
+        .filter((t) => !seen.current.has(t))
+        .slice(0, 2);
       for (const t of fresh) seen.current.add(t);
-      decided.current.set(text, fresh);
+      decided.current.set(plain, fresh);
     }
     setNotes(fresh);
-  }, [text, teach]);
+  }, [plain, teach]);
 
   // Is the clamp actually hiding anything? Only then show the "more" affordance.
   useEffect(() => {
@@ -102,13 +218,28 @@ export const Coach = memo(function Coach({
       <span className="avatar">T</span>
       <div className="body">
         {plan && (
-          <p className="plan" data-strip={planInStrip ? '' : undefined}>
-            {plan}
-          </p>
+          <button
+            type="button"
+            className="plan"
+            data-strip={planInStrip ? '' : undefined}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (target) open({ kind: 'hand', ref: target.hand, origin: 'table' });
+            }}
+          >
+            {target ? (
+              <>
+                <span className="plan-title">{target.title}</span>
+                <span className="plan-count">{` · ${planCount(target.away, target.approximate)}`}</span>
+              </>
+            ) : (
+              <span className="plan-title">{plan}</span>
+            )}
+          </button>
         )}
         {say.length > 0 && (
           <p className="say" ref={bodyRef}>
-            {say.map((s, i) => (s.action ? <b key={i}>{<Words text={s.text} />}</b> : <Words key={i} text={s.text} />))}
+            <Segments say={say} origin="table" />
           </p>
         )}
         {teach && notes.length > 0 && (
@@ -131,42 +262,100 @@ export const Coach = memo(function Coach({
   );
 });
 
-/** The same words, unbubbled, for captions inside a sheet. */
-export function CoachLine({ say }: { say: readonly CoachSegment[] }) {
-  return <>{say.map((s, i) => (s.action ? <b key={i}>{<Words text={s.text} />}</b> : <Words key={i} text={s.text} />))}</>;
+/** The same words, unbubbled, for captions inside a sheet. The cards opened from them go when the sheet does: a claim resolved, a pass made, the next hand dealt. */
+export function CoachLine({ say, origin }: { say: readonly CoachSegment[]; origin: SheetOrigin }) {
+  const { close } = useContext(ActionsContext);
+  useEffect(() => () => close(origin), [close, origin]);
+  return <Segments say={say} origin={origin} />;
 }
 
-/** One term explained, or the whole glossary. Sits above any other sheet. */
-function TermSheet({ term, onClose }: { term: Term | 'all'; onClose: () => void }) {
-  const entries = term === 'all' ? TERMS : [term];
+/**
+ * Whichever tutor sheet is open, drawn above every other sheet. A `yours` card
+ * follows the player's hand as it changes; "Got it" on a card opened from
+ * "Hands this round" goes back to the list.
+ */
+export function TutorSheet({
+  coach,
+}: {
+  coach: CoachState;
+  /** the table's clock, for the card to show; null until cards show clocks */
+  clock: null;
+}) {
+  const { open, close, current } = useTutorSheet();
+  if (!current) return null;
+  if (current.kind === 'term') return <TermSheet term={current.term} onClose={() => close()} />;
+  if (current.kind === 'hand') {
+    const back = current.back;
+    return <HandCard card={resolveHandRef(coach, current.ref)} onClose={() => (back ? open(back) : close())} />;
+  }
+  return <HandsAndWords hands={coach.goal.hands} onHand={(ref) => open({ kind: 'hand', ref, origin: 'list', back: current })} onClose={() => close()} />;
+}
+
+/** One term explained. Sits above any other sheet. */
+function TermSheet({ term, onClose }: { term: Term; onClose: () => void }) {
   return (
     <>
       <div className="scrim scrim-top" onClick={onClose} />
-      <div className="sheet sheet-top" role="dialog" aria-label={term === 'all' ? 'Glossary' : GLOSSARY[term].label}>
+      <div className="sheet sheet-top" role="dialog" aria-label={GLOSSARY[term].label} data-sheet="term">
         <div className="grabber" />
-        {term === 'all' && <h2 className="font-display mb-3 text-xl">The words at the table</h2>}
         <div className="glossary">
-          {entries.map((t) => {
-            const e = GLOSSARY[t];
-            return (
-              <div key={t} className="entry">
-                <h3 className="font-display text-lg">{e.label}</h3>
-                {e.example && (
-                  <div className="my-2 flex flex-wrap gap-1">
-                    {e.example.map((k, i) => (
-                      <Tile key={i} kind={k} size="xs" />
-                    ))}
-                  </div>
-                )}
-                <p className="text-ivory-100/90 text-sm">{e.long}</p>
-              </div>
-            );
-          })}
+          <Entry term={term} />
         </div>
         <button className="btn btn-ghost btn-block mt-3" onClick={onClose}>
           Got it
         </button>
       </div>
     </>
+  );
+}
+
+/** The ? sheet: every hand the round allows, each opening its card, then the words at the table. */
+function HandsAndWords({ hands, onHand, onClose }: { hands: readonly CoachHandRef[]; onHand: (ref: CoachHandRef) => void; onClose: () => void }) {
+  return (
+    <>
+      <div className="scrim scrim-top" onClick={onClose} />
+      <div className="sheet sheet-top" role="dialog" aria-label="Glossary" data-sheet="list">
+        <div className="grabber" />
+        {hands.length > 0 && (
+          <>
+            <h2 className="font-display text-xl">Hands this round</h2>
+            <p className="text-ivory-100/70 mt-1 text-sm">Tap one to see it.</p>
+            <div className="hands-list">
+              {hands.map((ref) => (
+                <button key={ref.title} type="button" className="chip" onClick={() => onHand(ref)}>
+                  {ref.title}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        <h2 className="font-display mb-3 text-xl">The words at the table</h2>
+        <div className="glossary">
+          {TERMS.map((t) => (
+            <Entry key={t} term={t} />
+          ))}
+        </div>
+        <button className="btn btn-ghost btn-block mt-3" onClick={onClose}>
+          Got it
+        </button>
+      </div>
+    </>
+  );
+}
+
+function Entry({ term }: { term: Term }) {
+  const e = GLOSSARY[term];
+  return (
+    <div className="entry">
+      <h3 className="font-display text-lg">{e.label}</h3>
+      {e.example && (
+        <div className="my-2 flex flex-wrap gap-1">
+          {e.example.map((k, i) => (
+            <Tile key={i} kind={k} size="xs" />
+          ))}
+        </div>
+      )}
+      <p className="text-ivory-100/90 text-sm">{e.long}</p>
+    </div>
   );
 }

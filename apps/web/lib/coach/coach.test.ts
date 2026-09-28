@@ -12,9 +12,13 @@ import {
   type TileKind,
   type Wind,
 } from '@society/engine';
-import { analyseFor, coachFor, runNoteApplies } from './coach';
+import { analyseFor, coachFor, runNoteApplies, shortOfLine, washoutLine } from './coach';
 import { goalFor } from './goal';
-import { hasWrittenShape } from './shape';
+import { hasWrittenShape, titleOf } from './shape';
+import { stripGroups } from './strip';
+import { NAMES as LONG_NAMES, ROUNDS, coachOf, playHand } from './test-games';
+import type { CoachSegment, CoachState } from './types';
+import { SAY_BUDGET, textOf, visibleLength } from './words';
 
 const progressFor = (roundWind: Wind, handInRound: number): GameProgress => ({
   roundWind,
@@ -37,7 +41,7 @@ function turnView(round: Wind, handInRound: number, tiles: readonly TileKind[]):
     progress: progressFor(round, handInRound),
     me: 0,
     concealed: tiles,
-    players: [{ seat: 0, seatWind: 'E', melds: [], concealed: tiles, discards: [] }],
+    players: (['E', 'S', 'W', 'N'] as const).map((seatWind, seat) => ({ seat, seatWind, melds: [], discards: [], bonus: [] })),
     phase: 'turn',
     turn: 0,
     discardCount: 4,
@@ -131,6 +135,9 @@ function waitingView(round: Wind, handInRound: number, tiles: readonly TileKind[
 
 const NAMES = { 0: 'You', 1: 'Bilal', 2: 'Sana', 3: 'Ayesha' } as const;
 
+/** A sentence's parts as segments, the way the tutor joins them: words as they are, a hand's name as itself. */
+const partsText = (parts: readonly (CoachSegment | string)[]): CoachSegment[] => parts.map((p) => (typeof p === 'string' ? { text: p } : p));
+
 describe('the run rule, explained only when it bites', () => {
   const noteFor = (round: Wind, handInRound: number, tiles: TileKind[], discard: TileKind) => {
     const view = turnView(round, handInRound, tiles);
@@ -184,5 +191,137 @@ describe('South, where honours are dead', () => {
     });
     expect(coach.action).toEqual({ kind: 'discard', tile: 'WN' });
     expect(coach.reason).toBe('no wind or dragon fits a hand this round');
+  });
+});
+
+/** The words the tutor never says: engineering words, and the stiff forms of words it contracts. */
+const BANNED = [/\baway\b/, /coach/i, /\b(is not|cannot|do not|does not|it is|that is)\b/];
+
+describe('hand names, wherever the tutor says them', () => {
+  it('names every hand as a tappable hand, keeps within the bubble, and speaks plainly, at every moment of seeded play', { timeout: 120_000 }, () => {
+    const seen = { exchange: 0, claimed: 0, otherWins: 0, washouts: 0 };
+    for (const [round, progress] of Object.entries(ROUNDS)) {
+      const spec = karachi.handSpec(progress);
+      const ids = new Set(spec.patterns.map((p) => p.id));
+      const titles = [...new Set(spec.patterns.map(titleOf))];
+      for (let h = 0; h < 3; h++) {
+        playHand({
+          seed: `names-${round}-${h}`,
+          progress,
+          dealer: h as 0 | 1 | 2,
+          onView: (view) => {
+            const analysis = analyseFor(view, karachi);
+            for (const stage of ['new', 'learning'] as const) {
+              const coach: CoachState = coachOf(view, stage, analysis);
+              const where = `${round} ${h} seq ${view.seq} ${coach.moment} ${stage}: ${textOf(coach.say)}`;
+              expect(visibleLength(textOf(coach.say)), where).toBeLessThanOrEqual(SAY_BUDGET);
+              for (const re of BANNED) {
+                expect(textOf(coach.say), where).not.toMatch(re);
+                expect(coach.plan ?? '', where).not.toMatch(re);
+              }
+              for (const segment of coach.say) {
+                if (segment.hand) {
+                  expect(ids.has(segment.hand.patternId), where).toBe(true);
+                  expect(segment.text, where).toBe(segment.hand.title);
+                } else {
+                  for (const t of titles) expect(segment.text, where).not.toContain(t);
+                }
+              }
+              const named = coach.say.find((x) => x.hand)?.hand;
+              if (coach.moment === 'exchange' && named) seen.exchange++;
+              if (coach.moment === 'claim' && coach.action.kind === 'claim' && coach.action.option.type !== 'win' && named) {
+                // The hand as it would stand after the claim, with the claimed set laid face up first.
+                expect(named.whose, where).toBe('ifClaimed');
+                expect(stripGroups(named.layout)[0]?.exposed, where).toBe(true);
+                seen.claimed++;
+              }
+              const result = view.result;
+              if (result?.type === 'win' && result.winner !== view.me) {
+                expect(named, where).toBe(coach.outcome?.hand?.ref);
+                expect(['winner', 'example']).toContain(named?.whose);
+                expect(named?.owner).toBe(LONG_NAMES[result.winner]);
+                seen.otherWins++;
+              }
+              if (result?.type === 'draw') {
+                // After a washout the line always goes on to say how close the player got, naming their hand.
+                if (coach.target && coach.target.away > 0) expect(named, where).toBe(coach.target.hand);
+                seen.washouts++;
+              }
+            }
+          },
+        });
+      }
+    }
+    // The corpus has to reach the lines it's checking: X1 and X2 in West, a claim, someone else's win, a washout.
+    expect(seen.exchange).toBeGreaterThan(0);
+    expect(seen.claimed).toBeGreaterThan(0);
+    expect(seen.otherWins).toBeGreaterThan(0);
+    expect(seen.washouts).toBeGreaterThan(0);
+  });
+
+  it('shows the hand a pung would make, with the pung laid face up', () => {
+    // East hand 2: a pung of 2 Dots is the tutor's call here (verdict 6's first hand).
+    const tiles: TileKind[] = ['s4', 's5', 's6', 'p2', 'p2', 'm8', 'm8', 'WE', 'WS', 'WW', 'WN', 'DR', 'DG'];
+    const view = { ...waitingView('E', 1, tiles, 'p2'), legal: { claims: [{ type: 'pung', tiles: ['p2', 'p2'] }], pass: true } } as unknown as PrivatePlayerView;
+    const coach = coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: 'new', names: NAMES });
+    expect(coach.action.kind).toBe('claim');
+    const named = coach.say.find((x) => x.hand)!;
+    expect(named.hand).toMatchObject({ whose: 'ifClaimed' });
+    const first = stripGroups(named.hand!.layout)[0]!;
+    expect(first.exposed).toBe(true);
+    expect(first.tiles.map((t) => t.kind)).toEqual(['p2', 'p2', 'p2']);
+  });
+
+  it('names the plan in a discard reason as a hand, the same one the strip shows', () => {
+    const tiles: TileKind[] = ['s4', 's5', 's6', 'p2', 'p3', 'p4', 'm6', 'm7', 'WE', 'WS', 'WW', 'WN', 'WN', 'p9'];
+    const seen = new Set<string>();
+    // The reasons rotate with the player's own discards; try each place in the rotation.
+    for (let n = 1; n <= 6; n++) {
+      const view = {
+        ...turnView('E', 1, tiles),
+        events: Array.from({ length: n }, (_, i) => ({ seq: i + 1, type: 'discarded', seat: 0, tile: 'p9' })),
+      } as unknown as PrivatePlayerView;
+      const coach = coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: 'learning', names: NAMES });
+      for (const x of coach.say.filter((y) => y.hand)) {
+        expect(x.hand).toBe(coach.target?.hand);
+        seen.add(x.text);
+      }
+      expect(coach.reason).not.toBeNull();
+      expect(textOf(coach.say)).toContain(coach.reason!);
+    }
+    expect(seen.size).toBeGreaterThan(0);
+  });
+
+  it('keeps how close the player got after a washout, shortening the washout line to make room', () => {
+    const tiles: TileKind[] = ['m1', 'm1', 'm1', 'p7', 'p7', 'p7', 'DR', 'DR', 'WW', 'WW', 's4', 's5', 's9'];
+    const finished = { ...turnView('E', 0, tiles), phase: 'finished', result: { type: 'draw' } } as unknown as PrivatePlayerView;
+    const coach = coachFor({ view: finished, ruleset: karachi, analysis: analyseFor(finished, karachi), stage: 'new', names: NAMES });
+    const target = coach.target!;
+    expect(target.away).toBeGreaterThan(0);
+    // The whole washout line and E5 together are over the budget, so the washout line loses its second sentence, not E5.
+    const whole = [...washoutLine(), ...partsText(shortOfLine(target.away, target.title))];
+    expect(visibleLength(textOf(whole))).toBeGreaterThan(SAY_BUDGET);
+    expect(textOf(coach.say)).toBe(textOf([...washoutLine(true), ...partsText(shortOfLine(target.away, target.title))]));
+    expect(coach.say.filter((x) => x.hand).map((x) => x.hand)).toEqual([target.hand]);
+    expect(visibleLength(textOf(coach.say))).toBeLessThanOrEqual(SAY_BUDGET);
+  });
+
+  it('has room for how close the player got after a washout, for every hand the ruleset deals and every count', () => {
+    const titles = new Set<string>();
+    for (const wind of ROUND_WINDS) for (const handInRound of [0, 1]) for (const p of karachi.handSpec(progressFor(wind, handInRound)).patterns) titles.add(titleOf(p));
+    for (const title of titles)
+      for (let away = 1; away <= 14; away++) {
+        const say = textOf([...washoutLine(true), ...partsText(shortOfLine(away, title))]);
+        expect(visibleLength(say), say).toBeLessThanOrEqual(SAY_BUDGET);
+      }
+  });
+
+  it("says the whole washout line when there's nothing to add", () => {
+    // Nothing to be short of: an analysis that found no hand the player could still make.
+    const tiles: TileKind[] = ['m1', 'm1', 'm1', 'p7', 'p7', 'p7', 'DR', 'DR', 'WW', 'WW', 's4', 's5', 's9'];
+    const finished = { ...turnView('E', 0, tiles), phase: 'finished', result: { type: 'draw' } } as unknown as PrivatePlayerView;
+    const analysis = { ...analyseFor(finished, karachi), candidates: [] };
+    const coach = coachFor({ view: finished, ruleset: karachi, analysis, stage: 'new', names: NAMES });
+    expect(textOf(coach.say)).toBe("Washed out: the wall's run dry and nobody won. No points change hands.");
   });
 });
