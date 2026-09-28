@@ -1,5 +1,5 @@
 import { analyseHand, type HandAnalysis, type HandInput, type HandSpec, type MatchCtx, type Pattern, type PatternCandidate, type Ruleset } from '@society/engine';
-import { shapeOf, titleOf } from './shape';
+import { noteShapeOf, shapeOf, titleOf } from './shape';
 import { stripGroups } from './strip';
 import type { CoachHandRef, CoachState } from './types';
 import { capitalise, tilesWord } from './words';
@@ -13,13 +13,24 @@ import { capitalise, tilesWord } from './words';
 
 /** A ref with no tiles to show, for a ruleset that has no example: the card shows the title and shape alone. */
 function bare(pattern: { readonly id: string; readonly name: string; readonly localName?: string }, patterns: readonly Pattern[], whose: CoachHandRef['whose']): CoachHandRef {
-  return { patternId: pattern.id, title: titleOf(pattern), shape: shapeOf(pattern.id, patterns), whose, layout: [] };
+  const title = titleOf(pattern);
+  return { patternId: pattern.id, title, shape: shapeOf(pattern.id, patterns), whose, layout: [], note: noteShapeOf(title, patterns) };
 }
 
 /** The player's own nearest lay-out of a candidate, as it stands (`yours`) or as it would after a claim (`ifClaimed`). No lay-out falls back to the example. */
 export function yoursRef(c: PatternCandidate, patterns: readonly Pattern[], ruleset: Ruleset, ctx: MatchCtx, whose: 'yours' | 'ifClaimed' = 'yours'): CoachHandRef {
   if (c.layout) {
-    return { patternId: c.patternId, title: titleOf(c), shape: shapeOf(c.patternId, patterns), whose, away: c.away, approximate: c.approximate, layout: c.layout };
+    const title = titleOf(c);
+    return {
+      patternId: c.patternId,
+      title,
+      shape: shapeOf(c.patternId, patterns),
+      whose,
+      away: c.away,
+      approximate: c.approximate,
+      layout: c.layout,
+      note: noteShapeOf(title, patterns),
+    };
   }
   const pattern = patterns.find((p) => p.id === c.patternId);
   const example = pattern ? exampleRef(pattern, ruleset, ctx) : null;

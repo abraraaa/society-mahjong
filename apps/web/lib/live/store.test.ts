@@ -59,13 +59,13 @@ vi.mock('../supabase/service', () => {
 import { SupabaseError, HttpError } from './errors';
 import * as store from './store';
 import {
-  abandonGame,
   commitTable,
   countHand,
   createRoom,
-  expiredGames,
+  dueGames,
   finishGame,
   gameById,
+  liveMeta,
   loadLive,
   recordHand,
   roomByCode,
@@ -76,7 +76,9 @@ import {
   type RoomRow,
 } from './store';
 import { commitArgs, type TableWrite } from './hand-log';
+import { STALE_GAME_MS } from './lifecycle';
 import { humanLevels, policyFor } from './policy';
+import type { GameOver } from './table-state';
 import type { LiveGame, LoggedMove, Seats } from './types';
 
 const DOWN = { message: 'TypeError: fetch failed', code: '' };
@@ -151,7 +153,7 @@ const dealAnswers = (q: Query): unknown => (q.target === 'games' ? newGame : q.t
 /** Hana's win, as one request writes it: the hand ends, its points are in the running totals, and a clock waits on nobody. */
 const write: TableWrite = {
   state: wonHand,
-  table: { v: 1, scores: [-8, 8, 0, 0], extra: {} },
+  table: { v: 1, scores: [-8, 8, 0, 0], over: null, extra: {} },
   deadlines: { claim: null, turn: null },
   wakeAt: null,
   acted: true,
@@ -166,6 +168,10 @@ const write: TableWrite = {
     },
   ],
 };
+
+/** The game's last hand scored: Hana finishes top. Abrar and Hana are people, Bilal and Sana bots. */
+const END = Date.parse('2026-09-24T22:00:00.000Z');
+const OVER: GameOver = { how: 'complete', by: null, at: END, hands: 16, scores: [2000, 14504, -8000, -8504], seats };
 
 beforeEach(() => {
   supabase.log.length = 0;
@@ -182,15 +188,14 @@ describe('reads', () => {
     expect(await roomById('r-1')).toBeNull();
     expect(await gameById(GAME)).toBeNull();
     expect(await loadLive('g-1')).toBeNull();
-    expect(await expiredGames(0)).toEqual([]);
+    expect(await dueGames(0)).toEqual([]);
     expect(ran()).toContain('games:select');
   });
 
   it('hand back what they found', async () => {
-    answerAll(undefined, (q) => (q.target === 'rooms' ? room : [{ game_id: 'g-9' }]));
+    answerAll(undefined, (q) => (q.target === 'rooms' ? room : null));
     expect(await roomByCode('abcd')).toEqual(room);
     expect(supabase.log[0]!.steps).toContainEqual(['eq', ['code', 'ABCD']]);
-    expect(await expiredGames(0)).toEqual(['g-9']);
   });
 
   it('read the live table with its bookkeeping, clocks and stamps, parsing table_state', async () => {
@@ -209,7 +214,7 @@ describe('reads', () => {
       version: 7,
       state: wonHand,
       deadlines: { claim: null, turn: T + 90_000 },
-      table: { v: 1, scores: [-8, 8, 0, 0], extra: { ready: { hand: 2 } } },
+      table: { v: 1, scores: [-8, 8, 0, 0], over: null, extra: { ready: { hand: 2 } } },
       legacy: false,
       wakeAt: T + 90_000,
       actedAt: T - 60_000,
@@ -229,7 +234,7 @@ describe('reads', () => {
 
   it('throw when the database fails, instead of passing for "no such room" or an empty table', async () => {
     answerAll(() => true);
-    const reads = [() => roomByCode('ABCD'), () => roomById('r-1'), () => gameById(GAME), () => loadLive('g-1'), () => expiredGames(0)];
+    const reads = [() => roomByCode('ABCD'), () => roomById('r-1'), () => gameById(GAME), () => loadLive('g-1'), () => dueGames(0)];
     for (const read of reads) await expect(read()).rejects.toBeInstanceOf(SupabaseError);
   });
 
@@ -279,6 +284,67 @@ describe('reads', () => {
   });
 });
 
+describe('the sweep asking which tables to visit', () => {
+  const iso = new Date(T).toISOString();
+  const due = (q: Query) => q.steps.some(([m]) => m === 'lte');
+  const rows = (...ids: string[]) => ids.map((game_id) => ({ game_id, games: { status: 'active' } }));
+
+  it('asks for games in play whose wake time has passed, earliest first, then for those with no wake time, least recently saved first', async () => {
+    answerAll(undefined, (q) => (due(q) ? rows('g-late', 'g-later') : rows('g-parked')));
+    expect(await dueGames(T)).toEqual(['g-late', 'g-later', 'g-parked']);
+    expect(supabase.log).toEqual([
+      {
+        target: 'live_state',
+        steps: [
+          ['select', ['game_id, games!inner(status)']],
+          ['eq', ['games.status', 'active']],
+          ['lte', ['wake_at', iso]],
+          ['order', ['wake_at', { ascending: true }]],
+          ['limit', [50]],
+        ],
+      },
+      {
+        target: 'live_state',
+        steps: [
+          ['select', ['game_id, games!inner(status)']],
+          ['eq', ['games.status', 'active']],
+          ['is', ['wake_at', null]],
+          ['order', ['updated_at', { ascending: true }]],
+          ['limit', [48]],
+        ],
+      },
+    ]);
+    // It never asks about the clocks themselves: wake_at is the one column the sweep reads.
+    expect(JSON.stringify(supabase.log)).not.toMatch(/deadline/);
+  });
+
+  it('asks only for what the due tables left of the limit, and nothing more once they fill it, so parked tables never crowd them out', async () => {
+    answerAll(undefined, (q) => (due(q) ? rows('g-1', 'g-2', 'g-3') : rows('g-parked')));
+    expect(await dueGames(T, 3)).toEqual(['g-1', 'g-2', 'g-3']);
+    expect(supabase.log).toHaveLength(1);
+
+    supabase.log.length = 0;
+    answerAll(undefined, (q) => (due(q) ? rows('g-1') : rows('g-parked')));
+    expect(await dueGames(T, 3)).toEqual(['g-1', 'g-parked']);
+    expect(supabase.log[1]!.steps).toContainEqual(['limit', [2]]);
+  });
+
+  it('keeps the label the ops runbook quotes on both questions, and stops at the first that fails', async () => {
+    answerAll(due);
+    const first = await thrown(dueGames(T));
+    expect(first).toBeInstanceOf(SupabaseError);
+    expect((first as SupabaseError).what).toBe('find tables past their clocks');
+    expect(supabase.log).toHaveLength(1);
+
+    supabase.log.length = 0;
+    answerAll((q) => !due(q));
+    const second = await thrown(dueGames(T));
+    expect(second).toBeInstanceOf(SupabaseError);
+    expect((second as SupabaseError).what).toBe('find tables past their clocks');
+    expect(supabase.log).toHaveLength(2);
+  });
+});
+
 /**
  * Every write, with the label of each query it makes, in order. Each query
  * must be checked: whichever one fails, the write throws a SupabaseError
@@ -310,8 +376,7 @@ const WRITES: readonly Write[] = [
     data: dealAnswers,
     dropsGame: true,
   },
-  { name: 'finishGame', run: () => finishGame(GAME, 'r-1'), labels: ['close the room', 'finish the game'] },
-  { name: 'abandonGame', run: () => abandonGame(GAME, 'r-1'), labels: ['close the room', 'abandon the game'] },
+  { name: 'finishGame', run: () => finishGame(GAME, room, OVER), labels: ['record how everyone finished', 'close the room', 'finish the game'] },
   { name: 'countHand', run: () => countHand(GAME), labels: ['count the hand'] },
 ];
 
@@ -396,7 +461,6 @@ describe('dealing a game', () => {
     const cases = [
       { deadlines: { claim: T + 30_000, turn: T + 90_000 }, wake: '2026-09-24T20:00:30.000Z' },
       { deadlines: { claim: T + 30_000, turn: null }, wake: '2026-09-24T20:00:30.000Z' },
-      { deadlines: { claim: null, turn: null }, wake: null },
     ];
     for (const { deadlines, wake } of cases) {
       supabase.log.length = 0;
@@ -404,6 +468,17 @@ describe('dealing a game', () => {
       await startGame(room, 'seed', seats, { ...first, deadlines });
       expect(wrote('live_state', 'insert')).toMatchObject({ wake_at: wake });
     }
+  });
+
+  it('wakes a table with no clock running when it would end as idle: six hours after the deal, the host’s own move', async () => {
+    supabase.log.length = 0;
+    answerAll(undefined, dealAnswers);
+    const before = Date.now();
+    await startGame(room, 'seed', seats, { ...first, deadlines: { claim: null, turn: null } });
+    const after = Date.now();
+    const wake = Date.parse((wrote('live_state', 'insert') as { wake_at: string }).wake_at);
+    expect(wake).toBeGreaterThanOrEqual(before + STALE_GAME_MS);
+    expect(wake).toBeLessThanOrEqual(after + STALE_GAME_MS);
   });
 
   it.each(AFTER_THE_GAME)('deletes the game when "$label" fails, and throws that failure', async ({ label, at }) => {
@@ -482,23 +557,57 @@ describe('dealing a game', () => {
   });
 });
 
-describe('finishing or abandoning a game', () => {
-  const ends = [
-    { name: 'finishGame', run: () => finishGame(GAME, 'r-1'), status: 'finished' },
-    { name: 'abandonGame', run: () => abandonGame(GAME, 'r-1'), status: 'abandoned' },
-  ];
+/**
+ * The bookkeeping around a game that has ended, written from its saved end
+ * (table_state.over): who finished where, the room, then the game's own row
+ * last, since that's what tells a later request the job is done. Every write
+ * sets values, so it can all run again.
+ */
+describe('finishing a game', () => {
+  /** The first argument of the first query on this table made this way: the row(s) it wrote. */
+  const wrote = (target: string, method: string): unknown => supabase.log.find(is(target, method))!.steps[0]![1][0];
 
-  it.each(ends)('$name closes the room first and marks the game last, leaving the table itself alone', async ({ run, status }) => {
-    await run();
-    expect(ran()).toEqual(['rooms:update', 'games:update']);
-    const [closeRoom, game] = supabase.log;
-    expect(closeRoom!.steps[0]).toEqual(['update', [{ status: 'finished', updated_at: expect.any(String) }]]);
-    expect(game!.steps[0]![1][0]).toMatchObject({ status });
-    expect(game!.steps).toContainEqual(['eq', ['id', GAME]]);
+  it('writes who finished where, closes the room, then marks the game, in that order, leaving the table itself alone', async () => {
+    await finishGame(GAME, room, OVER);
+    expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'games:update']);
+    const players = supabase.log.find(is('game_players', 'upsert'))!;
+    expect(players.steps).toEqual([
+      [
+        'upsert',
+        [
+          [
+            { game_id: GAME, seat: 0, user_id: 'u-abrar', kind: 'human', name: 'Abrar', score: 2000, place: 2 },
+            { game_id: GAME, seat: 1, user_id: 'u-hana', kind: 'human', name: 'Hana', score: 14504, place: 1 },
+            { game_id: GAME, seat: 2, user_id: null, kind: 'bot', name: 'Bilal', score: -8000, place: 3 },
+            { game_id: GAME, seat: 3, user_id: null, kind: 'bot', name: 'Sana', score: -8504, place: 4 },
+          ],
+          { onConflict: 'game_id,seat' },
+        ],
+      ],
+    ]);
+    expect(wrote('rooms', 'update')).toEqual({ status: 'finished', updated_at: expect.any(String) });
+    const game = supabase.log.find(is('games', 'update'))!;
+    expect(game.steps).toEqual([
+      ['update', [{ status: 'finished', ended_at: '2026-09-24T22:00:00.000Z', finished_at: '2026-09-24T22:00:00.000Z', ended_how: 'complete', ended_by: null, hands_played: 16 }]],
+      ['eq', ['id', GAME]],
+    ]);
   });
 
-  it.each(ends)('$name closes the room only while it still holds this game and is playing it, so a repeat, or a room dealt again, writes nothing', async ({ run }) => {
-    await run();
+  it('records who ended it, when someone did', async () => {
+    await finishGame(GAME, room, { ...OVER, how: 'host', by: { userId: 'u-hana', name: 'Hana' }, hands: 7 });
+    expect(wrote('games', 'update')).toMatchObject({ status: 'finished', ended_how: 'host', ended_by: 'u-hana', hands_played: 7 });
+  });
+
+  it('marks an abandoned game abandoned, with no finish time and nobody placed', async () => {
+    await finishGame(GAME, room, { ...OVER, how: 'abandoned', hands: 3 });
+    expect((wrote('game_players', 'upsert') as { place: unknown }[]).map((r) => r.place)).toEqual([null, null, null, null]);
+    const game = wrote('games', 'update');
+    expect(game).toEqual({ status: 'abandoned', ended_at: '2026-09-24T22:00:00.000Z', ended_how: 'abandoned', ended_by: null, hands_played: 3 });
+    expect(game).not.toHaveProperty('finished_at');
+  });
+
+  it('closes the room only while it still holds this game and is playing it, so a repeat, or a room dealt again, writes nothing to it', async () => {
+    await finishGame(GAME, room, OVER);
     const closeRoom = supabase.log.find(is('rooms', 'update'))!;
     expect(closeRoom.steps).toContainEqual(['eq', ['id', 'r-1']]);
     expect(closeRoom.steps).toContainEqual(['eq', ['current_game_id', GAME]]);
@@ -507,24 +616,100 @@ describe('finishing or abandoning a game', () => {
     // A room that has moved on, or already closed, matches no row, which is not a failure: the old game is still finished.
     supabase.log.length = 0;
     answerAll(undefined, () => []);
-    await run();
-    expect(ran()).toEqual(['rooms:update', 'games:update']);
+    await finishGame(GAME, room, OVER);
+    expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'games:update']);
   });
 
-  it.each(ends)('$name leaves the game active whichever write fails, so it can be run again from the start', async ({ run }) => {
-    for (const i of [0, 1]) {
+  it('leaves the game active whichever write fails, so it can be run again from the start', async () => {
+    for (const i of [0, 1, 2]) {
       supabase.log.length = 0;
       failNth(i);
-      await expect(run()).rejects.toBeInstanceOf(SupabaseError);
+      await expect(finishGame(GAME, room, OVER)).rejects.toBeInstanceOf(SupabaseError);
       // The game's status is the last write: when anything before it fails it never runs, and when it fails it did not land.
-      const game = supabase.log.findIndex(is('games', 'update'));
-      expect(game === -1 || game === i).toBe(true);
+      expect(supabase.log).toHaveLength(i + 1);
     }
-    // Run again once the database is back, every write goes through.
+    // Run again once the database is back, every write goes through, and writes the same.
     supabase.log.length = 0;
     answerAll();
-    await run();
-    expect(ran()).toEqual(['rooms:update', 'games:update']);
+    await finishGame(GAME, room, OVER);
+    expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'games:update']);
+  });
+
+  it('writes who finished where once more without ids when a person has no profile row, and logs it as profile_missing', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const noProfile = { message: 'insert or update on table "game_players" violates foreign key constraint "game_players_user_id_fkey"', code: '23503' };
+    let tries = 0;
+    supabase.answer = (q) => (is('game_players', 'upsert')(q) && tries++ === 0 ? { data: null, error: noProfile } : ok());
+    await finishGame(GAME, room, OVER);
+    expect(ran()).toEqual(['game_players:upsert', 'game_players:upsert', 'rooms:update', 'games:update']);
+    const [, again] = supabase.log.filter(is('game_players', 'upsert'));
+    expect((again!.steps[0]![1][0] as { user_id: unknown }[]).map((r) => r.user_id)).toEqual([null, null, null, null]);
+    expect(again!.steps[0]![1][1]).toEqual({ onConflict: 'game_id,seat' });
+    expect(log.mock.calls).toHaveLength(1);
+    expect(JSON.parse(log.mock.calls[0]![0] as string)).toMatchObject({ event: 'profile_missing', gameId: GAME, code: '23503' });
+    expect(log.mock.calls[0]![0]).not.toContain('u-abrar');
+  });
+
+  it('marks the game without who ended it when that person has no profile row, and logs it', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const noProfile = { message: 'insert or update on table "games" violates foreign key constraint "games_ended_by_fkey"', code: '23503' };
+    let tries = 0;
+    supabase.answer = (q) => (is('games', 'update')(q) && tries++ === 0 ? { data: null, error: noProfile } : ok());
+    await finishGame(GAME, room, { ...OVER, how: 'host', by: { userId: 'u-hana', name: 'Hana' } });
+    const games = supabase.log.filter(is('games', 'update'));
+    expect(games.map((q) => (q.steps[0]![1][0] as { ended_by: unknown }).ended_by)).toEqual(['u-hana', null]);
+    expect(games[1]!.steps[0]![1][0]).toMatchObject({ status: 'finished', ended_how: 'host', hands_played: 16 });
+    expect(JSON.parse(log.mock.calls[0]![0] as string)).toMatchObject({ event: 'profile_missing', gameId: GAME, code: '23503' });
+    expect(log.mock.calls[0]![0]).not.toContain('u-hana');
+  });
+
+  it('tries only once more, and only for a missing profile', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    supabase.answer = (q) => (is('games', 'update')(q) ? { data: null, error: { message: 'still no profile', code: '23503' } } : ok());
+    expect(await thrown(finishGame(GAME, room, { ...OVER, how: 'host', by: { userId: 'u-hana', name: 'Hana' } }))).toMatchObject({ what: 'finish the game', code: '23503' });
+    expect(supabase.log.filter(is('games', 'update'))).toHaveLength(2);
+
+    // Nobody ended a game whose last hand was scored, so a 23503 there isn't a missing profile, and nothing is tried again.
+    supabase.log.length = 0;
+    expect(await thrown(finishGame(GAME, room, OVER))).toMatchObject({ what: 'finish the game' });
+    expect(supabase.log.filter(is('games', 'update'))).toHaveLength(1);
+  });
+});
+
+describe('what the room routes read of a live table', () => {
+  it('reads the bookkeeping, the stamps and where the hand stands, never the hand itself', async () => {
+    answerAll(undefined, () => ({
+      version: 12,
+      table_state: { v: 1, scores: OVER.scores, over: OVER },
+      acted_at: '2026-09-24T19:59:00.000Z',
+      updated_at: '2026-09-24T20:00:00.000Z',
+      hand: 15,
+      seq: 88,
+    }));
+    expect(await liveMeta(GAME)).toEqual({
+      version: 12,
+      table: { v: 1, scores: OVER.scores, over: JSON.parse(JSON.stringify(OVER)), extra: {} },
+      legacy: false,
+      actedAt: T - 60_000,
+      updatedAt: T,
+      hand: 15,
+      seq: 88,
+    });
+    const [select] = supabase.log[0]!.steps;
+    expect(supabase.log[0]!.target).toBe('live_state');
+    expect(select).toEqual(['select', ['version, table_state, acted_at, updated_at, hand:state->progress->handIndex, seq:state->seq']]);
+    // Only paths into the state: never every seat's tiles.
+    expect((select![1][0] as string).split(', ')).not.toContain('state');
+    expect(supabase.log[0]!.steps).toContainEqual(['eq', ['game_id', GAME]]);
+  });
+
+  it('gives null for a game with no live table, reads a legacy row as legacy, and throws when the database fails', async () => {
+    answerAll(undefined, () => null);
+    expect(await liveMeta(GAME)).toBeNull();
+    answerAll(undefined, () => ({ version: 1, table_state: {}, acted_at: null, updated_at: '2026-09-24T20:00:00.000Z', hand: null, seq: 'x' }));
+    expect(await liveMeta(GAME)).toMatchObject({ legacy: true, table: { scores: null, over: null }, actedAt: T, hand: 0, seq: 0 });
+    answerAll(() => true);
+    expect(await thrown(liveMeta(GAME))).toMatchObject({ what: 'read the table' });
   });
 });
 
@@ -549,14 +734,16 @@ describe('saving the live table', () => {
   });
 
   it('is the only way the store writes a live table: nothing updates live_state, writes hand_results or writes rooms.ledger', async () => {
-    for (const gone of ['saveLive', 'appendAction', 'openHand', 'endHand', 'settleScores', 'recordResult', 'clearDeadlines']) expect(store, gone).not.toHaveProperty(gone);
+    for (const gone of ['saveLive', 'appendAction', 'openHand', 'endHand', 'settleScores', 'recordResult', 'clearDeadlines', 'abandonGame'])
+      expect(store, gone).not.toHaveProperty(gone);
     const everything: (() => Promise<unknown>)[] = [
       ...WRITES.map((w) => w.run),
       () => loadLive(GAME),
+      () => liveMeta(GAME),
       () => roomByCode('ABCD'),
       () => roomById('r-1'),
       () => gameById(GAME),
-      () => expiredGames(0),
+      () => dueGames(0),
       () => stagesBySeat(seats),
       () => recordHand(seats, wonHand),
     ];

@@ -1,4 +1,5 @@
 import type { HandSpec, Ruleset, Wind } from '@society/engine';
+import { titleOf } from './shape';
 import type { CoachGoal } from './types';
 
 /**
@@ -40,6 +41,28 @@ const COPY: Readonly<Record<string, GoalCopy>> = {
   },
 };
 
+/**
+ * The round's footnote, the first time this visit a hand of its kind is played:
+ * what the hand has to be, in the fewest words. Keyed like the goal copy, so the
+ * West goulash is "this hand" too, and a kind with no line gets no footnote.
+ */
+const ROUND_NOTES: Readonly<Record<string, { readonly label: string; readonly text: string }>> = {
+  goulash: { label: 'this hand', text: "four pungs and a pair, and runs don't count" },
+  honour: { label: 'East from here', text: 'three runs or three pungs, plus five winds and dragons' },
+  noHonour: { label: 'South', text: 'four sets and a pair, runs or pungs, and no winds or dragons' },
+  big: { label: 'North', text: 'only the big named hands count; tap ? to see them' },
+};
+
+export function roundNote(kind: string): { readonly label: string; readonly text: string } | null {
+  return Object.prototype.hasOwnProperty.call(ROUND_NOTES, kind) ? ROUND_NOTES[kind]! : null;
+}
+
+/** The round's everyday hands: its general-tagged titles in spec order, or its one title when it deals only one hand. */
+export function generalTitlesOf(spec: HandSpec): string[] {
+  if (spec.patterns.length === 1) return [titleOf(spec.patterns[0]!)];
+  return [...new Set(spec.patterns.filter((p) => p.tags?.includes('general')).map(titleOf))];
+}
+
 /** Everything but `hands`, which needs the player's analysis: `coachFor` adds it. */
 export function goalFor(spec: HandSpec, roundWind: Wind, ruleset: Ruleset): Omit<CoachGoal, 'hands'> {
   const copy = COPY[spec.kind];
@@ -51,5 +74,6 @@ export function goalFor(spec: HandSpec, roundWind: Wind, ruleset: Ruleset): Omit
     watchOut: copy?.watchOut ?? null,
     honours: copy?.honours ?? 'optional',
     chowsClaimable: ruleset.claims.chowFromDiscard !== 'never',
+    generalTitles: generalTitlesOf(spec),
   };
 }

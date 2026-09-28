@@ -13,8 +13,12 @@ import {
   type Seat,
 } from '@society/engine';
 import { analyseFor, coachFor, type CoachStage, type CoachState } from '../lib/coach';
+import { lessonFor } from '../lib/coach/teach';
+import { flowerSinceMyLastMove, myDiscardCount, textOf } from '../lib/coach/words';
+import { liveStage } from '../lib/live/level';
 import type { GameSnapshot } from '../lib/live/snapshot';
 import type { Deadlines } from '../lib/live/types';
+import { riverOrder } from '../lib/river';
 import { GAME_ID, USER_NAME } from './fixtures';
 
 /**
@@ -50,6 +54,7 @@ const isBot = (seat: Seat) => SEATING[seat].kind === 'bot';
 const LIVE_NAMES: Readonly<Record<Seat, string>> = { 0: 'You', 1: SEATING[1].name, 2: SEATING[2].name, 3: SEATING[3].name };
 
 const EAST_HONOUR: GameProgress = { roundWind: 'E', roundIndex: 0, handInRound: 1, handIndex: 1 };
+const SOUTH: GameProgress = { roundWind: 'S', roundIndex: 1, handInRound: 0, handIndex: 4 };
 
 /** One forced or bot move, or null when a person has a real decision. A copy of `settleOnce` (lib/live/table.ts), with the server's default sharp bots. */
 function settleOnce(s: HandState): HandState | null {
@@ -158,7 +163,7 @@ function snapshot(state: HandState, version: number, stage: CoachStage, status: 
 /** What the live page's tutor says on this snapshot, for comparing through the helpers rather than retyping copy. */
 export function liveCoach(s: GameSnapshot): CoachState {
   const view = s.view as PrivatePlayerView;
-  return coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: s.stage ?? 'new', names: LIVE_NAMES });
+  return coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: liveStage(s.stage, view), names: LIVE_NAMES });
 }
 
 /** The first seed of `tutor-{from}`, `tutor-{from + 1}`, ... for which `make` returns something. */
@@ -179,14 +184,35 @@ function offered(s: HandState): boolean {
 /** The tutor's line at a claim names a hand, so there's a card to open from it. */
 const namesAHand = (snap: GameSnapshot) => liveCoach(snap).say.some((x) => x.hand);
 
+/** A claim window's clock short enough that a test sees it run out before the page's 12 s poll: 8.5 s before the sheet passes for Amna. */
+const SHORT_CLAIM = { claimMs: 10_000, turnMs: HOUR } as const;
+
 export interface TutorFixtures {
   /** A finished East hand won by one of the bots, for a first-timer: the result line names the winner's hand. */
   readonly otherWin: GameSnapshot;
+  /** Amna asked about a discard she could pung, not a win, on a short clock (`SHORT_CLAIM`). The tutor's line names a hand. */
+  readonly claim: GameSnapshot;
   /**
-   * Two claim windows for Amna, the second the table's reply to her pass on the first: the claim sheet stays up
-   * between them. The first window's clock is short (8.5 s before the sheet passes for her), the second's an hour.
+   * Two claim windows for Amna, the second the table's answer once she's passed on the first (from her other phone,
+   * say): the claim sheet stays up between them. Both clocks are an hour, so nothing runs out under an open card.
    */
   readonly claimAgain: { readonly first: GameSnapshot; readonly next: GameSnapshot };
+  /**
+   * Amna's turn, with a flower drawn since her last move, for a first-timer. After her first discard of the hand:
+   * on her first turn the round's footnote comes first, and there's no room beside it for the flowers'.
+   */
+  readonly flowerTurn: GameSnapshot;
+  /**
+   * Amna's turn in an East honour hand or South, after a tile she'd have wanted for a run went past, for a first-timer:
+   * the tutor explains why she couldn't take it. After her first discard of the hand, for the same reason as `flowerTurn`.
+   */
+  readonly missedRun: GameSnapshot;
+  /**
+   * Two looks at the same hand-start bubble for a learner: Bilal deals, and Amna drew a flower in the deal. The next
+   * look is the table once Bilal has thrown and the bots have moved on, with Bilal to answer again before Amna's first
+   * turn and something in the river. The tutor's words are the same on both, and the flower is still news.
+   */
+  readonly handStartTwice: { readonly first: GameSnapshot; readonly next: GameSnapshot };
 }
 
 function build(): TutorFixtures {
@@ -195,6 +221,19 @@ function build(): TutorFixtures {
     if (end.result?.type !== 'win' || !isBot(end.result.winner)) return null;
     const snap = snapshot(end, 9, 'new');
     return liveCoach(snap).outcome?.hand?.ref.whose === 'winner' ? snap : null;
+  });
+  const claim = search('a claim window where Amna could pung, whose line names a hand', (seed) => {
+    let s = settle(startHand(karachi, { seed, progress: EAST_HONOUR, dealer: 0 }));
+    for (let i = 0; i < 400 && s.phase !== 'finished'; i++) {
+      if (offered(s) && legalActions(s, karachi, ME).claims?.some((c) => c.type === 'pung')) {
+        const snap = snapshot(s, 9, 'new', 'active', deadlines(s, SHORT_CLAIM));
+        if (namesAHand(snap)) return snap;
+      }
+      const seat = pending(s)[0];
+      if (seat === undefined) return null;
+      s = settle(reduce(s, personMove(s, seat), karachi));
+    }
+    return null;
   });
   // Back-to-back windows are rare: tutor-51 is the first seed that gives them today, so the search starts there
   // rather than playing out fifty hands first. An engine change that moves the deal still searches on from it.
@@ -206,7 +245,7 @@ function build(): TutorFixtures {
         if (offered(s)) {
           const after = settle(reduce(s, { type: 'pass', seat: ME }, karachi));
           if (offered(after) && after.discardCount !== s.discardCount) {
-            const first = snapshot(s, 9, 'new', 'active', deadlines(s, { claimMs: 10_000, turnMs: HOUR }));
+            const first = snapshot(s, 9, 'new');
             const next = snapshot(after, 10, 'new');
             if (namesAHand(first) && namesAHand(next)) return { first, next };
           }
@@ -219,7 +258,51 @@ function build(): TutorFixtures {
     },
     51,
   );
-  return { otherWin, claimAgain };
+  const flowerTurn = search("Amna's turn after a flower, once she's discarded, where the tutor explains it", (seed) => {
+    let s = settle(startHand(karachi, { seed, progress: EAST_HONOUR, dealer: 0 }));
+    for (let i = 0; i < 400 && s.phase !== 'finished'; i++) {
+      const view = viewFor(s, karachi, ME);
+      if (s.phase === 'turn' && s.turn === ME && myDiscardCount(view) > 0 && flowerSinceMyLastMove(view)) {
+        const snap = snapshot(s, 9, 'new');
+        const coach = liveCoach(snap);
+        if (coach.say.length > 0 && coach.teach.some((t) => t.key === 'rule:flowers')) return snap;
+      }
+      const seat = pending(s)[0];
+      if (seat === undefined) return null;
+      s = settle(reduce(s, personMove(s, seat), karachi));
+    }
+    return null;
+  });
+  const missedRun = search("Amna's turn after a run tile went past, once she's discarded, where the tutor explains it", (seed) => {
+    for (const progress of [EAST_HONOUR, SOUTH]) {
+      let s = settle(startHand(karachi, { seed, progress, dealer: 0 }));
+      for (let i = 0; i < 400 && s.phase !== 'finished'; i++) {
+        if (s.phase === 'turn' && s.turn === ME && myDiscardCount(viewFor(s, karachi, ME)) > 0) {
+          const snap = snapshot(s, 9, 'new');
+          const coach = liveCoach(snap);
+          // A first visit's footnotes under the bubble: the run tile's comes first.
+          if (coach.say.length > 0 && lessonFor(coach, new Set()).notes[0]?.key === 'rule:runs') return snap;
+        }
+        const seat = pending(s)[0];
+        if (seat === undefined) break;
+        s = settle(reduce(s, personMove(s, seat), karachi));
+      }
+    }
+    return null;
+  });
+  const handStartTwice = search('two looks at the same hand-start bubble for Amna, with a flower from the deal to explain', (seed) => {
+    const s = settle(startHand(karachi, { seed, progress: EAST_HONOUR, dealer: 1 }));
+    if (s.players[ME].bonus.length === 0 || pending(s).join() !== '1') return null;
+    const after = settle(reduce(s, personMove(s, 1), karachi));
+    if (pending(after).join() !== '1') return null;
+    const first = snapshot(s, 9, 'learning');
+    const next = snapshot(after, 10, 'learning');
+    const [a, b] = [liveCoach(first), liveCoach(next)];
+    const same = a.moment === 'handStart' && b.moment === a.moment && b.action.kind === a.action.kind && textOf(b.say) === textOf(a.say);
+    const news = [a, b].every((c) => c.teach.some((t) => t.key === 'rule:flowers'));
+    return same && news && riverOrder(next.view).length > 0 ? { first, next } : null;
+  });
+  return { otherWin, claim, claimAgain, flowerTurn, missedRun, handStartTwice };
 }
 
 let built: TutorFixtures | null = null;

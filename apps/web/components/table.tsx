@@ -1,16 +1,21 @@
 'use client';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { acrossFrom, leftOf, rightOf, tileName, type Action, type PrivatePlayerView, type Seat, type TileKind } from '@society/engine';
+import { SEATS, acrossFrom, leftOf, rightOf, tileName, type Action, type PrivatePlayerView, type Seat, type TileKind } from '@society/engine';
 import { Tile } from '@/components/tile';
 import { SeatPill } from '@/components/seat-pill';
 import { ClaimSheet } from '@/components/claim-sheet';
-import { Coach, CoachLine, TermProvider, TutorSheet, useOpenTerm, useSheetActions } from '@/components/coach';
+import { Coach, CoachLine, CoachNotes, TermProvider, TutorSheet, useLesson, useOpenTerm, useSheetActions } from '@/components/coach';
 import { PlanStrip } from '@/components/plan-strip';
 import { River } from '@/components/river';
 import { riverOrder } from '@/lib/river';
 import { NO_SCORES, handDeltas, signed, standings, type Scores } from '@/lib/ledger';
 import { LIFT_SETTLE_MS, discardOffer, handBoundary, heldSelection, selectTile, settling, type Selection } from '@/lib/table-flow';
 import type { CoachState } from '@/lib/coach';
+import { finalStandings } from '@/lib/live/final';
+import { endLine as endLineFor } from '@/lib/live/lifecycle-copy';
+import { cardClockFor, claimSheetClock } from '@/lib/coach/clock';
+import { CLAIM_PASS_MARGIN_MS } from '@/lib/live/timing';
+import type { Lesson } from '@/lib/coach/teach';
 
 /** A player's name inside a sentence, isolated so a right-to-left name can't reorder the words and clock around it. */
 const isolate = (name: string | undefined): string => `\u2068${name ?? ''}\u2069`;
@@ -62,6 +67,12 @@ export interface TableProps {
   readonly clock?: { readonly kind: 'turn' | 'claim'; readonly ms: number } | null;
   /** a move is on its way to the table: the action buttons are disabled, and a second tap does nothing until it lands */
   readonly busy?: boolean;
+  /** what plays each seat that a person doesn't: the final table marks a bot's row */
+  readonly marks?: Readonly<Partial<Record<Seat, 'bot' | 'away'>>>;
+  /** the line under the final scores, when the page knows how the game ended; "That's the game." and who finished top otherwise */
+  readonly endLine?: string;
+  /** the host ends the game here, from the result sheet: shown only between hands of a game still in play; the page asks first */
+  readonly onEndGame?: () => void;
 }
 
 /** Under this much time left, the clock turns brass and pulses. */
@@ -104,6 +115,9 @@ function TableInner({
   clock,
   nextLabel,
   busy = false,
+  marks,
+  endLine,
+  onEndGame,
 }: TableProps) {
   const ME = view.me;
   const openTerm = useOpenTerm();
@@ -143,6 +157,8 @@ function TableInner({
 
   const myTurn = view.phase === 'turn' && view.turn === ME && !!legal.discard;
   const advice = tutorOn ? coach : null;
+  // This view's first-sight footnotes, for the bubble and the sheets alike.
+  const lesson = useLesson(coach, tutorOn);
   const suggested = advice && advice.action.kind === 'discard' ? advice.action.tile : null;
   // The player's own pick wins over the tutor's, but only a tile they hold is ever offered.
   const offer = discardOffer(view, selected, suggested);
@@ -192,7 +208,7 @@ function TableInner({
   // New and learning players see their plan laid out above their tiles; a regular gets the one line in the bubble.
   const withStrip = !!advice && advice.stage !== 'solid';
   const strip = withStrip ? <PlanStrip target={advice.target} /> : null;
-  const bubble = advice ? <Coach plan={advice.plan} target={advice.target} say={advice.say} stage={coach.stage} planInStrip={withStrip} /> : null;
+  const bubble = advice ? <Coach plan={advice.plan} target={advice.target} say={advice.say} coach={advice} lesson={lesson} planInStrip={withStrip} /> : null;
 
   const actions = (
     <>
@@ -306,6 +322,19 @@ function TableInner({
   );
 
   const claimOpen = view.phase === 'claim' && !!legal.claims && legal.claims.length > 0 && !!view.lastDiscard;
+  // In a claim window the live table always passes claimMs (0 in the window's
+  // last moments, so never test it for truth), and solo never does. What a card
+  // or a word opened now says about the clock under it: the bots' claim held,
+  // or a live clock still running.
+  const live = claimMs != null;
+  const cardClock = cardClockFor({
+    claimOpen,
+    soloClaimTimed: claimOpen && !live && !legal.claims?.some((c) => c.type === 'win'),
+    clock: clock ?? null,
+    myTurn,
+    exchange: !!legal.exchange,
+    passMarginMs: CLAIM_PASS_MARGIN_MS,
+  });
 
   // The line above the hand that says whose clock is running, when it is
   // mine or when I am waiting on someone else's claim. A bot's clock never
@@ -346,7 +375,7 @@ function TableInner({
 
         {bubble}
 
-        {hasActions && <div className="action-row flex-none">{actions}</div>}
+        {hasActions && !gameOver && <div className="action-row flex-none">{actions}</div>}
 
         <section className="hand-dock flex-none">
           {clockEl}
@@ -385,25 +414,26 @@ function TableInner({
             {handTiles('lg')}
           </div>
           {me.bonus.length > 0 && bonus}
-          {hasActions && <div className="action-row">{actions}</div>}
+          {hasActions && !gameOver && <div className="action-row">{actions}</div>}
         </div>
       </div>
 
-      {claimOpen && view.lastDiscard && (
+      {claimOpen && view.lastDiscard && !gameOver && (
         <ClaimSheet
           discardKind={view.lastDiscard.kind}
           discarderName={names[view.lastDiscard.from]}
           discardCount={view.discardCount}
           coach={coach}
+          lesson={lesson}
           options={legal.claims!}
           onClaim={(claim) => act({ type: 'claim', seat: ME, claim })}
           onPass={() => act({ type: 'pass', seat: ME })}
           busy={busy}
-          {...(claimMs ? { claimMs: Math.max(1000, claimMs), clock: 'server' as const } : {})}
+          {...claimSheetClock(claimMs)}
         />
       )}
 
-      {view.phase === 'preplay' && legal.exchange && (
+      {view.phase === 'preplay' && legal.exchange && !gameOver && (
         // Keyed on the event sequence: each of the three passes (right, across,
         // left) gets a fresh sheet, so picks from the last pass cannot linger and
         // swallow the taps of the next.
@@ -412,15 +442,17 @@ function TableInner({
           hand={view.concealed}
           count={legal.exchange.count}
           coach={coach}
+          lesson={lesson}
           busy={busy}
           tooSoon={tooSoonToLift}
           onDone={(tiles) => act({ type: 'exchange', seat: ME, tiles })}
         />
       )}
 
-      {view.phase === 'finished' && (
+      {(view.phase === 'finished' || gameOver) && (
         <ResultSheet
           coach={coach}
+          lesson={lesson}
           gameOver={!!gameOver}
           // A tap meant for the table just as the hand ended mustn't skip the debrief.
           onNext={() => !tooSoon() && onNextHand()}
@@ -429,10 +461,13 @@ function TableInner({
           scores={scores}
           nextLabel={nextLabel}
           busy={busy}
+          marks={marks}
+          endLine={endLine}
+          onEndGame={gameOver ? undefined : onEndGame}
         />
       )}
 
-      <TutorSheet coach={coach} clock={null} />
+      <TutorSheet coach={coach} clock={cardClock} />
     </>
   );
 }
@@ -441,6 +476,7 @@ function ExchangeSheet({
   hand,
   count,
   coach,
+  lesson,
   busy,
   tooSoon,
   onDone,
@@ -448,6 +484,7 @@ function ExchangeSheet({
   hand: readonly TileKind[];
   count: number;
   coach: CoachState;
+  lesson: Lesson | null;
   busy: boolean;
   /** true just after the hand was dealt, when a tap is a leftover from the hand before */
   tooSoon: () => boolean;
@@ -472,9 +509,12 @@ function ExchangeSheet({
       <div className="sheet">
         <div className="grabber" />
         <h2 className="font-display mb-1 text-xl">Goulash exchange</h2>
-        <p className="text-ivory-200/70 mb-3 text-sm">
-          Choose {count} tiles to pass. <CoachLine say={coach.say} origin="exchange" />
-        </p>
+        <div className="mb-3">
+          <p className="text-ivory-200/70 text-sm">
+            Choose {count} tiles to pass. <CoachLine say={coach.say} origin="exchange" />
+          </p>
+          <CoachNotes coach={coach} lesson={lesson} where="sheet" />
+        </div>
         {/* Room above each row for a lifted tile and its ring (10px + 3px): the caption's margin and a pixel, and the row gap. */}
         <div className="flex flex-wrap justify-center gap-x-1 gap-y-[13px] pt-px">
           {hand.map((k, i) => (
@@ -502,10 +542,12 @@ function ExchangeSheet({
  * The debrief. A beginner learns more here than anywhere else in the hand, so it
  * shows the winning tiles laid out, names the hand the way players name it —
  * never the engine's pattern id — and says what it cost or paid. When the game
- * is over it becomes the final table.
+ * is over it becomes the final table: the scores ranked, and a line saying how
+ * the game ended and who finished top.
  */
 function ResultSheet({
   coach,
+  lesson,
   gameOver,
   onNext,
   view,
@@ -513,8 +555,12 @@ function ResultSheet({
   scores,
   nextLabel,
   busy,
+  marks,
+  endLine,
+  onEndGame,
 }: {
   coach: CoachState;
+  lesson: Lesson | null;
   gameOver: boolean;
   onNext: () => void;
   nextLabel?: string | undefined;
@@ -522,40 +568,88 @@ function ResultSheet({
   view: PrivatePlayerView;
   names: Readonly<Record<Seat, string>>;
   scores: Scores;
+  marks?: Readonly<Partial<Record<Seat, 'bot' | 'away'>>> | undefined;
+  endLine?: string | undefined;
+  onEndGame?: (() => void) | undefined;
 }) {
   const outcome = coach.outcome;
   const deltas = handDeltas(view.result);
   const order = standings(scores);
   const paid = view.result?.type === 'win';
+  const final = gameOver
+    ? finalStandings(
+        SEATS.map((s) => ({ name: names[s], bot: marks?.[s] === 'bot' })),
+        SEATS.map((s) => scores[s]),
+      )
+    : [];
   return (
     <>
       <div className="scrim" />
       <div className="sheet">
         <div className="grabber" />
-        <h2 className="font-display mb-2 text-xl">{outcome?.type === 'win' ? (outcome.winnerIsMe ? 'Mahjong!' : `${outcome.winnerName} wins`) : 'Washed out'}</h2>
-        {outcome?.tiles && outcome.tiles.length > 0 && (
-          <div className="mb-3 flex flex-wrap justify-center gap-1">
-            {outcome.tiles.map((k, i) => (
-              <Tile key={i} kind={k} size="xs" />
+        {view.phase === 'finished' && (
+          <>
+            <h2 className="font-display mb-2 text-xl">{outcome?.type === 'win' ? (outcome.winnerIsMe ? 'Mahjong!' : `${outcome.winnerName} wins`) : 'Washed out'}</h2>
+            {outcome?.tiles && outcome.tiles.length > 0 && (
+              <div className="mb-3 flex flex-wrap justify-center gap-1">
+                {outcome.tiles.map((k, i) => (
+                  <Tile key={i} kind={k} size="xs" />
+                ))}
+              </div>
+            )}
+            <p className="text-ivory-100/90 text-sm">
+              <CoachLine say={coach.say} origin="result" />
+            </p>
+            <CoachNotes coach={coach} lesson={lesson} where="sheet" />
+          </>
+        )}
+        {gameOver ? (
+          // The spacing sits on the wrapper and the rows: the stylesheet's h1-h3 reset outranks a margin utility on the heading.
+          <div className="mt-4">
+            <h3 className="label">Final scores</h3>
+            <div className="standings mt-1">
+              {final.map((st) => (
+                <div key={st.seat} className={`row${st.seat === view.me ? ' is-me' : ''}`}>
+                  <span className="who">
+                    <span className="text-ivory-200/55 mr-2">{st.rank}</span>
+                    {st.name}
+                    {st.bot && ' · bot'}
+                  </span>
+                  <span className="delta" />
+                  <span className="total">{signed(st.score)}</span>
+                </div>
+              ))}
+            </div>
+            <p className="text-ivory-200/70 mt-3 text-center text-sm">{endLine ?? endLineFor(null, final, view.me)}</p>
+          </div>
+        ) : (
+          <div className="standings mt-4">
+            <div className="row text-ivory-200/55 text-xs">
+              <span />
+              <span className="delta">This hand</span>
+              <span className="total">Total</span>
+            </div>
+            {order.map((seat) => (
+              <div key={seat} className={`row${seat === view.me ? ' is-me' : ''}`}>
+                <span className="who">{names[seat]}</span>
+                <span className="delta">{paid ? signed(deltas[seat]) : ''}</span>
+                <span className="total">{signed(scores[seat])}</span>
+              </div>
             ))}
           </div>
         )}
-        <p className="text-ivory-100/90 text-sm">
-          <CoachLine say={coach.say} origin="result" />
-        </p>
-        <div className="standings mt-4">
-          {order.map((seat) => (
-            <div key={seat} className={`row${seat === view.me ? ' is-me' : ''}`}>
-              <span className="who">{names[seat]}</span>
-              <span className="delta">{paid ? signed(deltas[seat]) : ''}</span>
-              <span className="total">{signed(scores[seat])}</span>
-            </div>
-          ))}
+        {/* A phone lying down has no height to spare (the sheet already reaches its top), so there the host's End shares a row
+            with Next hand rather than pushing the hand's title off the screen. */}
+        <div className="mt-4 flex flex-col gap-2 [@media(orientation:landscape)_and_(height<32rem)]:flex-row">
+          <button className="btn btn-primary btn-block" disabled={busy} onClick={onNext}>
+            {gameOver ? (nextLabel ?? 'Play again') : 'Next hand'}
+          </button>
+          {onEndGame && (
+            <button className="btn btn-quiet btn-block" disabled={busy} onClick={onEndGame}>
+              End the game here
+            </button>
+          )}
         </div>
-        {gameOver && <p className="text-ivory-200/70 mt-3 text-center text-sm">That was the last hand of the North round. Final table above.</p>}
-        <button className="btn btn-primary btn-block mt-4" disabled={busy} onClick={onNext}>
-          {gameOver ? (nextLabel ?? 'Play again') : 'Next hand'}
-        </button>
       </div>
     </>
   );

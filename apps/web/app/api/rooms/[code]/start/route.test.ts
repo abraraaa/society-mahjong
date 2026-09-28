@@ -1,16 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
-import type { GameRow, RoomRow } from '../../../../../lib/live/store';
+import type { GameRow, LiveMeta, RoomRow } from '../../../../../lib/live/store';
+import type { GameOver } from '../../../../../lib/live/table-state';
 
 /**
  * The host's "Play again". A room is startable unless its game is live: one
- * left "playing" by a game that has ended, and one whose finish closed the
- * room but not yet the game, can both be dealt again.
+ * left "playing" by a game that has ended, one whose finish closed the room
+ * but not yet the game, one whose game's end is saved but whose finish never
+ * ran (it's finished first), and one whose game nobody has played for hours
+ * (it's ended first), can all be dealt again. "The host" is whoever has the
+ * host's powers: the room's host while seated, else whoever has sat longest.
  */
-const db = vi.hoisted(() => ({ room: null as unknown, game: null as unknown }));
+const db = vi.hoisted(() => ({ room: null as unknown, game: null as unknown, meta: null as unknown, after: null as unknown, live: null as unknown, user: 'u-abrar' }));
 
 vi.mock('server-only', () => ({}));
-vi.mock('../../../../../lib/live/auth', () => ({ currentUser: vi.fn(async () => ({ id: 'u-abrar', name: 'Abrar', isGuest: true })) }));
+vi.mock('../../../../../lib/live/auth', () => ({ currentUser: vi.fn(async () => ({ id: db.user, name: 'Someone', isGuest: true })) }));
 vi.mock('../../../../../lib/live/broadcast', () => ({
   broadcast: vi.fn(async () => {}),
   gamePoke: vi.fn(() => ({})),
@@ -22,14 +26,25 @@ vi.mock('../../../../../lib/live/table', async (importOriginal) => {
 });
 vi.mock('../../../../../lib/live/store', () => ({
   roomByCode: vi.fn(async () => db.room),
+  roomById: vi.fn(async () => db.after ?? db.room),
   gameById: vi.fn(async () => db.game),
+  liveMeta: vi.fn(async () => db.meta),
+  loadLive: vi.fn(async () => db.live),
+  commitTable: vi.fn(async (_id: string, expected: number) => expected + 1),
+  countHand: vi.fn(async () => {}),
+  recordHand: vi.fn(async () => {}),
+  finishGame: vi.fn(async () => {}),
   stagesBySeat: vi.fn(async (seats: readonly ({ kind: string } | null)[]) => seats.map((s) => (s?.kind === 'human' ? 'new' : null))),
   startGame: vi.fn(async () => ({ id: NEXT, room_id: 'r-1', seed: 'seed', status: 'active', hands_played: 0 })),
 }));
 
+import { karachi } from '@society/engine';
 import { POST } from './route';
+import { STALE_GAME_MS } from '../../../../../lib/live/lifecycle';
+import { policyFor } from '../../../../../lib/live/policy';
 import * as store from '../../../../../lib/live/store';
 import * as table from '../../../../../lib/live/table';
+import type { LiveRow } from '../../../../../lib/live/store';
 
 const GAME = '6f1c2a9e-4b7d-4e3a-9c5f-2d8b0a7e1f34';
 const NEXT = '0d3e5f7a-9b1c-4d2e-8f6a-1b3c5d7e9f02';
@@ -54,6 +69,10 @@ function start(): Promise<Response> {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  db.meta = null;
+  db.after = null;
+  db.live = null;
+  db.user = 'u-abrar';
 });
 
 describe('POST /api/rooms/[code]/start', () => {
@@ -83,6 +102,21 @@ describe('POST /api/rooms/[code]/start', () => {
     expect(store.startGame).toHaveBeenCalledTimes(1);
   });
 
+  it('finishes a game whose end is saved but not recorded, then deals again', async () => {
+    const over: GameOver = { how: 'complete', by: null, at: 1, hands: 16, scores: [0, 0, 0, 0], seats: room.seats };
+    db.room = room;
+    db.game = game('active');
+    db.meta = { version: 40, table: { v: 1, scores: [0, 0, 0, 0], over, extra: {} }, legacy: false, actedAt: 0, updatedAt: 0, hand: 15, seq: 99 } satisfies LiveMeta;
+    // The finish closes the room, which moves its updated_at: the deal is guarded by the room as the finish left it.
+    db.after = { ...room, status: 'finished', updated_at: '2026-09-24T00:05:00Z' };
+    const res = await start();
+    expect(res.status).toBe(201);
+    expect(store.finishGame).toHaveBeenCalledWith(GAME, room, over);
+    const order = [store.finishGame, store.startGame].map((fn) => vi.mocked(fn).mock.invocationCallOrder[0]!);
+    expect(order[0]).toBeLessThan(order[1]!);
+    expect(vi.mocked(store.startGame).mock.calls[0]![0]).toMatchObject({ status: 'finished', updated_at: '2026-09-24T00:05:00Z' });
+  });
+
   it('deals with gentle bots in the empty seats while the host is new', async () => {
     db.room = { ...room, status: 'finished' };
     db.game = game('finished');
@@ -104,5 +138,94 @@ describe('POST /api/rooms/[code]/start', () => {
     expect(first.deadlines).toBe(dealt.deadlines);
     expect(first.moves).toEqual(dealt.moves.map((m) => ({ ...m, v: 1 })));
     expect(first.moves.every((m) => m.v === 1 && (m.by === 'bot' || m.by === 'table'))).toBe(true);
+  });
+});
+
+describe('POST /api/rooms/[code]/start, a room nobody is playing in', () => {
+  it('ends a game nobody has played for hours as idle, then deals again in the room the finish left', async () => {
+    const seats: RoomRow['seats'] = [room.seats[0], { kind: 'bot', name: 'Bilal' }, { kind: 'bot', name: 'Sana' }, { kind: 'bot', name: 'Omar' }];
+    const stale = Date.now() - STALE_GAME_MS - 60_000;
+    const first = table.dealFirstHand(karachi, seats, 'stale-1', policyFor(['new']), stale);
+    db.room = { ...room, seats };
+    db.game = game('active');
+    db.meta = { version: 7, table: { v: 1, scores: [0, 0, 0, 0], over: null, extra: {} }, legacy: false, actedAt: stale, updatedAt: stale, hand: 0, seq: 1 } satisfies LiveMeta;
+    db.live = {
+      version: 7,
+      state: first.state,
+      deadlines: first.deadlines,
+      table: { v: 1, scores: [0, 0, 0, 0], over: null, extra: {} },
+      legacy: false,
+      wakeAt: null,
+      actedAt: stale,
+      updatedAt: stale,
+    } satisfies LiveRow;
+    // The finish closes the room.
+    vi.mocked(store.finishGame).mockImplementationOnce(async () => {
+      db.after = { ...room, seats, status: 'finished', updated_at: '2026-09-24T06:00:00Z' };
+    });
+    const res = await start();
+    expect(res.status).toBe(201);
+    const [, expected, w] = vi.mocked(store.commitTable).mock.calls[0]!;
+    expect(expected).toBe(7);
+    expect(w.table.over).toMatchObject({ how: 'idle', by: null });
+    expect(w.acted).toBe(false);
+    const order = [store.commitTable, store.finishGame, store.startGame].map((fn) => vi.mocked(fn).mock.invocationCallOrder[0]!);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(vi.mocked(store.startGame).mock.calls[0]![0]).toMatchObject({ status: 'finished', updated_at: '2026-09-24T06:00:00Z' });
+  });
+
+  it('leaves a game someone played within the hours alone, and refuses to deal over it', async () => {
+    db.room = room;
+    db.game = game('active');
+    db.meta = {
+      version: 7,
+      table: { v: 1, scores: [0, 0, 0, 0], over: null, extra: {} },
+      legacy: false,
+      actedAt: Date.now() - 60_000,
+      updatedAt: 0,
+      hand: 0,
+      seq: 1,
+    } satisfies LiveMeta;
+    const res = await start();
+    expect(res.status).toBe(409);
+    expect(store.loadLive).not.toHaveBeenCalled();
+    expect(store.commitTable).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/rooms/[code]/start, who may', () => {
+  const bilal = { kind: 'human', userId: 'u-bilal', name: 'Bilal' } as const;
+  const sana = { kind: 'human', userId: 'u-sana', name: 'Sana' } as const;
+
+  it('lets whoever has sat longest start once the host has stood up', async () => {
+    db.room = { ...room, status: 'finished', seats: [{ ...sana, since: '2026-09-24T19:05:00Z' }, { ...bilal, since: '2026-09-24T19:00:00Z' }, null, null] };
+    db.game = game('finished');
+    db.user = 'u-bilal';
+    expect((await start()).status).toBe(201);
+    expect(store.startGame).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses everyone else: someone seated without the powers, and the room’s host while not seated', async () => {
+    db.room = { ...room, status: 'finished', seats: [{ ...sana, since: '2026-09-24T19:05:00Z' }, { ...bilal, since: '2026-09-24T19:00:00Z' }, null, null] };
+    db.game = game('finished');
+    for (const who of ['u-sana', 'u-abrar', 'u-zed']) {
+      db.user = who;
+      const res = await start();
+      expect(res.status, who).toBe(403);
+      expect(await res.json()).toEqual({ error: 'only the host can start' });
+    }
+    expect(store.startGame).not.toHaveBeenCalled();
+  });
+
+  it('still lets the room’s host start while seated, whoever has sat longer', async () => {
+    db.room = {
+      ...room,
+      status: 'lobby',
+      seats: [{ ...bilal, since: '2026-09-24T19:00:00Z' }, { ...room.seats[0]!, since: '2026-09-24T19:30:00Z' } as RoomRow['seats'][number], null, null],
+    };
+    db.game = null;
+    expect((await start()).status).toBe(201);
+    db.user = 'u-bilal';
+    expect((await start()).status).toBe(403);
   });
 });

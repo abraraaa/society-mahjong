@@ -18,6 +18,7 @@ const NO_GAME = "We can't find that game. Check the link with whoever sent it.";
 const GAME_OVER = "This game's finished. Head back to the room for the next one.";
 const BOT_SEAT = "A bot's playing your seat for the rest of this game. When it's over, open the invite link again to sit back in.";
 const HOST_ONLY = 'Only the host can start the game.';
+const HOST_ENDS = "Only the host can end the game. Ask them if everyone's had enough.";
 const IN_PROGRESS = "There's already a game going at this table.";
 const SEATS_CHANGED = 'Someone sat down or got up just then. Check the seats and start again.';
 const LEAVE_FROM_TABLE = "The game's started, so leave from the table instead.";
@@ -84,6 +85,7 @@ const BY_MESSAGE = new Map<string, string>(
     'no such room': NO_GAME,
     'game has no live state': NO_GAME,
     'game is over': GAME_OVER,
+    'only the host can end the game': HOST_ENDS,
     'sign in first': SIGNED_OUT,
     'something went wrong': FALLBACK,
     // hCaptcha: the guest closed the puzzle, or left it until it lapsed.

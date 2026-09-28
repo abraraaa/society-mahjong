@@ -33,7 +33,7 @@
 --
 -- Columns used, checked against the migrations:
 --   rooms        id, code, host_id, seats, created_at
---   games        id, room_id, status, started_at
+--   games        id, room_id, status, started_at, ended_how
 --   hands        game_id, result, ended_at
 --   profiles     is_guest, created_at
 
@@ -105,17 +105,26 @@ order by 1 desc;
 
 -- 4. Games finished versus abandoned.
 -- What became of each week's games:
---   finished:  played to the last hand; the final table showed.
+--   finished:  over, and the final table showed. Split by how it ended
+--              (games.ended_how):
+--     complete:  the last hand was scored;
+--     by_host:   the host ended it;
+--     idle:      nobody had played it for hours, so it ended by itself.
+--              Games that finished before the reason was recorded count
+--              in finished only, so the three can add up to less.
 --   abandoned: every human stood up, so the game closed with no result.
 --   stalled:   still marked active, but nothing has happened for a day
 --              (no hand finished in the last 24 hours, or none at all since
---              a deal more than 24 hours ago). Nobody finished it and nobody
---              left properly; a room like this stays "playing" for good.
+--              a deal more than 24 hours ago). A game nobody plays ends as
+--              idle after six hours (the daily sweep ends it), so this
+--              should stay at or near zero; one that grows means the sweep
+--              isn't running or can't end those games.
 --   in_play:   active, with something in the last 24 hours.
 with last_seen as (
   select
     g.id,
     g.status,
+    g.ended_how,
     g.started_at,
     greatest(g.started_at, (select max(hd.ended_at) from public.hands hd where hd.game_id = g.id)) as last_activity
   from public.games g
@@ -124,6 +133,9 @@ select
   date_trunc('week', started_at)::date as week,
   count(*) as games_started,
   count(*) filter (where status = 'finished') as finished,
+  count(*) filter (where status = 'finished' and ended_how = 'complete') as complete,
+  count(*) filter (where status = 'finished' and ended_how = 'host') as by_host,
+  count(*) filter (where status = 'finished' and ended_how = 'idle') as idle,
   count(*) filter (where status = 'abandoned') as abandoned,
   count(*) filter (where status = 'active' and last_activity < now() - interval '24 hours') as stalled,
   count(*) filter (where status = 'active' and last_activity >= now() - interval '24 hours') as in_play

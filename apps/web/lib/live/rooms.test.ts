@@ -19,7 +19,7 @@ vi.mock('./store', () => ({
 
 import { ROOM_OPEN_MS } from '../front-door';
 import { HttpError, SupabaseError } from './errors';
-import { joinRoom, requireRoom } from './rooms';
+import { joinRoom, requireRoom, roomSnapshot } from './rooms';
 import * as store from './store';
 
 const GAME = '6f1c2a9e-4b7d-4e3a-9c5f-2d8b0a7e1f34';
@@ -105,5 +105,29 @@ describe('a finished room, a week on', () => {
   it('lets its own people back in after the week', async () => {
     const { seated } = await joinRoom(finished(30 * ROOM_OPEN_MS), 'u-abrar', 'Abrar');
     expect(seated).toBe(false);
+  });
+});
+
+describe('who the lobby calls host', () => {
+  const abrar = { kind: 'human', userId: 'u-abrar', name: 'Abrar' } as const;
+  const bilal = { kind: 'human', userId: 'u-bilal', name: 'Bilal' } as const;
+  const sana = { kind: 'human', userId: 'u-sana', name: 'Sana' } as const;
+
+  it('is the room’s host while they’re seated, and nobody else', () => {
+    const r: RoomRow = { ...room, status: 'lobby', seats: [bilal, abrar, null, null] };
+    expect(roomSnapshot(r, 'u-abrar').isHost).toBe(true);
+    expect(roomSnapshot(r, 'u-bilal').isHost).toBe(false);
+  });
+
+  it('passes to whoever has sat longest once the host has stood up, as the table and the start button have it', () => {
+    const r: RoomRow = {
+      ...room,
+      status: 'finished',
+      seats: [{ kind: 'bot', name: 'Omar' }, { ...sana, since: '2026-09-24T19:05:00Z' }, { ...bilal, since: '2026-09-24T19:00:00Z' }, null],
+    };
+    expect(roomSnapshot(r, 'u-bilal').isHost).toBe(true);
+    expect(roomSnapshot(r, 'u-sana').isHost).toBe(false);
+    // The room's host, not seated, has no powers here until they sit down again.
+    expect(roomSnapshot(r, 'u-abrar').isHost).toBe(false);
   });
 });
