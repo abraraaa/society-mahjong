@@ -1,4 +1,4 @@
-import { analysisBot, karachi, startHand, viewFor, type GameProgress, type HandState, type Seat, type TileKind } from '@society/engine';
+import { analysisBot, karachi, publicView, startHand, viewFor, type GameProgress, type HandState, type Seat, type TileKind } from '@society/engine';
 import { EVERYONE_HERE, noteClockMove, presentHumans } from '../lib/live/absence';
 import { nextHandWait, publicGameOver } from '../lib/live/lifecycle';
 import { ownAbsence, publicSeats, type GameSnapshot, type RoomSnapshot } from '../lib/live/snapshot';
@@ -165,6 +165,16 @@ export interface Fixtures {
   readonly lobbyAgain: RoomSnapshot;
   /** The same lobby for Amna when Hana is the host. */
   readonly lobbyGuest: RoomSnapshot;
+  /** `turn`'s table for Amna while she isn't seated at it: Sana the bot's seat is hers to take over, with Sana's −3,000. */
+  readonly offer: GameSnapshot;
+  /** The same, with her own seat on offer: a bot has kept it since she left, with her +2,000. */
+  readonly offerYours: GameSnapshot;
+  /** The same, with the seat kept for her since the deal she missed on offer. */
+  readonly offerKept: GameSnapshot;
+  /** The lobby for Amna, not seated, at a game in play: Sana the bot's seat is on offer. */
+  readonly lobbyOffer: RoomSnapshot;
+  /** That lobby once she has taken Sana's seat: she's seated, so it's off to the table. */
+  readonly lobbySeated: RoomSnapshot;
 }
 
 /** The room between games: four people, Bilal not here yet, and the last game, which Bilal won. */
@@ -194,6 +204,25 @@ const LOBBY_AGAIN: RoomSnapshot = {
     ],
     me: ME,
   },
+};
+
+/** A game in play with Hana and Bilal seated and two bots; Amna, reading, isn't seated. */
+const LOBBY_OFFER: RoomSnapshot = {
+  id: ROOM_ID,
+  code: ROOM_CODE,
+  rulesetId: karachi.id,
+  status: 'playing',
+  seats: [
+    { kind: 'human', name: 'Hana' },
+    { kind: 'human', name: 'Bilal' },
+    { kind: 'bot', name: 'Sana' },
+    { kind: 'bot', name: 'Omar' },
+  ],
+  me: null,
+  isHost: false,
+  hostSeat: 0,
+  gameId: GAME_ID,
+  offer: { seat: 2, botName: 'Sana', why: 'other', score: -3000 },
 };
 
 function build(): Fixtures {
@@ -308,6 +337,32 @@ function build(): Fixtures {
     westTiles: west.tiles,
     lobbyAgain: LOBBY_AGAIN,
     lobbyGuest: { ...LOBBY_AGAIN, isHost: false, hostSeat: 2 },
+    ...offers(live.t.state, live.t.deadlines),
+    lobbyOffer: LOBBY_OFFER,
+    lobbySeated: { ...LOBBY_OFFER, seats: [LOBBY_OFFER.seats[0]!, LOBBY_OFFER.seats[1]!, { kind: 'human', name: USER_NAME }, LOBBY_OFFER.seats[3]!], me: 2, offer: null },
+  };
+}
+
+/** A table Amna isn't seated at, as the server shows it to her: the public view, with a bot's seat on offer. */
+function offers(state: HandState, deadlines: Deadlines): Pick<Fixtures, 'offer' | 'offerYours' | 'offerKept'> {
+  const unseated = (offer: NonNullable<GameSnapshot['offer']>, seats: GameSnapshot['seats']): GameSnapshot => ({
+    ...snapshot(state, 5, deadlines),
+    isHost: false,
+    seats,
+    scores: [2000, 14504, -3000, -13504],
+    me: null,
+    view: publicView(state),
+    mine: null,
+    stage: null,
+    offer,
+  });
+  const others = SEATS.map((s) => s && { kind: s.kind, name: s.name });
+  // Hamza the bot keeps Amna's seat for her.
+  const kept: GameSnapshot['seats'] = [{ kind: 'bot', name: 'Hamza', keptFor: USER_NAME }, others[1]!, others[2]!, others[3]!];
+  return {
+    offer: unseated({ seat: 2, botName: 'Sana', why: 'other', score: -3000 }, [{ kind: 'human', name: 'Hana' }, others[1]!, others[2]!, others[3]!]),
+    offerYours: unseated({ seat: 0, botName: 'Hamza', why: 'left', score: 2000 }, kept),
+    offerKept: unseated({ seat: 0, botName: 'Hamza', why: 'late', score: 2000 }, kept),
   };
 }
 

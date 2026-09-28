@@ -10,7 +10,7 @@ import { presentAtEnd } from './lifecycle';
 import { SEAT_ATTEMPTS, seatsBack } from './seating';
 import { stageFromStats, tallyHand, type ProfileStats } from './stage';
 import { NEW_TABLE, parseTableState, tableStateJson, wakeAt, type Absence, type GameOver, type TableState } from './table-state';
-import type { Deadlines, GameEndHow, LiveGame, LoggedMove, RoomStatus, Seats } from './types';
+import type { Deadlines, GameEndHow, LiveGame, LoggedMove, RoomStatus, SeatEntry, Seats } from './types';
 import { logError } from './log';
 import { cleanDisplayName, isUuid } from './validate';
 
@@ -288,6 +288,30 @@ async function seatPlayers(client: ReturnType<typeof db>, gameId: string, seats:
   }
   logError('profile_missing', new SupabaseError('seat the players', res.error), { gameId });
   must(await client.from('game_players').insert(rows.map((r) => ({ ...r, user_id: null }))), 'seat the players');
+}
+
+/**
+ * A seat changed hands at a game in play (someone left and a bot keeps it for
+ * them, or someone took a bot's seat over): the game's record of who sits
+ * where (game_players) follows, so it says who holds each seat now. Best-
+ * effort: the seat has already changed, and the game's finish writes all four
+ * rows again from who sat where at the end, so a failure is only logged, as
+ * seat_follow_failed.
+ */
+export async function followSeat(gameId: string, seat: Seat, entry: SeatEntry): Promise<void> {
+  if (entry === null) return;
+  try {
+    must(
+      await db()
+        .from('game_players')
+        .update({ user_id: entry.kind === 'human' ? entry.userId : null, kind: entry.kind, name: entry.name })
+        .eq('game_id', gameId)
+        .eq('seat', seat),
+      'follow the seat',
+    );
+  } catch (err) {
+    logError('seat_follow_failed', err, { gameId, seat });
+  }
 }
 
 /** Delete a game the deal gave up on. Best-effort: the caller is already throwing the error that matters, so a failure here is only logged. */

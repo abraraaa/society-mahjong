@@ -35,6 +35,10 @@ const leftLine = (name: string) => `${isolate(name)}'s left the table, so a bot'
 const awayLine = (name: string) => `${isolate(name)}'s away, so a bot's playing their tiles for now.`;
 /** Someone else is back from being away. */
 const backLine = (name: string) => `${isolate(name)}'s back.`;
+/** Someone sat back down in the seat a bot was keeping for them. */
+const sitBackLine = (name: string) => `${isolate(name)}'s back in their seat.`;
+/** Someone took over a seat a bot was playing. */
+const takenOverLine = (name: string, bot: string) => `${isolate(name)}'s taken over the seat ${isolate(bot)} was playing.`;
 /** For the host alone: a clock has just run out on someone for the first time. */
 const missedHint = (name: string) => `${isolate(name)}'s time ran out. If they've stepped away, tap their name to let a bot play for them.`;
 
@@ -49,7 +53,9 @@ export const WELCOME_BACK = 'Welcome back.';
  * 2. a clock ran out on the reader (who isn't away), and what the bot did,
  *    whichever phone's request found it;
  * 3. each other seat, in seat order: left (a person's seat now a bot's, named
- *    as it was, since the bot may carry another name), away, or back;
+ *    as it was, since the bot may carry another name); back in their seat (a
+ *    bot's seat now a person's, the one it was kept for) or taken over (any
+ *    other bot's seat now a person's); away; or back;
  * 4. for the host, a clock that has just run out on someone else for the
  *    first time, with what they can do about it.
  * The reader's own seat is told only in 1 and 2, and nothing is told in a
@@ -68,6 +74,10 @@ export function tableNews(prev: GameSnapshot, next: GameSnapshot): string | null
     if (seat === next.me || seat === prev.me) continue;
     const was = prev.seats[seat];
     const now = next.seats[seat];
+    if (was?.kind === 'bot' && now?.kind === 'human') {
+      lines.push(was.keptFor !== undefined && now.name === was.keptFor ? sitBackLine(now.name) : takenOverLine(now.name, was.name));
+      continue;
+    }
     if (was?.kind !== 'human') continue;
     if (now?.kind === 'bot') lines.push(leftLine(was.name));
     else if (now?.kind !== 'human') continue;

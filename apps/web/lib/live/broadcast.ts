@@ -48,6 +48,15 @@ export function gamePoke(gameId: string, version: number, extra: Record<string, 
   return { topic: `game:${gameId}`, event: 'state', payload: { version, ...extra } };
 }
 
+/**
+ * Everyone at the table learns the seats changed hands (someone took a bot's
+ * seat over, or sat back down) though the table itself may not have moved:
+ * no version, so every page looks again.
+ */
+export function seatsPoke(gameId: string): BroadcastMessage {
+  return { topic: `game:${gameId}`, event: 'state', payload: { seats: true } };
+}
+
 export function roomPoke(roomId: string, event: 'seats' | 'started', payload: Record<string, unknown>): BroadcastMessage {
   return { topic: `room:${roomId}`, event, payload };
 }

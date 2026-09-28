@@ -16,16 +16,16 @@ describe('plainError: the lines the copy calls for', () => {
     expect(api(409, 'lost the race')).toBe(line);
   });
 
-  it('a game already under way says to come back with the link once it is over', () => {
-    expect(api(409, 'this table has already started')).toBe("This game's already under way. When it's over, open this link again and you can take a seat before the next deal.");
+  it('a game already under way with no bot to take over from says every seat is taken, and to come back with the link once it is over', () => {
+    expect(api(409, 'this table has already started')).toBe("All four seats are taken in this game. When it's over, open the invite link again and you can play the next one.");
   });
 
   it('a code with no room behind it says to check it', () => {
     expect(api(404, 'no room with that code')).toBe("There's no table with that code. Check it with whoever sent you the link.");
   });
 
-  it('someone not playing is told when the invite link will seat them', () => {
-    const line = "You're not playing in this game. When it's over, open the invite link again to take a seat for the next one.";
+  it('someone not playing is told the invite link can seat them, in place of a bot', () => {
+    const line = "You're not in this game. Open the invite link again: if a bot's playing a seat, you can take over from it.";
     expect(api(403, 'not at this table')).toBe(line);
     expect(api(403, 'not seated at this table')).toBe(line);
   });
@@ -36,6 +36,15 @@ describe('plainError: the lines the copy calls for', () => {
 
   it('a seat taken in the same instant says to try again for another', () => {
     expect(api(409, 'that seat was just taken; try again')).toBe('Someone took that seat just as you did. Try again for another.');
+    expect(api(409, 'that seat is taken')).toBe('Someone took that seat just as you did. Try again for another.');
+  });
+
+  it('a seat on offer that has gone to someone else, or was never free, says to open the link again for another', () => {
+    const line = "That seat isn't free. Open the invite link again to see where you can sit.";
+    expect(api(409, 'that seat is kept for someone')).toBe(line);
+    expect(api(400, 'that is not a seat to sit in')).toBe(line);
+    expect(joinRetryLabel(new ApiError(409, 'that seat is kept for someone'))).toBe('Check again');
+    expect(joinRetryLabel(new ApiError(409, 'that seat is taken'))).toBe('Try again');
   });
 
   it('any 410 is a closed table, whatever the words, and says who can open it again', () => {
@@ -111,8 +120,8 @@ describe('plainError: the rest of what the server can say', () => {
       expect(api(m === 'action is not for your seat' ? 403 : 400, m), m).toBe(line);
   });
 
-  it('a seat a bot has taken says how to sit back in', () => {
-    expect(api(403, 'that seat is a bot')).toBe("A bot's playing your seat for the rest of this game. When it's over, open the invite link again to sit back in.");
+  it('a seat a bot has taken says how to sit back down', () => {
+    expect(api(403, 'that seat is a bot')).toBe("A bot's playing your seat now. Open the invite link again to sit back down.");
   });
 
   it('the host-only and in-progress refusals at the start', () => {

@@ -3,18 +3,21 @@ import type { CoachStage } from '../coach/types';
 import { reconcileAbsence } from './absence';
 import type { LastGame } from './final';
 import type { NextHandWait, PublicGameOver } from './lifecycle';
+import type { SeatOffer } from './seating';
 import type { Absence, AwayPlayed } from './table-state';
 import type { AwayReason, Deadlines, Move, RoomStatus, Seats } from './types';
 
 /**
  * A seat as everyone at the table sees it: who plays it, by name, and for a
  * person, whether a clock has run out on them (`missed`) or a bot is playing
- * their tiles for now (`away`). Never an id.
+ * their tiles for now (`away`); for a bot keeping the seat for someone who
+ * left or wasn't here at the deal, their name (`keptFor`). Never an id.
  */
 export interface PublicSeat {
   readonly kind: 'human' | 'bot';
   readonly name: string;
   readonly presence?: 'missed' | 'away';
+  readonly keptFor?: string;
 }
 
 /**
@@ -61,6 +64,13 @@ export interface GameSnapshot {
   readonly ended?: PublicGameOver | null;
   /** on a finished hand of a game in play, who here has tapped Next hand, who hasn't, and when the next hand starts regardless (NextHandWait); null otherwise */
   readonly nextHand?: NextHandWait | null;
+  /** for someone not seated at a game in play, a bot's seat they may take over (seating.ts seatOffer: a seat kept for them first); null otherwise */
+  readonly offer?: SeatOffer | null;
+  /**
+   * the hand index and view seq at which the caller took this seat over from a bot, when they did so during this game's hand
+   * being played; null otherwise. No bot move for this seat has a later seq (table-state.ts TakeOver). The tutor's first look.
+   */
+  readonly joinedAt?: { readonly hand: number; readonly seq: number } | null;
 }
 
 /**
@@ -84,6 +94,8 @@ export interface RoomSnapshot {
   readonly gameId: string | null;
   /** between games, how the room's latest finished game ended (final.ts lastGameFrom); null otherwise */
   readonly lastGame?: LastGame | null;
+  /** for someone not seated at the game in play, a bot's seat they may take over (seating.ts seatOffer); null otherwise */
+  readonly offer?: SeatOffer | null;
 }
 
 /** The seats as the table shows them to everyone (PublicSeat), each absence first matched to who sits there now. */
@@ -92,7 +104,8 @@ export function publicSeats(seats: Seats, a: Absence | undefined): (PublicSeat |
   return SEATS.map((seat) => {
     const s = seats[seat];
     if (!s) return null;
-    const e = s.kind === 'human' ? now?.[seat] : undefined;
+    if (s.kind === 'bot') return typeof s.keptName === 'string' ? { kind: s.kind, name: s.name, keptFor: s.keptName } : { kind: s.kind, name: s.name };
+    const e = now?.[seat];
     const presence = e?.away ? 'away' : e && e.misses > 0 ? 'missed' : null;
     return presence ? { kind: s.kind, name: s.name, presence } : { kind: s.kind, name: s.name };
   });

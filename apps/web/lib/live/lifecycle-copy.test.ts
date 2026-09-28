@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { finalStandings } from './final';
-import { HOST_LEAVE, SHARE, countdown, endLine, endSheet, hereCount, seatTag, startLabel, topLine, waitCopy, waitingForHost } from './lifecycle-copy';
+import {
+  HOST_LEAVE,
+  LEAVE,
+  NOT_HERE_HINT,
+  NO_SEAT,
+  NO_SEAT_OVER,
+  SHARE,
+  countdown,
+  endLine,
+  endSheet,
+  hereCount,
+  seatTag,
+  startLabel,
+  takeSeatCopy,
+  topLine,
+  waitCopy,
+  waitingForHost,
+} from './lifecycle-copy';
 import type { RoomSnapshot } from './snapshot';
 import type { PublicGameOver } from './lifecycle';
 
@@ -219,14 +236,20 @@ describe('the lobby', () => {
     expect(SHARE).toEqual({ line: 'Send your friends the link, or read them the code.', button: 'Send link', copied: 'Link copied' });
   });
 
-  it('labels the host’s button by the bots that will sit down, counting empty seats and bots', () => {
+  it('labels the host’s button by the bots that will sit down, counting empty seats, bots and anyone not here yet', () => {
     expect(startLabel(lobby({ status: 'lobby', seats: full }))).toBe('Start');
     expect(startLabel(lobby({ status: 'lobby', seats: [full[0], null, null, null] }))).toBe('Start, with three bots');
     expect(startLabel(lobby({ status: 'lobby', seats: [full[0], full[1], full[2], { kind: 'bot', name: 'Sana' }] }))).toBe('Start, with one bot');
     expect(startLabel(lobby({ seats: full }))).toBe('Play again, same seats');
-    expect(startLabel(lobby())).toBe('Play again, with two bots');
-    // Someone not here yet is still in their seat until kept seats arrive: no bot for them yet.
-    expect(startLabel(lobby({ seats: [full[0], { ...full[1], notHere: true }, full[2], full[3]] }))).toBe('Play again, same seats');
+    // Bilal isn't here yet, Sana's a bot and the last seat is empty: three bots sit down.
+    expect(startLabel(lobby())).toBe('Play again, with three bots');
+    // Someone not here yet gets a bot that keeps their seat for them.
+    expect(startLabel(lobby({ seats: [full[0], { ...full[1], notHere: true }, full[2], full[3]] }))).toBe('Play again, with one bot');
+    expect(startLabel(lobby({ status: 'lobby', seats: [full[0], { ...full[1], notHere: true }, null, null] }))).toBe('Start, with three bots');
+  });
+
+  it('tells the host what the start does for anyone not here yet', () => {
+    expect(NOT_HERE_HINT).toBe('Anyone not here yet gets a bot when you start, and can take their seat back when they arrive.');
   });
 
   it('tags each seat: the reader’s own, a bot, someone not here yet, and whoever has the host’s powers', () => {
@@ -258,5 +281,67 @@ describe('the lobby', () => {
     expect(topLine(table([-9000, -8000, 25000, -8000]), null, 'then')).toBe(`${I('Sana')}, a bot, finished top on +25,000.`);
     expect(topLine(table([9000, 9000, -9000, -9000]), 1, 'then')).toBe(`You and ${I('Amna')} tied for top on +9,000.`);
     expect(topLine(table([0, 0, 0, 0]), 0, 'then')).toBe('Nobody won a hand.');
+  });
+});
+
+describe('keeping seats', () => {
+  it('asks before anyone but the host leaves, and says the link sits them back down', () => {
+    expect(LEAVE).toEqual({
+      title: 'Leave the table?',
+      body: "A bot will play your seat so the others can carry on. If you change your mind, open the invite link again to sit back down. If you're the last person here, the game ends.",
+      confirmLabel: 'Leave',
+      cancelLabel: 'Stay',
+    });
+  });
+
+  it('offers someone who left their own seat back, with their points so far', () => {
+    expect(takeSeatCopy({ seat: 1, botName: 'Hamza', why: 'left', score: 14504 })).toEqual({
+      title: 'Sit back down?',
+      body: "A bot's been playing your seat since you left. Sit down and you'll carry on with its tiles, and your points so far (+14,504).",
+      confirmLabel: 'Sit back down',
+      cancelLabel: 'Not now',
+    });
+    expect(takeSeatCopy({ seat: 1, botName: 'Hamza', why: 'left', score: 0 }).body).toBe(
+      "A bot's been playing your seat since you left. Sit down and you'll carry on with its tiles.",
+    );
+  });
+
+  it('offers someone who wasn’t here at the start the seat kept for them', () => {
+    expect(takeSeatCopy({ seat: 1, botName: 'Hamza', why: 'late', score: -3000 })).toEqual({
+      title: 'Take your seat?',
+      body: "We kept your seat, and a bot's been playing it since the game started. Sit down and you'll carry on with its tiles, and its points so far (−3,000).",
+      confirmLabel: 'Take your seat',
+      cancelLabel: 'Not now',
+    });
+    expect(takeSeatCopy({ seat: 1, botName: 'Hamza', why: 'late', score: 0 }).body).toBe(
+      "We kept your seat, and a bot's been playing it since the game started. Sit down and you'll carry on with its tiles.",
+    );
+  });
+
+  it('offers anyone else a bot’s seat by the bot’s name, and says the tutor is there', () => {
+    expect(takeSeatCopy({ seat: 2, botName: 'Sana', why: 'other', score: -3000 })).toEqual({
+      title: `Take over from ${I('Sana')}?`,
+      body: `This game's under way, and a bot called ${I('Sana')} is playing one of the seats. Take over and you'll play on with its tiles and its points so far (−3,000). The tutor's there if you want help.`,
+      confirmLabel: `Take over from ${I('Sana')}`,
+      cancelLabel: 'Not now',
+    });
+    expect(takeSeatCopy({ seat: 2, botName: 'Sana', why: 'other', score: 0 }).body).toBe(
+      `This game's under way, and a bot called ${I('Sana')} is playing one of the seats. Take over and you'll play on with its tiles. The tutor's there if you want help.`,
+    );
+  });
+
+  it('says every seat is a person’s, or the game is over, to someone with no seat to take', () => {
+    expect(NO_SEAT).toEqual({
+      heading: 'All four seats are taken in this game.',
+      line: "When it's over, open the invite link again and you can play the next one.",
+      link: 'Back to the start',
+    });
+    expect(NO_SEAT_OVER).toEqual({ heading: "This game's over.", line: 'Head back to the room for the next one.', link: 'Back to the room' });
+  });
+
+  it('never meets a newcomer with a word they can’t decode', () => {
+    const offers = (['left', 'late', 'other'] as const).flatMap((why) => [0, 2000].map((score) => takeSeatCopy({ seat: 0, botName: 'Sana', why, score })));
+    const words = [LEAVE.body, NOT_HERE_HINT, NO_SEAT.heading, NO_SEAT.line, ...offers.flatMap((o) => [o.title, o.body, o.confirmLabel])].join(' ');
+    expect(words).not.toMatch(/pung|chow|kong|goulash|exchange|\bdeal\b/i);
   });
 });

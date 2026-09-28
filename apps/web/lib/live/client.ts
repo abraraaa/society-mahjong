@@ -64,6 +64,8 @@ export const api = {
   letBotPlay: (gameId: string, seat: number, sawAt: number, sawVersion: number) =>
     call<GameSnapshot>(`/api/games/${gameId}/away`, { method: 'POST', body: JSON.stringify({ seat, sawAt, sawVersion }) }),
   leaveRoom: (code: string) => call<RoomSnapshot>(`/api/rooms/${encodeURIComponent(code)}/leave`, { method: 'POST' }),
+  /** Take over a bot's seat at the game in play (the take-over screen's offer), or, if the game has ended since, join the room. */
+  sit: (code: string, seat: number, name: string) => call<RoomSnapshot>(`/api/rooms/${encodeURIComponent(code)}/sit`, { method: 'POST', body: JSON.stringify({ seat, name }) }),
 };
 
 /** The channel's own news: SUBSCRIBED each time it joins, including every rejoin after a dropped connection, and CLOSED, TIMED_OUT or CHANNEL_ERROR when it goes. */

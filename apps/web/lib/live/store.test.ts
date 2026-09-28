@@ -65,6 +65,7 @@ import {
   createRoom,
   dueGames,
   finishGame,
+  followSeat,
   gameById,
   lastFinishedGame,
   lastGameOf,
@@ -889,6 +890,7 @@ describe('saving the live table', () => {
       () => roomMembers('r-1'),
       () => lastGameOf(GAME),
       () => lastFinishedGame('r-1'),
+      () => followSeat(GAME, 1, { kind: 'bot', name: 'Hamza', heldFor: 'u-hana', keptName: 'Hana', kept: 'left' }),
     ];
     for (const run of everything) {
       answerAll(undefined, (q) => (q.target === 'games' ? newGame : q.target === 'rooms' ? [{ id: 'r-1' }] : q.target === 'rpc:commit_table' ? 4 : null));
@@ -958,6 +960,44 @@ describe('after a hand ends', () => {
       { kind: 'bot', name: 'Hamza' },
     ];
     await recordHand(bots, wonHand);
+    expect(supabase.log).toHaveLength(0);
+  });
+});
+
+describe('a seat changing hands mid-game', () => {
+  it('has the game’s record of who sits there follow it: a person with their id, a bot without one', async () => {
+    await followSeat(GAME, 1, { kind: 'human', userId: 'u-zara', name: 'Zara', since: '2026-09-28T19:30:00.000Z' });
+    await followSeat(GAME, 2, { kind: 'bot', name: 'Hamza', heldFor: 'u-hana', keptName: 'Hana', kept: 'left' });
+    expect(supabase.log).toEqual([
+      {
+        target: 'game_players',
+        steps: [
+          ['update', [{ user_id: 'u-zara', kind: 'human', name: 'Zara' }]],
+          ['eq', ['game_id', GAME]],
+          ['eq', ['seat', 1]],
+        ],
+      },
+      {
+        target: 'game_players',
+        steps: [
+          ['update', [{ user_id: null, kind: 'bot', name: 'Hamza' }]],
+          ['eq', ['game_id', GAME]],
+          ['eq', ['seat', 2]],
+        ],
+      },
+    ]);
+  });
+
+  it('never fails the request when that write doesn’t land: the finish writes every seat again, so it’s only logged', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    answerAll(() => true);
+    await expect(followSeat(GAME, 1, { kind: 'human', userId: 'u-zara', name: 'Zara' })).resolves.toBeUndefined();
+    expect(JSON.parse(spy.mock.calls[0]![0] as string)).toMatchObject({ event: 'seat_follow_failed', gameId: GAME, seat: 1 });
+    expect(spy.mock.calls[0]![0]).not.toContain('u-zara');
+  });
+
+  it('writes nothing for an empty seat', async () => {
+    await followSeat(GAME, 1, null);
     expect(supabase.log).toHaveLength(0);
   });
 });

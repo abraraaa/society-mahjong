@@ -18,7 +18,7 @@ import type { CoachStage } from '../coach/types';
 import { EVERYONE_HERE, awaySeats, isAway, markAway, markPresent, noteClockMove, noteHandEnd, notePlayed, presentUserIds, reconcileAbsence } from './absence';
 import { addHandScores, endOfGame, everyoneReady, isLastHand, voteNextHand } from './lifecycle';
 import { policyFor, presentLevels } from './policy';
-import { NEW_TABLE, sameTableState, type Absence, type TableState } from './table-state';
+import { NEW_TABLE, reconcileTook, sameTableState, withTakeOver, type Absence, type TableState } from './table-state';
 import {
   isBot,
   isClientActionType,
@@ -281,7 +281,7 @@ export interface StepInput {
   readonly levels?: readonly (CoachStage | null)[];
   /** a strict room's clocks, with `levels` */
   readonly strict?: boolean;
-  /** a change to who plays a seat (someone back, or the host handing a seat to a bot); never with an action or an end */
+  /** a change to who plays a seat (someone back, the host handing a seat to a bot, or someone who has just taken a bot's seat over); never with an action or an end */
   readonly change?: SeatChange;
   /** end the game here, before its last hand is scored: the host ending it, nobody playing it for hours, or the last person leaving; never with an action */
   readonly end?: GameEnd;
@@ -337,6 +337,12 @@ export interface StepResult extends LiveGame {
  * (judged by `version`, when given, against the host's `sawVersion`). When
  * the table still waits on the same decision, for no new person, its clock
  * keeps running (R7).
+ *
+ * Take-overs (R21). `change: took` is someone who has just taken a bot's seat
+ * over mid-game, the seats already saying so: they're here from that moment,
+ * and the table notes the hand and the state's seq as this step leaves them
+ * (`tableState.took`), for the tutor's first look. A note whose seat isn't
+ * that person's any more, or whose hand has been played, is dropped.
  *
  * Next hand (R15, R16). On a finished hand that isn't the last, a tap is a
  * vote (`tableState.ready`), and the next hand starts in the step that finds
@@ -443,7 +449,7 @@ export function step(input: StepInput): StepResult {
       const wasAway = isAway(absence, seats, change.seat);
       absence = markPresent(absence, seats, change.seat, now, saving);
       if (wasAway && live() && target?.kind === 'human') moves.push({ by: 'player', seat: change.seat, userId: target.userId, a: { type: 'back' } });
-    } else {
+    } else if (change.type === 'letBotPlay') {
       if (target?.kind !== 'human') throw new NotYourMove('a bot already plays that seat');
       // A pass never stamps a tap (R4), so a page left open answering claim windows by itself never refuses this. A tap the host
       // never saw is one saved after the table they were looking at: by version, since a tap's time is when its request began, and
@@ -457,6 +463,10 @@ export function step(input: StepInput): StepResult {
       const wasAway = isAway(absence, seats, change.seat);
       absence = markPresent(markAway(absence, seats, change.seat, 'host'), seats, change.bySeat, now, saving);
       if (!wasAway && live()) moves.push({ by: 'host', seat: change.seat, ...(host?.kind === 'human' ? { userId: host.userId } : {}), a: { type: 'away', reason: 'host' } });
+    } else {
+      // Taken over from a bot: the seats say who has it now, and they're at the table from this moment.
+      if (target?.kind !== 'human') throw new NotYourMove('a bot already plays that seat');
+      absence = markPresent(absence, seats, change.seat, now, saving);
     }
     settleNow(s);
   }
@@ -527,6 +537,15 @@ export function step(input: StepInput): StepResult {
   }
 
   if (absence !== table.absence) table = { ...table, absence };
+  // Who took a seat over, and when: as this step leaves the hand, so no bot moves for that seat after it. Kept only while it
+  // can matter, for that person in that seat during that hand.
+  const took = reconcileTook(table.took, seats, s.progress.handIndex);
+  const taker = change?.type === 'took' ? seats[change.seat] : null;
+  const tookNow = change && taker?.kind === 'human' ? withTakeOver(took, change.seat, { userId: taker.userId, hand: s.progress.handIndex, seq: s.seq }) : took;
+  if (tookNow !== table.took) {
+    const { took: _dropped, ...rest } = table;
+    table = tookNow ? { ...rest, took: tookNow } : rest;
+  }
   const dealt = s.progress.handIndex > before.progress.handIndex;
   // Anything new in the table itself or its bookkeeping is a change too: a move, the running scores, someone's absence
   // (a reset of a seat's old entry included), a vote for the next hand, or the game's end.

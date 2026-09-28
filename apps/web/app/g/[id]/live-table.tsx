@@ -8,13 +8,14 @@ import { NameGate } from '@/components/name-gate';
 import { AwayNote } from '@/components/away-note';
 import { ConfirmSheet } from '@/components/confirm-sheet';
 import { Notice } from '@/components/notice';
+import { NoSeat, TakeSeat } from '@/components/take-seat';
 import { Trouble, Waiting } from '@/components/trouble';
 import { analyseFor, coachFor, type CoachState } from '@/lib/coach';
 import { retryCanHelp } from '@/lib/front-door';
 import { ApiError, api, listen } from '@/lib/live/client';
 import { finalStandings } from '@/lib/live/final';
 import { handsPlayed } from '@/lib/live/lifecycle';
-import { HOST_LEAVE, endLine, endSheet, waitCopy } from '@/lib/live/lifecycle-copy';
+import { HOST_LEAVE, LEAVE, endLine, endSheet, waitCopy } from '@/lib/live/lifecycle-copy';
 import { plainError } from '@/lib/live/plain';
 import { IM_BACK, awaySummary, awayTitle, canLetBotPlay, letBotPlayLabel, letBotPlaySheet, seatMarks, tableNews } from '@/lib/live/presence';
 import { isPrivate, type GameSnapshot } from '@/lib/live/snapshot';
@@ -56,6 +57,9 @@ export function LiveTable({ gameId }: { gameId: string }) {
   const [sheetBusy, setSheetBusy] = useState(false);
   // "I'm back" is on its way.
   const [backing, setBacking] = useState(false);
+  // Someone not seated is taking a bot's seat over, and why that didn't work if it didn't.
+  const [taking, setTaking] = useState(false);
+  const [takeError, setTakeError] = useState<string | null>(null);
   // Remembered on this phone, so turning the tutor off survives a refresh.
   const [tutorOn, toggleTutor] = useTutorOn();
   const supabaseRef = useRef<SupabaseClient | null>(null);
@@ -196,7 +200,8 @@ export function LiveTable({ gameId }: { gameId: string }) {
   }, [inPlay, refetch]);
 
   // The room's own channel: when the host deals again after this game, everyone
-  // still on the old table follows to the new one.
+  // still on the old table follows to the new one. Joined again after taking a
+  // seat over (`attempt`), as a seated player.
   const roomId = snap?.roomId ?? null;
   useEffect(() => {
     const supabase = supabaseRef.current;
@@ -206,7 +211,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
         if (typeof p['gameId'] === 'string' && p['gameId'] !== gameId) router.replace(`/g/${p['gameId']}`);
       },
     });
-  }, [roomId, gameId, router]);
+  }, [roomId, gameId, router, attempt]);
 
   // When a deadline passes and the table has not moved, ask it to resolve the clock.
   useEffect(() => {
@@ -313,6 +318,32 @@ export function LiveTable({ gameId }: { gameId: string }) {
     );
   }
 
+  // Not seated: a bot's seat to take over, if there's one on offer, or the way to the next game.
+  if (snap && !view) {
+    if (snap.status === 'abandoned') return <Trouble title="The table has closed." message="Everyone has left this game. Host a new one whenever you like." />;
+    const offer = snap.status === 'active' ? (snap.offer ?? null) : null;
+    if (offer) {
+      const takeOver = async () => {
+        setTaking(true);
+        setTakeError(null);
+        try {
+          await api.sit(snap.roomCode, offer.seat, name);
+          // Seated now: the channels are joined again as a seated player, and the table looked at again.
+          setAttempt((n) => n + 1);
+          await refetch();
+        } catch (err) {
+          setTakeError(plainError(err));
+          // The seat may have gone to someone else: look again for another, or none.
+          void refetch();
+        } finally {
+          setTaking(false);
+        }
+      };
+      return <TakeSeat offer={offer} busy={taking} error={takeError} onTake={() => void takeOver()} />;
+    }
+    return <NoSeat over={snap.status !== 'active'} roomCode={snap.roomCode} />;
+  }
+
   if (!snap || !view || !ruleset || !coach) {
     if (error && !snap) {
       return (
@@ -333,7 +364,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
         />
       );
     }
-    return <Waiting>{snap && !view ? 'You are watching this table, not seated at it.' : 'Setting the table…'}</Waiting>;
+    return <Waiting>Setting the table…</Waiting>;
   }
 
   if (snap.status === 'abandoned') {
@@ -493,14 +524,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
             onCancel={closeSheet}
           />
         ) : (
-          <ConfirmSheet
-            title="Leave the table?"
-            body="A bot plays your seat from here, so the others can carry on. If you are the last one here, the game closes."
-            confirmLabel="Leave"
-            busy={sheetBusy}
-            onConfirm={leave}
-            onCancel={closeSheet}
-          />
+          <ConfirmSheet {...LEAVE} busy={sheetBusy} onConfirm={leave} onCancel={closeSheet} />
         ))}
       {open?.kind === 'end' && <ConfirmSheet {...endSheet(view.phase !== 'finished', handsPlayed(view))} busy={sheetBusy} onConfirm={endForEveryone} onCancel={closeSheet} />}
       {botSheet && (

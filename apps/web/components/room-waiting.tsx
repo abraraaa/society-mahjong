@@ -1,6 +1,6 @@
 import { SEATS, type Wind } from '@society/engine';
 import { finalStandings } from '@/lib/live/final';
-import { SHARE, hereCount, seatTag, startLabel, topLine, waitingForHost } from '@/lib/live/lifecycle-copy';
+import { NOT_HERE_HINT, SHARE, hereCount, seatTag, startLabel, topLine, waitingForHost } from '@/lib/live/lifecycle-copy';
 import type { RoomSnapshot } from '@/lib/live/snapshot';
 
 const WINDS: readonly Wind[] = ['E', 'S', 'W', 'N'];
@@ -8,7 +8,8 @@ const WINDS: readonly Wind[] = ['E', 'S', 'W', 'N'];
 /**
  * The room lobby, before the first game and between games: who sits where,
  * who isn't here yet, how the last game ended, the link to send, and the
- * host's button (or who everyone's waiting for).
+ * host's button (or who everyone's waiting for), with a word for the host on
+ * what the start does for anyone not here yet.
  */
 export function RoomWaiting({
   room,
@@ -45,7 +46,7 @@ export function RoomWaiting({
       'then',
     );
   return (
-    <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-between px-6 pt-[84px] pb-10">
+    <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-between gap-8 px-6 pt-[84px] pb-10">
       <div className="flex flex-col gap-7">
         <div className="flex flex-col gap-2">
           <p className="eyebrow">Room code</p>
@@ -103,9 +104,12 @@ export function RoomWaiting({
           </button>
         )}
         {room.isHost ? (
-          <button className={shareFirst ? 'btn btn-ghost btn-block' : 'btn btn-primary btn-block min-h-[52px] text-[18px]'} onClick={onStart} disabled={starting}>
-            {starting ? 'Dealing…' : startLabel(room)}
-          </button>
+          <>
+            <button className={shareFirst ? 'btn btn-ghost btn-block' : 'btn btn-primary btn-block min-h-[52px] text-[18px]'} onClick={onStart} disabled={starting}>
+              {starting ? 'Dealing…' : startLabel(room)}
+            </button>
+            {room.seats.some((s) => s?.notHere) && <p className="text-ivory-200/60 text-center text-sm">{NOT_HERE_HINT}</p>}
+          </>
         ) : (
           <p className="text-ivory-200/60 text-center text-sm">{waitingForHost(room)}</p>
         )}

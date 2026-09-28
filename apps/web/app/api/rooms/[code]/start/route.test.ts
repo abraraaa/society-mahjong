@@ -348,6 +348,23 @@ describe('POST /api/rooms/[code]/start, who’s here', () => {
     expect(store.startGame).not.toHaveBeenCalled();
   });
 
+  it('deals a bot into the seat of anyone not here, keeping it for them, and keeps a seat already kept', async () => {
+    const kept = { kind: 'bot', name: 'Omar', heldFor: 'u-zara', keptName: 'Zara', kept: 'left' } as const;
+    db.room = { ...finished(), seats: [finished().seats[0], bilal, hana, kept] };
+    db.game = game('finished');
+    // Bilal hasn't opened the link tonight; Abrar (starting) and Hana have.
+    db.members = [
+      { userId: 'u-abrar', lastSeenAt: Date.now() - HOUR },
+      { userId: 'u-bilal', lastSeenAt: Date.now() - 7 * 24 * HOUR },
+      { userId: 'u-hana', lastSeenAt: Date.now() - HOUR },
+    ];
+    expect((await start()).status).toBe(201);
+    const [, , dealt] = vi.mocked(store.startGame).mock.calls[0]!;
+    expect(dealt).toEqual([finished().seats[0], { kind: 'bot', name: 'Sana', heldFor: 'u-bilal', keptName: 'Bilal', kept: 'late' }, hana, { ...kept, kept: 'late' }]);
+    // Counted as it was dealt: two people and two bots.
+    expect(events.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'game_dealt', data: expect.objectContaining({ humans: 2, bots: 2 }) }));
+  });
+
   it('checks nobody in, and reads nobody, for a room whose game is in play or for someone not seated', async () => {
     db.room = room;
     db.game = game('active');

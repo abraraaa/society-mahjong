@@ -1,10 +1,11 @@
 import { expect, test } from '@playwright/test';
 import { SEATS } from '@society/engine';
 import { finalStandings } from '../lib/live/final';
-import { SHARE, hereCount, seatTag, startLabel, topLine, waitingForHost } from '../lib/live/lifecycle-copy';
+import { NOT_HERE_HINT, SHARE, hereCount, seatTag, startLabel, takeSeatCopy, topLine, waitingForHost } from '../lib/live/lifecycle-copy';
 import type { RoomSnapshot } from '../lib/live/snapshot';
 import { fixtures } from './fixtures';
-import { openLobby, room } from './live';
+import { GAME_ID } from './fixtures';
+import { flush, openLobby, room } from './live';
 
 /**
  * The lobby between games: who's here and who isn't yet, how the last game
@@ -28,7 +29,7 @@ function lastLine(r: RoomSnapshot): string {
 }
 
 test.describe('the lobby between games', () => {
-  test('(a) the host sees who isn’t here yet, how the last game went, the link to send and Play again', async ({ page }) => {
+  test('(a) the host sees who isn’t here yet, how the last game went, the link to send, and Play again with a bot for them', async ({ page }) => {
     const { lobbyAgain } = fixtures();
     const lobby = await openLobby(page, { join: () => room(lobbyAgain) });
 
@@ -50,7 +51,9 @@ test.describe('the lobby between games', () => {
     await expect(page.getByRole('button', { name: SHARE.button })).toBeVisible();
     const start = page.getByRole('button', { name: startLabel(lobbyAgain) });
     await expect(start).toBeVisible();
-    expect(startLabel(lobbyAgain)).toBe('Play again, same seats');
+    // Bilal isn't here yet, so a bot keeps his seat when the game starts, and the host is told so.
+    expect(startLabel(lobbyAgain)).toBe('Play again, with one bot');
+    await expect(page.getByText(NOT_HERE_HINT, { exact: true })).toBeVisible();
     // Between games Play again is the thing to do, and the link steps back to a quiet one.
     await expect(start).toHaveClass(/btn-primary/);
     await expect(page.getByRole('button', { name: SHARE.button })).not.toHaveClass(/btn-primary/);
@@ -64,6 +67,8 @@ test.describe('the lobby between games', () => {
     await expect(page.getByText(waitingForHost(lobbyGuest), { exact: true })).toBeVisible();
     expect(waitingForHost(lobbyGuest)).toBe("That game's over. Waiting for \u2068Hana\u2069 to start the next one.");
     await expect(page.getByRole('button', { name: /Play again|Start/ })).toHaveCount(0);
+    // The hint is for whoever starts the game.
+    await expect(page.getByText(NOT_HERE_HINT)).toHaveCount(0);
     await expect(page.locator('main .rounded-2xl').nth(2)).toContainText('host');
     expect(lobby.pageErrors).toEqual([]);
   });
@@ -77,6 +82,37 @@ test.describe('the lobby between games', () => {
     expect(startLabel(fresh)).toBe('Start, with three bots');
     await expect(start).toHaveClass(/btn-ghost/);
     await expect(page.getByText('Last game', { exact: true })).toHaveCount(0);
+    await expect(page.getByText(NOT_HERE_HINT)).toHaveCount(0);
+    expect(lobby.pageErrors).toEqual([]);
+  });
+});
+
+test.describe('the lobby at a game in play', () => {
+  test('(b) someone not seated is offered a bot’s seat; one tap takes it and goes to the table, and the lobby never polls', async ({ page }) => {
+    const { lobbyOffer, lobbySeated } = fixtures();
+    const lobby = await openLobby(page, { join: () => room(lobbyOffer), sit: () => room(lobbySeated) });
+    const copy = takeSeatCopy(lobbyOffer.offer!);
+    await expect(page.getByRole('heading', { name: copy.title })).toBeVisible();
+    await expect(page.getByText(copy.body)).toBeVisible();
+    // Five seconds is the lobby's poll: someone looking at a seat to take has nothing to poll for.
+    await page.waitForTimeout(5500);
+    await flush(page);
+    expect(lobby.count('room')).toBe(0);
+    await page.getByRole('button', { name: copy.confirmLabel }).click();
+    await expect(page).toHaveURL(new RegExp(`/g/${GAME_ID}$`));
+    expect(lobby.count('sit')).toBe(1);
+    expect(lobby.of('sit')[0]!.sent).toEqual({ seat: 2, name: 'Amna' });
+    expect(lobby.pageErrors).toEqual([]);
+  });
+
+  test('(b) a seat that went to someone else says so, and the lobby asks again for a fresh offer', async ({ page }) => {
+    const { lobbyOffer } = fixtures();
+    const lobby = await openLobby(page, { join: () => room(lobbyOffer), sit: () => ({ status: 409, body: { error: 'that seat is kept for someone' } }) });
+    const copy = takeSeatCopy(lobbyOffer.offer!);
+    await page.getByRole('button', { name: copy.confirmLabel }).click();
+    await expect(page.locator('main').getByRole('alert')).toHaveText("That seat isn't free. Open the invite link again to see where you can sit.");
+    await expect.poll(() => lobby.count('join')).toBe(2);
+    await expect(page.getByRole('button', { name: copy.confirmLabel })).toBeEnabled();
     expect(lobby.pageErrors).toEqual([]);
   });
 });

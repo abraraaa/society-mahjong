@@ -1118,3 +1118,36 @@ describe('away seats', () => {
     expect(replayHand(karachi, 'away-replay', { progress: first0.state.progress, dealer: first0.state.dealer }, log)).toEqual(g.state);
   });
 });
+
+describe('taking a bot’s seat over', () => {
+  const ZARA = { kind: 'human', userId: 'u-zara', name: 'Zara', since: '2026-09-28T19:30:00.000Z' } as const;
+  /** Zara has just taken Bilal the bot's seat. */
+  const taken: Seats = [seats[0], ZARA, seats[2], seats[3]];
+
+  it('notes who took the seat, in which hand and at which moment, and has them here from then', () => {
+    const g: LiveGame = { ...dealFirstHand(karachi, seats, 'took-1', policy, T0), tableState: NEW_TABLE };
+    const r = step({ game: g, ruleset: karachi, seats: taken, policy, now: T0 + 5, change: { type: 'took', seat: 1 }, version: 4 });
+    expect(r.changed).toBe(true);
+    expect(r.tableState.took).toEqual([null, { userId: 'u-zara', hand: r.state.progress.handIndex, seq: r.state.seq }, null, null]);
+    expect(r.tableState.absence[1]).toMatchObject({ userId: 'u-zara', since: ZARA.since, lastTap: T0 + 5, tapVersion: 4, misses: 0, away: null });
+    // Nothing plays for the seat in that step: it's a person's.
+    expect(r.moves.filter((m) => m.seat === 1)).toEqual([]);
+  });
+
+  it('keeps the note while that person holds the seat in that hand, and drops it once they’ve left it', () => {
+    const g: LiveGame = { ...dealFirstHand(karachi, seats, 'took-2', policy, T0), tableState: NEW_TABLE };
+    const noted = step({ game: g, ruleset: karachi, seats: taken, policy, now: T0 + 5, change: { type: 'took', seat: 1 } });
+    const still = step({ game: noted, ruleset: karachi, seats: taken, policy, now: T0 + 6 });
+    expect(still.tableState.took).toEqual(noted.tableState.took);
+    const left: Seats = [seats[0], { kind: 'bot', name: 'Hamza', heldFor: 'u-zara', keptName: 'Zara', kept: 'left' }, seats[2], seats[3]];
+    const gone = step({ game: noted, ruleset: karachi, seats: left, policy, now: T0 + 7 });
+    expect(gone.tableState.took).toBeUndefined();
+    expect(gone.changed).toBe(true);
+    expect(sameTableState(gone.tableState, noted.tableState)).toBe(false);
+  });
+
+  it('refuses a seat that isn’t a person’s', () => {
+    const g: LiveGame = { ...dealFirstHand(karachi, seats, 'took-3', policy, T0), tableState: NEW_TABLE };
+    expect(() => step({ game: g, ruleset: karachi, seats, policy, now: T0 + 5, change: { type: 'took', seat: 1 } })).toThrow(NotYourMove);
+  });
+});
