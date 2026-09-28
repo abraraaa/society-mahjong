@@ -3,7 +3,7 @@ import type { Seat } from '@society/engine';
 import { isClosedRoom } from '../front-door';
 import { recordEvent } from './events';
 import { lastGameFrom, lastGameFromOver, type LastGameRow } from './final';
-import { SEAT_ATTEMPTS, hostOf, isHere, seatJoiner, seatOffer, takeSeat, vacate, type Circle, type SeatOffer } from './seating';
+import { SEAT_ATTEMPTS, hostOf, isHere, seatJoiner, seatOffer, standUp, takeSeat, wasDisplaced, type Circle, type SeatOffer } from './seating';
 import { HttpError } from './errors';
 import { logError } from './log';
 import type { RoomSnapshot } from './snapshot';
@@ -185,8 +185,18 @@ async function playingScores(room: RoomRow): Promise<readonly number[] | null> {
  * it says what the next poll will say, and that poll checks them in. It's
  * null for a room in play (the lobby doesn't show one), or when it couldn't
  * be read for the snapshot.
+ *
+ * `how` is 'rejoin' when it's the lobby asking by itself, having found the
+ * caller without a seat between games, and not someone opening the link. It
+ * sits them down again only if their seat went to a newcomer because they
+ * weren't here (seating.ts wasDisplaced), never after they got up themselves,
+ * on this phone or another (409 'you left this table'); and then only in a
+ * free seat or a bot's (R18's steps 1 to 4), never someone else's, so two
+ * lobbies can't take each other's seats back and forth by themselves. With
+ * nowhere free it's 'this table is full', and opening the link again (the
+ * lobby's "Check again") tries every step.
  */
-export async function joinRoom(room: RoomRow, userId: string, name: string, now = Date.now()): Promise<Joined> {
+export async function joinRoom(room: RoomRow, userId: string, name: string, now = Date.now(), how: 'open' | 'rejoin' = 'open'): Promise<Joined> {
   // The circle for the snapshot, read beside the touch when it isn't already in hand.
   const checkIn = async (r: RoomRow, known: RoomCircle | Promise<RoomCircle | null> | null) => {
     const [touched, circle] = await Promise.all([touchMember(r.id, userId, now), known]);
@@ -207,11 +217,12 @@ export async function joinRoom(room: RoomRow, userId: string, name: string, now 
       const lastSeen = Math.max(Number.NEGATIVE_INFINITY, ...members.map((m) => m.lastSeenAt));
       if (!members.some((m) => m.userId === userId) && isClosedRoom(current, now, Number.isFinite(lastSeen) ? lastSeen : null)) throw new HttpError(410, 'this table has closed');
     }
+    if (how === 'rejoin' && !wasDisplaced(current.seats, userId)) throw new HttpError(409, 'you left this table');
     const joiner = { userId, name };
     let circle: RoomCircle | null = null;
     let seats = seatJoiner(current.seats, current.status, joiner, now, { hostId: current.host_id, circle });
     // Every seat is a person's (or the host's, kept): only now does it matter who's here, for whose seat they may be given.
-    if (!seats && current.seats.some((s) => s?.kind === 'human' && s.userId !== current.host_id)) {
+    if (!seats && how === 'open' && current.seats.some((s) => s?.kind === 'human' && s.userId !== current.host_id)) {
       circle = await roomCircle(current, 'decide');
       seats = seatJoiner(current.seats, current.status, joiner, now, { hostId: current.host_id, circle });
     }
@@ -298,14 +309,23 @@ export async function sitDown(room: RoomRow, userId: string, name: string, seat:
   }
 }
 
-/** Stand up from the lobby, before the first game or between games. The seat empties; the room stays open for the others. */
+/**
+ * Stand up from the lobby, before the first game or between games. The seat
+ * empties; the room stays open for the others. Any note that their seat was
+ * taken from them goes too (seating.ts standUp), even when it already has
+ * been and they have no seat to leave: so a lobby open on another phone, or a
+ * rejoin already on its way, can't sit them down again (joinRoom's rejoin).
+ */
 export async function leaveRoom(room: RoomRow, userId: string): Promise<RoomRow> {
   let current = room;
   for (let attempt = 1; ; attempt++) {
-    const me = seatOf(current.seats, userId);
-    if (me === null) return current;
-    if (current.status === 'playing') throw new HttpError(409, 'the table has started; leave it from the game');
-    const seats = vacate(current.seats, me);
+    const seats = standUp(current.seats, userId);
+    if (seats === null) return current;
+    if (current.status === 'playing') {
+      if (seatOf(current.seats, userId) !== null) throw new HttpError(409, 'the table has started; leave it from the game');
+      // Dealt since: the notes went with the deal, so there's nothing left to forget.
+      return current;
+    }
     const updated_at = await saveSeats(current.id, seats, current.updated_at);
     if (updated_at) return { ...current, seats, updated_at };
     if (attempt >= SEAT_ATTEMPTS) throw new HttpError(409, 'the table changed under you; try again');

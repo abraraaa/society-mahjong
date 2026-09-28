@@ -14,12 +14,40 @@ export interface Joiner {
 }
 
 /** A person's seat entry, stamped with when they sat (`since`, ISO), which says who has sat longest (hostOf) and starts their absence afresh. */
-function sitting(joiner: Joiner, now: number): SeatEntry {
+function sitting(joiner: Joiner, now: number): SeatEntry & { readonly kind: 'human' } {
   return { kind: 'human', userId: joiner.userId, name: joiner.name, since: new Date(now).toISOString() };
 }
 
 function withSeat(seats: Seats, seat: number, entry: SeatEntry): Seats {
   return seats.map((s, i) => (i === seat ? entry : s)) as unknown as Seats;
+}
+
+/** A person's entry without the note of whose seat they were given (`displaced`). */
+function unmarked(entry: SeatEntry): SeatEntry {
+  if (entry?.kind !== 'human' || entry.displaced === undefined) return entry;
+  const { displaced: _, ...rest } = entry;
+  return rest;
+}
+
+/**
+ * Whether someone's seat went, between games, to a person who was given it
+ * because they weren't here (R18's last step), and they haven't been seated
+ * since, nor left: what the lobby's rejoin asks before it sits them down
+ * again (rooms.ts joinRoom). Someone who got up themselves isn't.
+ */
+export function wasDisplaced(seats: Seats, userId: string): boolean {
+  return seats.some((s) => s?.kind === 'human' && s.displaced === userId);
+}
+
+/** The seats with every note that `userId` was displaced dropped (wasDisplaced), or null when there's none. */
+export function forgetDisplaced(seats: Seats, userId: string): Seats | null {
+  if (!wasDisplaced(seats, userId)) return null;
+  return seats.map((s) => (s?.kind === 'human' && s.displaced === userId ? unmarked(s) : s)) as unknown as Seats;
+}
+
+/** The seats with a person sat down in `seat` (sitting), and any note that they were displaced dropped: they have a seat again. */
+function seatPerson(seats: Seats, seat: number, entry: SeatEntry & { readonly kind: 'human' }): Seats {
+  return withSeat(forgetDisplaced(seats, entry.userId) ?? seats, seat, entry);
 }
 
 /** Whose seat a bot is keeping, or null for a bot keeping nobody's (or anything that isn't a bot). */
@@ -43,7 +71,9 @@ function heldFor(entry: SeatEntry): string | null {
  *    (nobody seen before anyone seen, then the oldest visit; ties by seat),
  *    but never the room's host's.
  * A `circle` of null means who's here isn't known yet: steps 1 to 4 only,
- * so the caller reads it only when nothing else is free.
+ * so the caller reads it only when nothing else is free. Given someone's seat
+ * at step 5, the joiner's entry notes whose it was (`displaced`), so the
+ * lobby can tell that person from someone who got up (wasDisplaced).
  * A room in play seats nobody this way (null): someone arriving then takes a
  * bot's seat over instead (takeSeat).
  *
@@ -52,7 +82,10 @@ function heldFor(entry: SeatEntry): string | null {
  */
 export function seatJoiner(seats: Seats, status: RoomStatus, joiner: Joiner, now: number, pick?: SeatPick): Seats | null {
   const at = pick ? pickSeat(seats, status, joiner, now, pick) : seats.findIndex((s) => s === null || (status === 'finished' && s.kind === 'bot'));
-  return at < 0 ? null : withSeat(seats, at, sitting(joiner, now));
+  if (at < 0) return null;
+  const was = seats[at];
+  const entry = sitting(joiner, now);
+  return seatPerson(seats, at, was?.kind === 'human' ? { ...entry, displaced: was.userId } : entry);
 }
 
 /** What seatJoiner picks by, between games: the room's host, and who's been seen at the room (null: not read, so R18's last step isn't tried). */
@@ -88,6 +121,19 @@ export function vacate(seats: Seats, seat: Seat): Seats {
   return withSeat(seats, seat, null);
 }
 
+/**
+ * Someone stands up from the lobby: their seat empties, and any note that
+ * their seat was taken from them before goes too, so a rejoin from another
+ * phone or tab, or one already on its way, can't sit them down again
+ * (rooms.ts leaveRoom). Null when they're not seated and nothing notes them.
+ */
+export function standUp(seats: Seats, userId: string): Seats | null {
+  const at = seatOf(seats, userId);
+  const forgotten = forgetDisplaced(seats, userId);
+  if (at === null) return forgotten;
+  return vacate(forgotten ?? seats, at);
+}
+
 /** The names a bot is given, so the table reads like company. */
 export const BOT_NAMES: readonly string[] = ['Bilal', 'Sana', 'Ayesha', 'Hamza', 'Zara', 'Omar'];
 
@@ -110,7 +156,9 @@ export function withBots(seats: Seats): Seats {
  * (`kept: 'late'`), so they can take it when they arrive; a bot already
  * keeping someone's seat goes on keeping it, now for someone who wasn't here
  * at the deal (`'late'`). Nobody's seat is given away. A bot keeping a seat is
- * never given its person's name, so the table can tell them apart.
+ * never given its person's name, so the table can tell them apart. Notes of
+ * whose seat someone was given between games (`displaced`) go: from the deal
+ * on, someone without a seat is offered a bot's instead.
  */
 export function seatsForDeal(seats: Seats, here: (seat: Seat) => boolean): Seats {
   const late = seats.flatMap((s, i) => (s?.kind === 'human' && !here(i as Seat) ? [s.name] : []));
@@ -119,7 +167,7 @@ export function seatsForDeal(seats: Seats, here: (seat: Seat) => boolean): Seats
   const next = () => names[n++] ?? `Bot ${n}`;
   return seats.map((s, i) => {
     if (s === null) return { kind: 'bot' as const, name: next() };
-    if (s.kind === 'human') return here(i as Seat) ? s : { kind: 'bot' as const, name: next(), heldFor: s.userId, keptName: s.name, kept: 'late' as const };
+    if (s.kind === 'human') return here(i as Seat) ? unmarked(s) : { kind: 'bot' as const, name: next(), heldFor: s.userId, keptName: s.name, kept: 'late' as const };
     return heldFor(s) === null ? s : { ...s, kept: 'late' as const };
   }) as unknown as Seats;
 }
@@ -189,7 +237,7 @@ export function takeSeat(seats: Seats, seat: Seat, joiner: Joiner, now: number):
   if (s?.kind !== 'bot') return null;
   const keeps = heldFor(s);
   if (keeps !== null && keeps !== joiner.userId && seats.some((x) => x?.kind === 'bot' && heldFor(x) === null)) return null;
-  return withSeat(seats, seat, sitting(joiner, now));
+  return seatPerson(seats, seat, sitting(joiner, now));
 }
 
 /**

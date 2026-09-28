@@ -1039,6 +1039,23 @@ describe('away seats', () => {
     expect(r.tableState.absence[ME].away).toBe('clock');
   });
 
+  it('tells someone who asked for a break in the same step as their second missed turn that it’s a break, not their clock', { timeout: 60_000 }, () => {
+    // Bilal is a person too, so the hand is still being played once a bot has my seat, and the log goes on.
+    const g0 = first(SEEDS, (seed) => driveTo(seed, two, myTurn));
+    const g: LiveGame = { ...g0, tableState: { ...NEW_TABLE, absence: noteClockMove(EVERYONE_HERE, two, { by: 'clock', seat: ME, a: { type: 'pass', seat: ME } }, true) } };
+    const r = step({ game: g, ruleset: karachi, seats: two, policy, now: late(g), change: { type: 'break', seat: ME } });
+    expect(r.state.phase).not.toBe('finished');
+    // The clock's miss is still counted and noted, then their own ask, and the note they come back to says it's a break.
+    expect(r.tableState.absence[ME]).toMatchObject({ away: 'self', misses: 2, clockMoves: 2 });
+    expect(r.moves[0]).toMatchObject({ by: 'clock', seat: ME });
+    expect(r.moves[1]).toEqual({ by: 'table', seat: ME, a: { type: 'away', reason: 'clock' } });
+    const asked = r.moves.findIndex((m) => m.by === 'player');
+    expect(asked).toBeGreaterThan(1);
+    expect(r.moves[asked]).toEqual({ by: 'player', seat: ME, userId: 'u-me', a: { type: 'away', reason: 'self' } });
+    // What the bot played for them on that miss is kept.
+    expect(r.tableState.absence[ME].played.turns).toBeGreaterThan(0);
+  });
+
   it('plays a seat on a break at once when it’s that seat’s turn, and starts a clock for whoever is next', { timeout: 60_000 }, () => {
     const g = first(SEEDS, (seed) => driveTo(seed, two, myTurn));
     const r = step({ game: g, ruleset: karachi, seats: two, policy, now: T0 + 50, change: { type: 'break', seat: ME } });

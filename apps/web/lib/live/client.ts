@@ -49,7 +49,9 @@ export type { RoomSnapshot };
 export const api = {
   createRoom: (rulesetId = 'karachi') => call<{ id: string; code: string }>('/api/rooms', { method: 'POST', body: JSON.stringify({ rulesetId }) }),
   room: (code: string) => call<RoomSnapshot>(`/api/rooms/${encodeURIComponent(code)}`),
-  join: (code: string, name: string) => call<RoomSnapshot>(`/api/rooms/${encodeURIComponent(code)}/join`, { method: 'POST', body: JSON.stringify({ name }) }),
+  /** Open the invite link: sit down, or check in. `rejoin` is the lobby asking by itself after finding its reader without a seat: only a seat taken from them is given back, never one they left. */
+  join: (code: string, name: string, rejoin = false) =>
+    call<RoomSnapshot>(`/api/rooms/${encodeURIComponent(code)}/join`, { method: 'POST', body: JSON.stringify(rejoin ? { name, rejoin: true } : { name }) }),
   start: (code: string) => call<{ gameId: string }>(`/api/rooms/${encodeURIComponent(code)}/start`, { method: 'POST' }),
   view: (gameId: string) => call<GameSnapshot>(`/api/games/${gameId}/view`),
   act: (gameId: string, action: ClientAction, expectedVersion: number) =>

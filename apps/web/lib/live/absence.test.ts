@@ -6,6 +6,7 @@ import {
   awaySeats,
   isAway,
   markAway,
+  markOnBreak,
   markPresent,
   noteClockMove,
   noteHandEnd,
@@ -142,6 +143,16 @@ describe('markPresent and markAway', () => {
     const away = markAway(EVERYONE_HERE, SEATS, 1, 'host');
     expect(away[1]).toMatchObject({ userId: 'u-bilal', away: 'host' });
     expect(markAway(away, SEATS, 1, 'clock')).toBe(away);
+  });
+
+  it('puts someone on a break, and tells a seat already away for another reason that it’s a break now, keeping what the bot played', () => {
+    expect(markOnBreak(EVERYONE_HERE, SEATS, 1)[1]).toEqual(markAway(EVERYONE_HERE, SEATS, 1, 'self')[1]);
+    const clocked = noteClockMove(noteClockMove(EVERYONE_HERE, SEATS, discard, true), SEATS, discard, true);
+    expect(clocked[1]).toMatchObject({ away: 'clock', played: { turns: 1 } });
+    expect(markOnBreak(clocked, SEATS, 1)[1]).toEqual({ ...clocked[1], away: 'self' });
+    const onBreak = markOnBreak(EVERYONE_HERE, SEATS, 1);
+    expect(markOnBreak(onBreak, SEATS, 1)).toBe(onBreak);
+    expect(markOnBreak(EVERYONE_HERE, SEATS, 2)).toBe(EVERYONE_HERE);
   });
 
   it('does nothing to a bot’s seat or an empty one', () => {

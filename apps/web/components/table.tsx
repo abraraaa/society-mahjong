@@ -86,7 +86,7 @@ export interface TableProps {
   readonly marks?: Readonly<Partial<Record<Seat, 'bot' | 'away'>>>;
   /** seats whose name is a button (the host handing a seat to a bot): what a screen reader hears, and what a tap does */
   readonly seatActions?: Readonly<Partial<Record<Seat, { readonly label: string; readonly onTap: () => void }>>>;
-  /** the note a player comes back to while a bot plays their tiles: drawn in place of the claim and pass sheets while it's set */
+  /** the note a player comes back to while a bot plays their tiles: drawn in place of the claim and pass sheets, and the result sheet, while it's set */
   readonly awayNote?: React.ReactNode;
   /** the line under the final scores, when the page knows how the game ended; "That's the game." and who finished top otherwise */
   readonly endLine?: string;
@@ -488,7 +488,7 @@ function TableInner({
         />
       )}
 
-      {(view.phase === 'finished' || gameOver) && (
+      {(view.phase === 'finished' || gameOver) && !awayNote && (
         <ResultSheet
           coach={coach}
           lesson={lesson}
@@ -507,7 +507,7 @@ function TableInner({
         />
       )}
 
-      {/* Never beside the result sheet: the page sets it only while a hand is being played. */}
+      {/* In place of the result sheet, never beside it: set on a finished hand only for someone on a break, whose Next hand waits for "I'm back". */}
       {awayNote}
 
       <TutorSheet coach={coach} clock={cardClock} />

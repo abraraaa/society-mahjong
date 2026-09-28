@@ -58,6 +58,8 @@ export function LiveTable({ gameId }: { gameId: string }) {
   const [sheetBusy, setSheetBusy] = useState(false);
   // "I'm back" is on its way.
   const [backing, setBacking] = useState(false);
+  // "Take a break" is on its way: the Leave sheet waits for it.
+  const [breaking, setBreaking] = useState(false);
   // Someone not seated is taking a bot's seat over, and why that didn't work if it didn't.
   const [taking, setTaking] = useState(false);
   const [takeError, setTakeError] = useState<string | null>(null);
@@ -416,18 +418,23 @@ export function LiveTable({ gameId }: { gameId: string }) {
     }
   };
 
-  // "Take a break", from the Leave sheet: the sheet goes at once (its Leave button never reads "One moment…" for a break),
-  // and the away note that comes back with the table says what's happening, with "I'm back".
-  const takeBreak = () => {
-    setSheet(null);
-    api
-      .takeBreak(gameId)
-      .then(take)
-      .catch((err: unknown) => {
-        // Turned down with the table attached (the game ended, say): show it as it stands.
-        if (err instanceof ApiError && err.snapshot) take(err.snapshot);
-        setNotice(plainError(err));
-      });
+  // "Take a break", from the Leave sheet. The sheet waits for the answer ("One moment…" on the break's own button), then goes,
+  // and the away note that comes back with the table says what's happening, with "I'm back". Turned down because the table kept
+  // changing, or with no answer in time, it stays up for another tap (the server has already tried again on a fresh table); with
+  // nothing left to take a break from (the game's over, or they're not seated), it goes.
+  const takeBreak = async () => {
+    setBreaking(true);
+    try {
+      take(await api.takeBreak(gameId));
+      setSheet(null);
+    } catch (err) {
+      if (err instanceof ApiError && err.snapshot) take(err.snapshot);
+      else void refetch(true);
+      setNotice(plainError(err));
+      if (err instanceof ApiError && (err.status === 403 || err.message === 'game is over')) setSheet(null);
+    } finally {
+      setBreaking(false);
+    }
   };
 
   // "I'm back": the bot hands the reader's seat back; "Welcome back." comes with the table (tableNews).
@@ -476,12 +483,13 @@ export function LiveTable({ gameId }: { gameId: string }) {
   // The sheets are for a game in play: one that ends while a sheet is open (the last hand scored, or ended by the host) closes it.
   const open = snap.status === 'active' ? sheet : null;
   const closeSheet = () => setSheet(null);
-  // While a bot plays the reader's tiles, the note says so, over the hand, until they're back: only while a hand is being
-  // played (a finished one has its result sheet), and never under another sheet.
-  const away = snap.status === 'active' && view.phase !== 'finished' && !open ? snap.mine?.away : null;
+  // While a bot plays the reader's tiles, the note says so, over the hand, until they're back, and never under another sheet. On
+  // a finished hand, the result sheet's Next hand brings back someone the clock or the host handed to a bot (R4); someone on a
+  // break chose it, so their note stays, in place of the result sheet, and it's "I'm back" that ends the break.
+  const away = snap.status === 'active' && !open && (view.phase !== 'finished' || snap.mine?.away === 'self') ? snap.mine?.away : null;
   const awayNote = away ? <AwayNote title={awayTitle(away)} detail={awaySummary(snap.mine!.played)} actionLabel={IM_BACK} busy={backing} onAction={comeBack} /> : undefined;
   // Both Leave sheets offer a break, first among their quieter answers, unless a bot is already playing for the reader.
-  const breakAnswer = snap.mine?.away ? [] : [{ label: TAKE_A_BREAK, onClick: takeBreak }];
+  const breakAnswer = snap.mine?.away ? [] : [{ label: TAKE_A_BREAK, onClick: () => void takeBreak(), busy: breaking }];
   const botSheet = open?.kind === 'bot' ? open : null;
   const botName = botSheet ? (snap.seats[botSheet.seat]?.name ?? '') : '';
 

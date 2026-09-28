@@ -73,8 +73,8 @@ const meta = (o: GameOver | null): LiveMeta => ({
   seq: 99,
 });
 
-function join(): Promise<Response> {
-  const req = new Request('https://societymahjong.app/api/rooms/ABCD/join', { method: 'POST', body: JSON.stringify({ name: 'Zara' }) }) as unknown as NextRequest;
+function join(extra: Record<string, unknown> = {}): Promise<Response> {
+  const req = new Request('https://societymahjong.app/api/rooms/ABCD/join', { method: 'POST', body: JSON.stringify({ name: 'Zara', ...extra }) }) as unknown as NextRequest;
   return POST(req, { params: Promise.resolve({ code: 'ABCD' }) });
 }
 
@@ -194,7 +194,7 @@ describe('POST /api/rooms/[code]/join, counted for the funnel', () => {
     const res = await join();
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ me: 3 });
-    expect(vi.mocked(store.saveSeats).mock.calls[0]![1][3]).toMatchObject({ kind: 'human', userId: 'u-zara' });
+    expect(vi.mocked(store.saveSeats).mock.calls[0]![1][3]).toMatchObject({ kind: 'human', userId: 'u-zara', displaced: 'u-d' });
     expect(events.recordEvent).toHaveBeenCalledWith({ type: 'seat_taken', roomId: 'r-1', userId: 'u-zara', data: { how: 'displaced', status: 'lobby' } });
   });
 
@@ -268,5 +268,43 @@ describe('POST /api/rooms/[code]/join, who’s here', () => {
     });
     expect(JSON.stringify(snap)).not.toContain('u-');
     expect(store.saveSeats).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/rooms/[code]/join, the lobby asking by itself (rejoin)', () => {
+  const b = { kind: 'human', userId: 'u-b', name: 'B' } as const;
+  const lobby = (seats: RoomRow['seats']): RoomRow => ({ ...room, status: 'lobby', current_game_id: null, seats });
+
+  it('refuses someone who got up, on another phone or tab, with no note that their seat was taken: nothing written, nothing counted', async () => {
+    db.room = lobby([room.seats[0], b, null, null]);
+    const res = await join({ rejoin: true });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'you left this table' });
+    expect(store.saveSeats).not.toHaveBeenCalled();
+    expect(events.recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('sits someone whose seat went to a newcomer down again in a free seat, forgetting the note, and counts it as a join', async () => {
+    db.room = lobby([room.seats[0], { ...b, displaced: 'u-zara' }, null, null]);
+    const res = await join({ rejoin: true });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ me: 2 });
+    expect(vi.mocked(store.saveSeats).mock.calls[0]![1]).toEqual([room.seats[0], b, expect.objectContaining({ userId: 'u-zara' }), null]);
+    expect(events.recordEvent).toHaveBeenCalledWith({ type: 'seat_taken', roomId: 'r-1', userId: 'u-zara', data: { how: 'join', status: 'lobby' } });
+  });
+
+  it('never takes someone else’s seat for them, even one who isn’t here: the table is full to a rejoin', async () => {
+    db.room = lobby([room.seats[0], { ...b, displaced: 'u-zara' }, { kind: 'human', userId: 'u-c', name: 'C' }, { kind: 'human', userId: 'u-d', name: 'D' }]);
+    const res = await join({ rejoin: true });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'this table is full' });
+    expect(store.roomMembers).not.toHaveBeenCalled();
+    expect(store.saveSeats).not.toHaveBeenCalled();
+  });
+
+  it('takes anything but `rejoin: true` as opening the link', async () => {
+    db.room = lobby([room.seats[0], b, null, null]);
+    expect((await join({ rejoin: 'yes' })).status).toBe(200);
+    expect(store.saveSeats).toHaveBeenCalledTimes(1);
   });
 });

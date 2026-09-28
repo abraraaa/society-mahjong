@@ -8,7 +8,7 @@ import { TakeSeat } from '@/components/take-seat';
 import { Trouble, Waiting } from '@/components/trouble';
 import { retryCanHelp } from '@/lib/front-door';
 import { ApiError, api, listen, type RoomSnapshot } from '@/lib/live/client';
-import { joinRetryLabel, plainError } from '@/lib/live/plain';
+import { joinRetryLabel, joinTroubleTitle, plainError } from '@/lib/live/plain';
 import { NeedsCaptcha, ensureSession } from '@/lib/supabase/session';
 import { useGuestName } from '@/lib/supabase/use-guest-name';
 
@@ -32,6 +32,8 @@ export function RoomLobby({ code }: { code: string }) {
   const [deadEnd, setDeadEnd] = useState(false);
   // A game under way or a full table: the button checks again rather than promising another go will work.
   const [retryLabel, setRetryLabel] = useState('Try again');
+  // The heading over it, when "That didn't work." would be wrong (they got up on another phone or tab).
+  const [troubleTitle, setTroubleTitle] = useState<string | undefined>(undefined);
   const [attempt, setAttempt] = useState(0);
   const [starting, setStarting] = useState(false);
   // The link went to the clipboard, on a phone with no share sheet: the button says so.
@@ -44,6 +46,14 @@ export function RoomLobby({ code }: { code: string }) {
   const leavingRef = useRef(false);
 
   const goToGame = useCallback((gameId: string) => router.replace(`/g/${gameId}`), [router]);
+  // A join that didn't work: why, whether another go can help, and what its button says.
+  const failJoin = useCallback((err: unknown) => {
+    setRoom(null);
+    setError(plainError(err));
+    setDeadEnd(!retryCanHelp(err));
+    setRetryLabel(joinRetryLabel(err));
+    setTroubleTitle(joinTroubleTitle(err));
+  }, []);
 
   // Join once we have a name.
   useEffect(() => {
@@ -61,23 +71,21 @@ export function RoomLobby({ code }: { code: string }) {
       } catch (err) {
         if (cancelled) return;
         if (err instanceof NeedsCaptcha) askAgain();
-        else {
-          setError(plainError(err));
-          setDeadEnd(!retryCanHelp(err));
-          setRetryLabel(joinRetryLabel(err));
-        }
+        else failJoin(err);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [code, name, captcha, goToGame, attempt, askAgain]);
+  }, [code, name, captcha, goToGame, attempt, askAgain, failJoin]);
 
   // Live seat changes and the start signal, with a poll as the fallback: for someone seated. Someone looking at a seat to take
   // over has nothing to wait for, and the lobby's poll is for its own people.
-  // Someone whose seat has gone between games (a newcomer's join read them as not here a moment before their check-in landed)
-  // is sat down again, as opening the link would do: a free seat, a bot's, or another regular's who isn't here, else the full
-  // line and a way to check again. The poll says so with a refusal (not at this table) or, for the host, a lobby without them.
+  // Someone found without a seat between games is asked about once, by the server, which knows why (joinRoom's rejoin). If a
+  // newcomer was given their seat (their join read them as not here a moment before their check-in landed), they're sat down in
+  // a free seat or a bot's, else shown the full line and a way to check again, which is opening the link. If they got up, on
+  // another phone or tab, or in a Leave that crossed this ask, it stays that way: "You've left this table", and a way to sit back
+  // down. The poll says they're unseated with a refusal (not at this table) or, for the host, a lobby without them.
   const seated = room !== null && room.me !== null;
   useEffect(() => {
     const supabase = supabaseRef.current;
@@ -87,16 +95,15 @@ export function RoomLobby({ code }: { code: string }) {
       if (rejoining || leavingRef.current) return;
       rejoining = true;
       api
-        .join(code, name)
+        .join(code, name, true)
         .then((snap) => {
+          // Leave was tapped here meanwhile: that's the answer, whatever this one says.
+          if (leavingRef.current) return;
           setRoom(snap);
           if (snap.status === 'playing' && snap.gameId && snap.me !== null) goToGame(snap.gameId);
         })
         .catch((e: unknown) => {
-          setRoom(null);
-          setError(plainError(e));
-          setDeadEnd(!retryCanHelp(e));
-          setRetryLabel(joinRetryLabel(e));
+          if (!leavingRef.current) failJoin(e);
         })
         .finally(() => {
           rejoining = false;
@@ -124,7 +131,7 @@ export function RoomLobby({ code }: { code: string }) {
     };
     // room.id is stable once set; re-subscribing on every seat change would drop messages.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room?.id, seated, code, name, goToGame]);
+  }, [room?.id, seated, code, name, goToGame, failJoin]);
 
   if (!name) {
     return (
@@ -143,6 +150,7 @@ export function RoomLobby({ code }: { code: string }) {
     if (error) {
       return (
         <Trouble
+          {...(troubleTitle ? { title: troubleTitle } : {})}
           message={error}
           retryLabel={retryLabel}
           onRetry={
@@ -150,6 +158,7 @@ export function RoomLobby({ code }: { code: string }) {
               ? undefined
               : () => {
                   setError(null);
+                  setTroubleTitle(undefined);
                   // A captcha token is spent once it's been tried; with no session yet, a retry goes back to the gate for a fresh one.
                   setCaptcha(null);
                   setAttempt((n) => n + 1);
@@ -178,15 +187,7 @@ export function RoomLobby({ code }: { code: string }) {
       } catch (err) {
         setTakeError(plainError(err));
         setTaking(false);
-        api
-          .join(code, name)
-          .then(setRoom)
-          .catch((e: unknown) => {
-            setRoom(null);
-            setError(plainError(e));
-            setDeadEnd(!retryCanHelp(e));
-            setRetryLabel(joinRetryLabel(e));
-          });
+        api.join(code, name).then(setRoom).catch(failJoin);
       }
     };
     return <TakeSeat offer={offer} busy={taking} error={takeError} onTake={() => void takeOver()} />;

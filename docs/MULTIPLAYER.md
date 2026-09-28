@@ -108,9 +108,20 @@ creates it, and the server does everything else with the service role.
    a newcomer never takes the host's seat, kept or not. Someone whose seat
    was given away like that and comes back before the start is seated the
    same way; only when every other seat is the host's or someone here's are
-   they told the table is full. That includes someone who still has the
-   lobby open when it happens: its poll finds them unseated and sits them
-   down again, as opening the link would. Only what a newcomer's seat rests
+   they told the table is full. The newcomer's seat notes whose it was
+   (`displaced` on their seat entry, dropped once that person is seated
+   again or leaves, and at the deal), which is how the server tells a seat
+   taken from someone apart from a seat someone got up from. Someone who
+   still has the lobby open when their seat goes finds out from its poll,
+   and the lobby asks the server once (`POST .../join` with `rejoin: true`):
+   with that note it sits them in a free seat or a bot's, never anyone
+   else's, so two lobbies can't take each other's seats back and forth by
+   themselves; with nowhere free they're told the table is full, and
+   "Check again" is opening the link, which tries every step. Without the
+   note they got up themselves, on another phone or tab, or in a Leave that
+   crossed the ask (a Leave with no seat left to leave still drops the
+   note): the lobby says "You've left this table." and offers "Sit back
+   down", and nothing seats them by itself. Only what a newcomer's seat rests
    on is read: who's been seen at the room only when its own writes say
    it's been quiet for six weeks, and who's here only when every other seat
    is a person's. Someone who opens the link once a game has started is
@@ -485,16 +496,24 @@ opts into "strict" only gets the shorter clocks (7 s claims for everyone,
 30 s turns).
 
 **Take a break.** Anyone seated can step away on purpose: "Take a break",
-a quiet button in their Leave sheet, makes their seat away at once (reason
+a quiet button in their Leave sheet, makes their seat away (reason
 `self`, noted in the hand's log as their own move), with no sheet of its
-own. Their table then shows the same panel, headed "You're taking a break,
-so a bot's playing your tiles for now.", and "I'm back" (or any move but a
-pass, or a Next hand tap) ends it; everyone else sees them away, as above.
-A break is not a tap: it stamps nothing the host's hand-over reads. It
-isn't offered to someone a bot is already playing for, and one that
-arrives for a seat already away changes nothing. Taken between hands, it
-means the next hand doesn't wait for them. While the host is on a break,
-their powers pass on, as for any away host.
+own. The Leave sheet waits for the answer ("One moment…" on the break's
+button), then goes; if the table kept changing under it (three lost
+tries), or no answer came, it stays up for another tap. Their table then
+shows the same panel, headed "You're taking a break, so a bot's playing
+your tiles for now.", and "I'm back" (or any move but a pass) ends it;
+everyone else sees them away, as above. Unlike the other reasons, the panel
+stays on a finished hand, in place of the result sheet, so a Next hand tap
+can't end a break without a word: it's "I'm back" that brings the result
+sheet, and its Next hand, back. A break is not a tap: it stamps nothing the
+host's hand-over reads. It isn't offered to someone a bot is already
+playing for, and one that arrives for a seat that was already away when it
+came changes nothing; one that arrives in the same step as the seat's
+second missed clock is a break, not the clock (both are in the log, the
+clock's first). Taken between hands (from a Leave sheet still open as the
+hand ended), it means the next hand doesn't wait for them. While the host
+is on a break, their powers pass on, as for any away host.
 
 ### Reconnect and presence
 

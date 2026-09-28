@@ -1,6 +1,7 @@
 import { expect, test, type Locator } from '@playwright/test';
 import { signed } from '../lib/ledger';
 import { HOST_LEAVE, LEAVE, TAKE_A_BREAK } from '../lib/live/lifecycle-copy';
+import { plainError } from '../lib/live/plain';
 import { IM_BACK, WELCOME_BACK, awaySummary, awayTitle, clockMoveNotice, letBotPlayLabel, letBotPlaySheet, tableNews } from '../lib/live/presence';
 import type { GameSnapshot } from '../lib/live/snapshot';
 import { POLL_MS } from '../lib/table-sync';
@@ -273,7 +274,7 @@ test.describe('bots and people at the table', () => {
     await expect(dialog.getByRole('button')).toHaveText([HOST_LEAVE.leave, TAKE_A_BREAK, HOST_LEAVE.end, HOST_LEAVE.stay]);
     await dialog.getByRole('button', { name: TAKE_A_BREAK }).click();
     broke = true;
-    // The sheet goes at once, and the note comes with the table.
+    // The sheet goes once the break has landed, and the note comes with the table.
     await expect(page.getByRole('dialog')).toHaveCount(0);
     const note = page.getByRole('region', { name: awayTitle('self') });
     await expect(note).toBeVisible();
@@ -284,6 +285,61 @@ test.describe('bots and people at the table', () => {
     // Nobody leaves: the break is all it sent.
     await flush(page);
     expect(t.count('away')).toBe(1);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(f) the Leave sheet waits for the break, saying so on the break’s own button, and stays up for another tap when the table kept changing', async ({ page }) => {
+    const fx = fixtures();
+    const lost = { status: 409, message: 'the table changed under you; try again' };
+    const t = await openTable(page, {
+      view: () => ok(fx.turn),
+      away: (_sent, n) => (n === 1 ? { status: lost.status, body: { error: lost.message } } : n === 2 ? 'hold' : ok(fx.onBreak)),
+    });
+    await t.stage().getByRole('button', { name: 'Leave' }).click();
+    const dialog = page.getByRole('dialog', { name: HOST_LEAVE.title });
+    await dialog.getByRole('button', { name: TAKE_A_BREAK }).click();
+    // Three lost commits on the server: told why, and the sheet is still there for another go.
+    await expect(page.getByText(plainError(lost))).toBeVisible();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('button')).toHaveText([HOST_LEAVE.leave, TAKE_A_BREAK, HOST_LEAVE.end, HOST_LEAVE.stay]);
+    // While the next one is on its way, its own button says so and nothing else can be tapped; Leave never reads "One moment…".
+    await dialog.getByRole('button', { name: TAKE_A_BREAK }).click();
+    await expect(dialog.getByRole('button')).toHaveText([HOST_LEAVE.leave, 'One moment…', HOST_LEAVE.end, HOST_LEAVE.stay]);
+    for (const b of await dialog.getByRole('button').all()) await expect(b).toBeDisabled();
+    expect(t.count('away')).toBe(2);
+    expect(t.count('act')).toBe(0);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(f) a break between hands shows its note in place of the result sheet, so Next hand can’t end it without a word; "I’m back" brings the sheet back', async ({ page }) => {
+    const fx = fixtures();
+    expect(fx.breakBetween.view.phase).toBe('finished');
+    expect(fx.breakBetween.mine?.away).toBe('self');
+    let broke = false;
+    // The Leave sheet is open as the hand ends (the result sheet's scrim hides the Leave chip, but a sheet already open stays up
+    // over it), so the break lands on a finished hand.
+    const t = await openTable(page, {
+      view: () => ok(broke ? fx.breakBetween : fx.turn),
+      away: () => ok(fx.breakBetween),
+      back: () => ok(fx.breakBetweenBack),
+    });
+    const next = page.getByRole('button', { name: 'Next hand' });
+    await t.stage().getByRole('button', { name: 'Leave' }).click();
+    await page.getByRole('dialog', { name: HOST_LEAVE.title }).getByRole('button', { name: TAKE_A_BREAK }).click();
+    broke = true;
+    const note = page.getByRole('region', { name: awayTitle('self') });
+    await expect(note).toBeVisible();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    // No result sheet under it, so no Next hand to tap by mistake: it's "I'm back" that ends the break.
+    await expect(next).toHaveCount(0);
+    await expect(page.locator('.sheet')).toHaveCount(1);
+    await note.getByRole('button', { name: IM_BACK }).click();
+    await expect(note).toHaveCount(0);
+    await expect(next).toBeVisible();
+    expect(t.of('away').map((c) => c.sent)).toEqual([{ self: true }]);
+    expect(t.count('back')).toBe(1);
+    // Nothing voted for the next hand along the way.
+    expect(t.count('act')).toBe(0);
     expect(t.pageErrors).toEqual([]);
   });
 
