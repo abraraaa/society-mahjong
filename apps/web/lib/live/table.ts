@@ -230,7 +230,7 @@ export interface StepInput {
   readonly seed?: string;
   /** how the bots in empty seats play (policy.ts emptySeatBots); sharp when omitted */
   readonly bots?: 'sharp' | 'gentle';
-  /** end the game here, before its last hand is scored (the last person leaving); never with an action */
+  /** end the game here, before its last hand is scored: the host ending it, nobody playing it for hours, or the last person leaving; never with an action */
   readonly end?: GameEnd;
 }
 
@@ -270,9 +270,11 @@ export interface StepResult extends LiveGame {
  *
  * The game ends in the step that ends it (R12), with `tableState.over` set:
  * when its last hand is scored, however that happened (a move, a clock, the
- * bots), with no tap needed; or on `end`. From then on every action and end
- * is refused with GameIsOver, a step with neither changes nothing, and no
- * clock runs.
+ * bots), with no tap needed; or on `end` (the host, six idle hours, or the
+ * last person leaving). An end mid-hand leaves that hand unfinished: it
+ * doesn't count, no points move, and its log gets one note saying who ended
+ * it. From then on every action and end is refused with GameIsOver, a step
+ * with neither changes nothing, and no clock runs.
  */
 export function step(input: StepInput): StepResult {
   const { ruleset, seats, policy, now } = input;
@@ -317,7 +319,10 @@ export function step(input: StepInput): StepResult {
   if (input.end) {
     // A clock that ran out above may have scored the last hand already, and a game ends only once.
     if (!table.over) {
-      const { how, by } = input.end;
+      const { by } = input.end;
+      // An end that finds the last hand scored (one saved before the natural end existed) records the game as played out;
+      // everyone leaving is still an abandon, with no final table.
+      const how = input.end.how === 'abandoned' ? 'abandoned' : isLastHand(s, ruleset) ? 'complete' : input.end.how;
       table = { ...table, over: endOfGame(how, s, table, seats, by, now) };
       // Logged only on a live hand, so its log says why nobody moved after this; a finished hand's log is complete.
       if (s.phase !== 'finished') moves.push({ by: by ? 'host' : 'table', ...(by ? { userId: by.userId } : {}), a: { type: 'endGame', how } });

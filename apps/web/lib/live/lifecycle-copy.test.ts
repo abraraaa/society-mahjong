@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { finalStandings } from './final';
-import { endLine, topLine } from './lifecycle-copy';
+import { HOST_LEAVE, endLine, endSheet, topLine } from './lifecycle-copy';
 import type { PublicGameOver } from './lifecycle';
 
 /**
@@ -87,5 +87,50 @@ describe('endLine', () => {
     expect(endLine(ended('idle', 5), BILAL_TOP, 0)).toBe(`This game ended after five hands, because nobody had played for a while. ${top}`);
     expect(endLine(ended('idle', 1), BILAL_TOP, 0)).toBe(`This game ended after one hand, because nobody had played for a while. ${top}`);
     expect(endLine(ended('idle', 0), NOBODY, 0)).toBe('This game ended before any hands finished, because nobody had played for a while.');
+  });
+});
+
+describe('endSheet', () => {
+  it('from the result sheet, when every hand so far has counted', () => {
+    expect(endSheet(false, 2)).toEqual({
+      title: 'End the game here?',
+      body: "Everyone will see the final scores from the two hands you've played.",
+      confirmLabel: 'End the game',
+      cancelLabel: 'Keep playing',
+    });
+    expect(endSheet(false, 1).body).toBe("Everyone will see the final scores from the one hand you've played.");
+    expect(endSheet(false, 12).body).toBe("Everyone will see the final scores from the 12 hands you've played.");
+  });
+
+  it('mid-hand, when the hand being played won’t count', () => {
+    expect(endSheet(true, 5)).toEqual({
+      title: 'End the game now?',
+      body: "This hand won't count. Everyone will see the final scores from the five hands you've finished.",
+      confirmLabel: 'End the game',
+      cancelLabel: 'Keep playing',
+    });
+    expect(endSheet(true, 1).body).toBe("This hand won't count. Everyone will see the final scores from the one hand you've finished.");
+    expect(endSheet(true, 15).body).toBe("This hand won't count. Everyone will see the final scores from the 15 hands you've finished.");
+  });
+
+  it('mid-hand before any hand has finished', () => {
+    expect(endSheet(true, 0)).toEqual({
+      title: 'End the game now?',
+      body: 'No hands have finished yet, so nobody has any points.',
+      confirmLabel: 'End the game',
+      cancelLabel: 'Keep playing',
+    });
+  });
+});
+
+describe('HOST_LEAVE', () => {
+  it('offers the host leaving, ending the game for everyone, or staying', () => {
+    expect(HOST_LEAVE).toEqual({
+      title: 'Leave the table?',
+      body: "A bot will play your seat so the others can carry on, and someone still here can start the next game. Or, if everyone's done, end the game for the whole table.",
+      leave: 'Leave',
+      end: 'End the game for everyone',
+      stay: 'Stay',
+    });
   });
 });

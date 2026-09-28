@@ -68,6 +68,8 @@ export interface TableProps {
   readonly marks?: Readonly<Partial<Record<Seat, 'bot' | 'away'>>>;
   /** the line under the final scores, when the page knows how the game ended; "That's the game." and who finished top otherwise */
   readonly endLine?: string;
+  /** the host ends the game here, from the result sheet: shown only between hands of a game still in play; the page asks first */
+  readonly onEndGame?: () => void;
 }
 
 /** Under this much time left, the clock turns brass and pulses. */
@@ -112,6 +114,7 @@ function TableInner({
   busy = false,
   marks,
   endLine,
+  onEndGame,
 }: TableProps) {
   const ME = view.me;
   const openTerm = useOpenTerm();
@@ -435,6 +438,7 @@ function TableInner({
           busy={busy}
           marks={marks}
           endLine={endLine}
+          onEndGame={gameOver ? undefined : onEndGame}
         />
       )}
     </>
@@ -520,6 +524,7 @@ function ResultSheet({
   busy,
   marks,
   endLine,
+  onEndGame,
 }: {
   coach: CoachState;
   gameOver: boolean;
@@ -531,6 +536,7 @@ function ResultSheet({
   scores: Scores;
   marks?: Readonly<Partial<Record<Seat, 'bot' | 'away'>>> | undefined;
   endLine?: string | undefined;
+  onEndGame?: (() => void) | undefined;
 }) {
   const outcome = coach.outcome;
   const deltas = handDeltas(view.result);
@@ -597,9 +603,18 @@ function ResultSheet({
             ))}
           </div>
         )}
-        <button className="btn btn-primary btn-block mt-4" disabled={busy} onClick={onNext}>
-          {gameOver ? (nextLabel ?? 'Play again') : 'Next hand'}
-        </button>
+        {/* A phone lying down has no height to spare (the sheet already reaches its top), so there the host's End shares a row
+            with Next hand rather than pushing the hand's title off the screen. */}
+        <div className="mt-4 flex flex-col gap-2 [@media(orientation:landscape)_and_(height<32rem)]:flex-row">
+          <button className="btn btn-primary btn-block" disabled={busy} onClick={onNext}>
+            {gameOver ? (nextLabel ?? 'Play again') : 'Next hand'}
+          </button>
+          {onEndGame && (
+            <button className="btn btn-quiet btn-block" disabled={busy} onClick={onEndGame}>
+              End the game here
+            </button>
+          )}
+        </div>
       </div>
     </>
   );

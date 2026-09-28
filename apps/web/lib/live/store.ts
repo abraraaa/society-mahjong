@@ -211,7 +211,7 @@ export interface LiveMeta {
 
 /**
  * A live table's bookkeeping, for a room route that needs to know whether its
- * game is over (or, later, idle) without loading every seat's tiles: the
+ * game is over, or idle, without loading every seat's tiles: the
  * state is the biggest column, so only two small paths into it are read.
  * Null when the game has no live table.
  */
@@ -386,7 +386,9 @@ async function closeRoom(client: ReturnType<typeof db>, gameId: string, roomId: 
  *    partial index live_state_wake_at serves;
  * 2. only if that left room, active games with no wake time at all, least
  *    recently saved first: a table last saved before 0005 or by older code,
- *    or a finished hand waiting for someone to deal the next.
+ *    or a game whose end is saved but whose finish didn't all land. (A
+ *    finished hand waiting for someone to deal the next has a wake time: the
+ *    moment it would end as idle.)
  * Due tables come first, so however many tables are parked, they can never
  * crowd out one whose clock has run out. The status filter matters: a
  * finished or abandoned game keeps its live_state row, and one left with a

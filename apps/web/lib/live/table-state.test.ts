@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { NEW_TABLE, TABLE_STATE_V, lastActed, parseTableState, sameTableState, tableStateJson, wakeAt, withLegacyScores, type GameOver, type TableState } from './table-state';
+import { STALE_GAME_MS } from './lifecycle';
 import type { Seats } from './types';
 
 const T0 = 1_700_000_000_000;
@@ -164,11 +165,18 @@ describe('wakeAt', () => {
     expect(at(T0 + 20_000, T0 + 90_000)).toBe(T0 + 20_000);
   });
 
-  it('is null when nothing is waiting on anyone', () => {
-    expect(at(null, null)).toBeNull();
+  it('is when the game would end as idle, six hours after a person last moved it, when no clock is running', () => {
+    expect(at(null, null)).toBe(T0 + STALE_GAME_MS);
   });
 
-  it('is null once the game is over, whatever the clocks say', () => {
+  it('is the idle end when that comes before a clock, as for a table read long after its last move', () => {
+    const stalled = wakeAt({ deadlines: { claim: null, turn: T0 + 90_000 }, table: NEW_TABLE, actedAt: T0 - STALE_GAME_MS });
+    expect(stalled).toBe(T0);
+    expect(wakeAt({ deadlines: { claim: null, turn: T0 + STALE_GAME_MS + 1 }, table: NEW_TABLE, actedAt: T0 })).toBe(T0 + STALE_GAME_MS);
+  });
+
+  it('is null once the game is over, whatever the clocks or the last move say', () => {
     expect(wakeAt({ deadlines: { claim: T0 + 20_000, turn: T0 + 90_000 }, table: { ...NEW_TABLE, over: OVER }, actedAt: T0 })).toBeNull();
+    expect(wakeAt({ deadlines: { claim: null, turn: null }, table: { ...NEW_TABLE, over: OVER }, actedAt: T0 })).toBeNull();
   });
 });

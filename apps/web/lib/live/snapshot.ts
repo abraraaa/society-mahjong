@@ -13,7 +13,7 @@ export interface GameSnapshot {
   readonly gameId: string;
   readonly roomId: string;
   readonly roomCode: string;
-  /** the room's host: the one who can deal again when the game is over (for a game that has ended, only if they were at the table at the end) */
+  /** the caller has the host's powers (seating.ts hostOf: the room's host while seated, else whoever has sat longest): they can end the game, and deal again once it's over; for a game that has ended, whoever had them at the end */
   readonly isHost: boolean;
   readonly rulesetId: string;
   readonly version: number;

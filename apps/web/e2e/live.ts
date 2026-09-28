@@ -31,7 +31,7 @@ export interface ActBody {
 }
 
 export interface Call {
-  readonly kind: 'view' | 'act' | 'tick';
+  readonly kind: 'view' | 'act' | 'tick' | 'end';
   /** 1-based, per kind */
   readonly n: number;
   readonly body: ActBody | null;
@@ -41,6 +41,8 @@ export interface Call {
 export interface GameRoutes {
   readonly view: (n: number) => Reply;
   readonly act?: (body: ActBody, n: number) => Reply;
+  /** the host's End the game; a 500 when the test gives none */
+  readonly end?: (n: number) => Reply;
 }
 
 const b64url = (s: string) => Buffer.from(s).toString('base64url');
@@ -217,6 +219,11 @@ export async function openTable(page: Page, routes: GameRoutes, opts: { holdGame
   await page.route(`**/api/games/${GAME_ID}/tick`, async (route) => {
     const call = log('tick', route, null);
     const reply = t.routes.view(0);
+    if (reply !== 'hold') await answer(route, reply);
+  });
+  await page.route(`**/api/games/${GAME_ID}/end`, async (route) => {
+    const call = log('end', route, null);
+    const reply = t.routes.end ? t.routes.end(call.n) : { status: 500, body: { error: 'something went wrong' } };
     if (reply !== 'hold') await answer(route, reply);
   });
 

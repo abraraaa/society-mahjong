@@ -5,6 +5,7 @@ import type { HandWrite, TableWrite } from './hand-log';
 import { dealFirstHand, deadlinesFor, settle, type StepResult } from './table';
 import type { GameOver, TableState } from './table-state';
 import type { ClientAction, Deadlines, Seats } from './types';
+import { STALE_GAME_MS } from './lifecycle';
 import { policyFor } from './policy';
 import { parseClientAction } from './validate';
 
@@ -94,7 +95,7 @@ vi.mock('./broadcast', () => ({
   roomPoke: vi.fn(() => ({ topic: 't', event: 'e', payload: {} })),
 }));
 
-import { HttpError, actOnGame, leaveGame, settleRoomGame, sweepGames, viewGame } from './service';
+import { HttpError, actOnGame, endGame, endIfStale, leaveGame, settleRoomGame, sweepGames, viewGame } from './service';
 import { SupabaseError } from './errors';
 import * as broadcaster from './broadcast';
 import * as commit from './commit';
@@ -259,8 +260,10 @@ describe('ticking a table', () => {
     const snap = await actOnGame(GAME, 'u-hana', null, null, expired(live));
     expect(store.commitTable).toHaveBeenCalledTimes(1);
     expect(snap.me).toBeNull();
-    expect(snap.isHost).toBe(true);
+    // Watching is the host's right; the host's powers need a seat, so they're with Abrar, the one person seated.
+    expect(snap.isHost).toBe(false);
     expect('me' in snap.view).toBe(false);
+    expect((await viewGame(GAME, 'u-abrar', expired(live))).isHost).toBe(true);
   });
 
   it('still lets the server itself sweep a table with nobody signed in', async () => {
@@ -458,9 +461,10 @@ describe('one request, one commit', () => {
     expect(w.table.scores).not.toEqual([3, -3, 0, 0]);
     expect(snap.scores).toEqual(w.table.scores);
     expect(snap.view.phase).toBe('finished');
-    // A finished hand waits on nobody, so there's nothing to wake for.
+    // A finished hand runs no clock, so the table wakes only to end as idle, six hours after a person last moved it (a tick isn't one).
     expect(w.deadlines).toEqual({ claim: null, turn: null });
-    expect(w.wakeAt).toBeNull();
+    expect(w.acted).toBe(false);
+    expect(w.wakeAt).toBe(live.actedAt + STALE_GAME_MS);
     expect(afterSteps()).toEqual([['count the hand', 'tally the players']]);
     expect(store.countHand).toHaveBeenCalledWith(GAME);
     expect(store.recordHand).toHaveBeenCalledWith(seats, ended);
@@ -836,6 +840,15 @@ describe('the end of the game', () => {
     const hers = await viewGame(GAME, 'u-hana', T0);
     expect(hers.me).toBeNull();
     expect(hers.isHost).toBe(false);
+    // The powers had passed to Abrar, the one person at the table at the end.
+    expect((await viewGame(GAME, 'u-abrar', T0)).isHost).toBe(true);
+
+    // A game that ended because nobody was playing had nobody at the table at the end: the host keeps the powers if seated then.
+    ended({ ...withHana, how: 'idle' });
+    expect((await viewGame(GAME, 'u-hana', T0)).isHost).toBe(true);
+    expect((await viewGame(GAME, 'u-abrar', T0)).isHost).toBe(false);
+    ended({ ...OVER, how: 'idle' });
+    expect((await viewGame(GAME, 'u-abrar', T0)).isHost).toBe(false);
   });
 
   it('finishes a game whose end is saved but not recorded on a tick, and refuses a move on it with the final table', async () => {
@@ -896,11 +909,203 @@ describe('the end of the game', () => {
     it('leaves a room whose game is in play, or that isn’t playing, as it was', async () => {
       setTable();
       const room = db.room as RoomRow;
-      expect(await settleRoomGame(room)).toBe(room);
+      expect(await settleRoomGame(room, T0)).toBe(room);
       expect(store.finishGame).not.toHaveBeenCalled();
       const between: RoomRow = { ...room, status: 'finished' };
-      expect(await settleRoomGame(between)).toBe(between);
+      expect(await settleRoomGame(between, T0)).toBe(between);
       expect(store.liveMeta).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+/**
+ * The host ends the game (R22), and a game nobody plays ends by itself after
+ * six hours (R23). Both are ends like any other: saved with the table, then
+ * finished, and a lost commit is tried again on a fresh read.
+ */
+describe('ending a game early', () => {
+  const hana = { kind: 'human', userId: 'u-hana', name: 'Hana' } as const;
+  const bea = { kind: 'human', userId: 'u-bea', name: 'Bea' } as const;
+  /** Hana, the room's host, seated beside Abrar. */
+  const withHost: Seats = [seats[0], hana, seats[2], seats[3]];
+
+  describe('by the host', () => {
+    it('ends it for everyone, mid-hand: saved with the table as a person’s move, with a note in the hand’s log, then finished', async () => {
+      const live = setTable();
+      db.room = { ...(db.room as RoomRow), seats: withHost };
+      const snap = await endGame(GAME, 'u-hana', T0 + 1000);
+      const { expected, w, hand } = theCommit();
+      expect(expected).toBe(live.version);
+      expect(w.acted).toBe(true);
+      expect(w.table.over).toEqual({ how: 'host', by: { userId: 'u-hana', name: 'Hana' }, at: T0 + 1000, hands: 0, scores: [0, 0, 0, 0], seats: withHost });
+      expect(w.deadlines).toEqual({ claim: null, turn: null });
+      expect(w.wakeAt).toBeNull();
+      expect(hand).toMatchObject({ hand: 0, ended: false, result: null });
+      expect(hand.moves).toEqual([{ v: live.version + 1, by: 'host', userId: 'u-hana', a: { type: 'endGame', how: 'host' } }]);
+      expect(afterSteps()).toEqual([['finish the game']]);
+      expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, w.table.over);
+      expect(broadcaster.gamePoke).toHaveBeenCalledWith(GAME, live.version + 1, expect.objectContaining({ gameOver: true }));
+      expect(snap).toMatchObject({ status: 'finished', me: 1, isHost: true, ended: { how: 'host', hands: 0, byName: 'Hana', byMe: true } });
+    });
+
+    it('refuses anyone else seated, and anyone not seated, before touching the table', async () => {
+      setTable();
+      db.room = { ...(db.room as RoomRow), seats: withHost };
+      for (const who of ['u-abrar', 'u-zed']) {
+        const err = await rejection(endGame(GAME, who, T0));
+        expect(err).toMatchObject({ status: 403, message: 'only the host can end the game' });
+      }
+      expect(store.commitTable).not.toHaveBeenCalled();
+    });
+
+    it('lets whoever has sat longest end it once the host has stood up, and nobody else', async () => {
+      setTable();
+      // Hana stood up (a bot has her seat); Bea sat down before Abrar.
+      db.room = { ...(db.room as RoomRow), seats: [{ ...seats[0], since: '2026-09-24T19:05:00Z' }, { ...bea, since: '2026-09-24T19:00:00Z' }, seats[2], seats[3]] };
+      expect(await rejection(endGame(GAME, 'u-abrar', T0))).toMatchObject({ status: 403 });
+      expect(await rejection(endGame(GAME, 'u-hana', T0))).toMatchObject({ status: 403 });
+      await expect(endGame(GAME, 'u-bea', T0)).resolves.toMatchObject({ status: 'finished', ended: { how: 'host', byName: 'Bea' } });
+      expect(store.commitTable).toHaveBeenCalledTimes(1);
+    });
+
+    it('says a game that has already finished is over', async () => {
+      setTable();
+      db.game = { ...(db.game as GameRow), status: 'finished' };
+      expect(await rejection(endGame(GAME, 'u-abrar', T0))).toMatchObject({ status: 409, message: 'game is over' });
+      expect(store.commitTable).not.toHaveBeenCalled();
+    });
+
+    it('takes a second tap as the same end: the record is finished again if need be, and the final table comes back', async () => {
+      setTable();
+      await endGame(GAME, 'u-abrar', T0);
+      const again = await endGame(GAME, 'u-abrar', T0 + 500);
+      expect(store.commitTable).toHaveBeenCalledTimes(1);
+      // The game row still reads active here (the store is faked), so the second tap finishes the record again.
+      expect(store.finishGame).toHaveBeenCalledTimes(2);
+      expect(again).toMatchObject({ status: 'finished', ended: { how: 'host', byMe: true } });
+    });
+
+    it('counts the hand just finished when ended between hands', async () => {
+      const live = setTable();
+      const { ended: done } = lastDecision(live);
+      db.live = liveRow(done, { claim: null, turn: null });
+      await endGame(GAME, 'u-abrar', T0);
+      const [c] = commits();
+      expect(c!.w.table.over).toMatchObject({ how: 'host', hands: 1 });
+      // Nothing more in a finished hand's log.
+      expect(c!.w.hands).toEqual([]);
+    });
+
+    it('tries again on a fresh table when someone else saved first, and gives up after three', async () => {
+      const live = setTable();
+      db.lose = 1;
+      await expect(endGame(GAME, 'u-abrar', T0)).resolves.toMatchObject({ status: 'finished' });
+      expect(commits().map((c) => c.expected)).toEqual([live.version, live.version + 1]);
+      expect(store.finishGame).toHaveBeenCalledTimes(1);
+
+      vi.clearAllMocks();
+      setTable();
+      db.lose = 3;
+      const err = await rejection(endGame(GAME, 'u-abrar', T0));
+      expect(err).toMatchObject({ status: 409, message: 'the table changed under you; try again' });
+      expect(store.commitTable).toHaveBeenCalledTimes(3);
+      expect(store.finishGame).not.toHaveBeenCalled();
+      expect(broadcaster.broadcast).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('because nobody is playing', () => {
+    const STALE = T0 + STALE_GAME_MS + 1;
+
+    it('leaves a game a person moved within six hours alone, writing nothing', async () => {
+      setTable();
+      expect(await endIfStale(GAME, T0 + STALE_GAME_MS)).toBe(false);
+      expect(store.commitTable).not.toHaveBeenCalled();
+    });
+
+    it('ends one nobody has moved for longer, by nobody: saved with the table, not as a person’s move, then finished', async () => {
+      const live = setTable();
+      expect(await endIfStale(GAME, STALE)).toBe(true);
+      const { w, hand } = theCommit();
+      expect(w.acted).toBe(false);
+      expect(w.table.over).toMatchObject({ how: 'idle', by: null, at: STALE, hands: 0 });
+      expect(w.wakeAt).toBeNull();
+      // The clock that ran out long ago is played first, as any request would, then the end.
+      expect(hand.moves.at(-1)).toEqual({ v: live.version + 1, by: 'table', a: { type: 'endGame', how: 'idle' } });
+      expect(hand.moves.slice(0, -1).some((m) => m.by === 'clock')).toBe(true);
+      expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, w.table.over);
+    });
+
+    it('reads a legacy table’s last save as its last move, as older code kept no other', async () => {
+      setTable();
+      db.live = { ...(db.live as LiveRow), legacy: true, table: { v: 1, scores: null, over: null, extra: {} }, actedAt: T0 - STALE_GAME_MS, updatedAt: T0 };
+      expect(await endIfStale(GAME, T0 + 60_000)).toBe(false);
+      expect(store.commitTable).not.toHaveBeenCalled();
+    });
+
+    it('does nothing when a person’s move lands first', async () => {
+      setTable();
+      vi.mocked(store.commitTable).mockImplementationOnce(async () => {
+        // Abrar plays just before the end is saved: the table is a version on, moved by a person.
+        const live = db.live as LiveRow;
+        db.live = { ...live, version: live.version + 1, actedAt: STALE - 1000 };
+        return null;
+      });
+      expect(await endIfStale(GAME, STALE)).toBe(false);
+      expect(store.commitTable).toHaveBeenCalledTimes(1);
+      expect(store.finishGame).not.toHaveBeenCalled();
+    });
+
+    it('finishes a game that had already ended but isn’t all recorded, and calls it over', async () => {
+      const live = setTable();
+      const over: GameOver = { how: 'host', by: { userId: 'u-abrar', name: 'Abrar' }, at: T0, hands: 3, scores: [0, 0, 0, 0], seats };
+      db.live = { ...live, table: { ...FRESH, over } };
+      expect(await endIfStale(GAME, STALE)).toBe(true);
+      expect(store.commitTable).not.toHaveBeenCalled();
+      expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, over);
+    });
+
+    it('is ended by the sweep before anything else, reported as "ended", and not settled again', async () => {
+      setTable();
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+      expect(await sweepGames([GAME], STALE)).toEqual({ [GAME]: 'ended' });
+      expect(store.commitTable).toHaveBeenCalledTimes(1);
+      expect(theCommit().w.table.over?.how).toBe('idle');
+      expect(table.step).toHaveBeenCalledTimes(1);
+      expect(store.finishGame).toHaveBeenCalledTimes(1);
+      expect(log).not.toHaveBeenCalled();
+    });
+
+    it('is ended before its room is joined or dealt again, and the room comes back as the finish left it', async () => {
+      setTable();
+      const room = db.room as RoomRow;
+      // The finish closes the room, which moves its updated_at.
+      vi.mocked(store.finishGame).mockImplementationOnce(async () => {
+        db.room = { ...room, status: 'finished', updated_at: '2026-09-24T07:00:00Z' };
+      });
+      expect(await settleRoomGame(room, STALE)).toMatchObject({ status: 'finished', updated_at: '2026-09-24T07:00:00Z' });
+      expect(theCommit().w.table.over?.how).toBe('idle');
+    });
+
+    it('leaves the room as it was when the table turns out to have been played after all', async () => {
+      setTable();
+      const room = db.room as RoomRow;
+      // The room's quick read found the table stale; by the full read, someone had played.
+      vi.mocked(store.liveMeta).mockResolvedValueOnce({ version: 3, table: FRESH, legacy: false, actedAt: T0 - STALE_GAME_MS, updatedAt: T0 - STALE_GAME_MS, hand: 0, seq: 0 });
+      expect(await settleRoomGame(room, STALE - STALE_GAME_MS + 1000)).toBe(room);
+      expect(store.commitTable).not.toHaveBeenCalled();
+    });
+
+    it('wakes a table parked on a finished hand when it would end as idle, counted from the person’s move that finished it', async () => {
+      const live = setTable();
+      const { live: at, ended: done } = lastDecision(live);
+      const move = parseClientAction(analysisBot(viewFor(at.state, karachi, 0), karachi) ?? { type: 'pass', seat: 0 })!;
+      await actOnGame(GAME, 'u-abrar', move, at.version, T0 + 5000);
+      const { w } = theCommit();
+      expect(w.state.phase).toBe(done.phase);
+      expect(w.deadlines).toEqual({ claim: null, turn: null });
+      expect(w.acted).toBe(true);
+      expect(w.wakeAt).toBe(T0 + 5000 + STALE_GAME_MS);
     });
   });
 });

@@ -1,6 +1,6 @@
 import 'server-only';
 import { isClosedRoom } from '../front-door';
-import { SEAT_ATTEMPTS, seatJoiner, vacate } from './seating';
+import { SEAT_ATTEMPTS, hostOf, seatJoiner, vacate } from './seating';
 import { HttpError } from './errors';
 import { gameById, roomByCode, saveSeats, type RoomRow } from './store';
 import { seatOf, type Seats } from './types';
@@ -13,6 +13,7 @@ export interface RoomSnapshot {
   readonly status: RoomRow['status'];
   readonly seats: readonly ({ readonly kind: 'human' | 'bot'; readonly name: string } | null)[];
   readonly me: number | null;
+  /** the caller has the host's powers (seating.ts hostOf): the room's host while seated, else whoever has sat longest */
   readonly isHost: boolean;
   readonly gameId: string | null;
 }
@@ -25,7 +26,8 @@ export function roomSnapshot(room: RoomRow, userId: string): RoomSnapshot {
     status: room.status,
     seats: room.seats.map((s) => (s ? { kind: s.kind, name: s.name } : null)),
     me: seatOf(room.seats, userId),
-    isHost: room.host_id === userId,
+    // The same answer the table and the start route give, so someone the table calls host isn't kept waiting here.
+    isHost: hostOf(room.host_id, room.seats, () => true) === userId,
     gameId: room.current_game_id,
   };
 }

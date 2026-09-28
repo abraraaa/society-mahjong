@@ -8,11 +8,18 @@ import type { GameEndHow, Seats } from './types';
  */
 
 /**
- * How long nobody may move a table before it counts as idle (R23). The idle
- * end arrives later; for now this only decides whether the first commit over
- * a legacy row carries its last activity forward (service.ts).
+ * How long nobody may move a table before the game ends by itself, as idle
+ * (R23): no person has sent it a move or an end in that time. It also decides
+ * whether the first commit over a legacy row carries its last activity
+ * forward (service.ts), so a game being played across a deploy isn't ended
+ * for its age.
  */
 export const STALE_GAME_MS = 6 * 60 * 60 * 1000;
+
+/** Whether a game last moved by a person at `actedAt` has gone unplayed for longer than STALE_GAME_MS. */
+export function isStale(actedAt: number, now: number): boolean {
+  return now - actedAt > STALE_GAME_MS;
+}
 
 /** How many hands of the game have finished: every hand before this one, and this one too once it's over. */
 export function handsPlayed(v: Pick<PublicGameView, 'phase' | 'progress'>): number {
@@ -48,8 +55,8 @@ export function endOfGame(how: GameEndHow, state: HandState, t: TableState, seat
 
 /**
  * Who was at the table when the game ended: the people in its seats then. An
- * abandoned game had nobody left (that's what ended it), and nor, later, does
- * one that ended because nobody was playing.
+ * abandoned game had nobody left (that's what ended it), and nor does one
+ * that ended because nobody was playing.
  */
 export function presentAtEnd(over: GameOver): string[] {
   if (over.how === 'abandoned' || over.how === 'idle') return [];

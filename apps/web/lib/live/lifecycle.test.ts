@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { karachi, type GameProgress, type HandState } from '@society/engine';
-import { STALE_GAME_MS, addHandScores, endOfGame, handsPlayed, isLastHand, presentAtEnd, publicGameOver } from './lifecycle';
+import { STALE_GAME_MS, addHandScores, endOfGame, handsPlayed, isLastHand, isStale, presentAtEnd, publicGameOver } from './lifecycle';
 import { dealFirstHand } from './table';
 import { NEW_TABLE, type GameOver, type Scores4 } from './table-state';
 import type { GameEndHow, Seats } from './types';
@@ -48,6 +48,21 @@ describe('addHandScores', () => {
 describe('STALE_GAME_MS', () => {
   it('is six hours', () => {
     expect(STALE_GAME_MS).toBe(6 * 60 * 60 * 1000);
+  });
+});
+
+describe('isStale', () => {
+  const T0 = 1_700_000_000_000;
+
+  it('is a game nobody has moved for more than six hours: at six hours exactly it’s still in play', () => {
+    expect(isStale(T0, T0)).toBe(false);
+    expect(isStale(T0, T0 + STALE_GAME_MS - 1)).toBe(false);
+    expect(isStale(T0, T0 + STALE_GAME_MS)).toBe(false);
+    expect(isStale(T0, T0 + STALE_GAME_MS + 1)).toBe(true);
+  });
+
+  it('is never a game moved after the moment asked about, as a clock a little ahead can make it', () => {
+    expect(isStale(T0 + 5000, T0)).toBe(false);
   });
 });
 

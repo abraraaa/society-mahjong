@@ -24,3 +24,35 @@ export function seatJoiner(seats: Seats, status: RoomStatus, joiner: { readonly 
 export function vacate(seats: Seats, seat: Seat): Seats {
   return seats.map((s, i) => (i === seat ? null : s)) as unknown as Seats;
 }
+
+/** When a person sat down, for who has sat longest: a seat with no readable `since` counts as the longest held. */
+function sittingSince(entry: SeatEntry): number {
+  const at = entry?.kind === 'human' && typeof entry.since === 'string' ? Date.parse(entry.since) : Number.NaN;
+  return Number.isNaN(at) ? Number.NEGATIVE_INFINITY : at;
+}
+
+/**
+ * Who has the host's powers (R14): starting a game, and ending one. Worked
+ * out from the seats, never stored:
+ * 1. the room's host (`hostId`), if seated and present;
+ * 2. otherwise the present person who has sat longest (earliest `since`; a
+ *    seat without one counts as earliest; ties by seat order);
+ * 3. otherwise the room's host, if seated;
+ * 4. otherwise nobody.
+ * `present` says whether the person in a seat is here; anyone not seated is
+ * never the answer, whatever their id.
+ */
+export function hostOf(hostId: string, seats: Seats, present: (seat: Seat) => boolean): string | null {
+  const people = seats.flatMap((entry, i) => (entry?.kind === 'human' ? [{ seat: i as Seat, entry }] : []));
+  const host = people.find((p) => p.entry.userId === hostId);
+  if (host && present(host.seat)) return hostId;
+  // The sort is stable, so equal times stay in seat order.
+  const byTime = (a: (typeof people)[number], b: (typeof people)[number]) => {
+    const x = sittingSince(a.entry);
+    const y = sittingSince(b.entry);
+    return x === y ? 0 : x < y ? -1 : 1;
+  };
+  const longest = people.filter((p) => present(p.seat)).sort(byTime)[0];
+  if (longest) return longest.entry.userId;
+  return host ? hostId : null;
+}

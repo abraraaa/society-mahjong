@@ -103,6 +103,10 @@ export interface Fixtures {
   readonly turnAfter: GameSnapshot;
   /** The same hand, finished, with the game over. */
   readonly finished: GameSnapshot;
+  /** The same hand, finished, in a game still in play: the host's result sheet, with Next hand and End the game here. Two hands have finished. */
+  readonly handDone: GameSnapshot;
+  /** That result sheet, the game ended there by the host, Amna: her final table. */
+  readonly endedByHost: GameSnapshot;
   /** The last hand scored, so the game is over: the host's final table. Bilal finishes top. */
   readonly lastHandOver: GameSnapshot;
   /** The same final table for someone who isn't the host. */
@@ -139,6 +143,10 @@ function build(): Fixtures {
     ended: publicGameOver(last.over, USER_ID),
   });
 
+  // The host ends the game on the finished hand, as the end route's step does: that step's end is what the page is told.
+  const byHost = step({ game: live.end, ruleset: karachi, seats: SEATS, policy: POLICY, now: MADE_AT, end: { how: 'host', by: { userId: USER_ID, name: USER_NAME } } });
+  const hostOver = byHost.tableState.over!;
+
   const west = search('a West goulash with both humans still to pass', (seed) => {
     const w = deal(seed, WEST_GOULASH);
     const mine = viewFor(w.state, karachi, ME);
@@ -160,6 +168,8 @@ function build(): Fixtures {
     solidTurn: { ...snapshot(live.t.state, 5, live.t.deadlines), stage: 'solid' },
     turnAfter: snapshot(live.after.state, 6, live.after.deadlines),
     finished: snapshot(live.end.state, 9, { claim: null, turn: null }, 'finished'),
+    handDone: snapshot(live.end.state, 9, { claim: null, turn: null }, 'active', { scores: [...(live.end.tableState.scores ?? [0, 0, 0, 0])] }),
+    endedByHost: snapshot(byHost.state, 10, byHost.deadlines, 'finished', { scores: [...hostOver.scores], ended: publicGameOver(hostOver, USER_ID) }),
     lastHandOver,
     lastHandOverGuest: { ...lastHandOver, isHost: false },
     westSent: snapshot(west.w.state, 1, west.w.deadlines),

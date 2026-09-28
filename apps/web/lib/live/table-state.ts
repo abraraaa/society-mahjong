@@ -1,3 +1,4 @@
+import { STALE_GAME_MS } from './lifecycle';
 import type { Deadlines, GameEndHow, SeatEntry, Seats } from './types';
 
 /**
@@ -171,13 +172,13 @@ export function lastActed(row: { readonly legacy: boolean; readonly actedAt: num
 
 /**
  * live_state.wake_at, the one thing the sweep asks (R27): the next moment
- * the server has to act on this table unasked. For now that's the earlier of
- * its two clocks, or null when nothing is waiting on anyone, and always null
- * once the game is over. (`actedAt` is for what's still to come here: the
- * hour a table nobody plays ends by itself.)
+ * the server has to act on this table unasked. That's the earliest of its two
+ * clocks and the moment it ends as idle, STALE_GAME_MS after a person last
+ * moved it (`actedAt`, as lastActed reads it), so a table parked where no
+ * clock runs is still found. Null once the game is over.
  */
 export function wakeAt(x: { readonly deadlines: Deadlines; readonly table: TableState; readonly actedAt: number }): number | null {
   if (x.table.over) return null;
-  const clocks = [x.deadlines.claim, x.deadlines.turn].filter((t): t is number => t !== null);
-  return clocks.length === 0 ? null : Math.min(...clocks);
+  const times = [x.deadlines.claim, x.deadlines.turn, x.actedAt + STALE_GAME_MS].filter((t): t is number => t !== null && Number.isFinite(t));
+  return times.length === 0 ? null : Math.min(...times);
 }

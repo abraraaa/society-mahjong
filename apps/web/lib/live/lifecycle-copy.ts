@@ -6,10 +6,10 @@ import type { PublicGameOver } from './lifecycle';
 import { countOf, isolate, nameList } from './words';
 
 /**
- * What the table says about a game's life: how it ended and who came out on
- * top. Every string a player reads about that lives here, word for word, so
- * the tests can hold each one to the copy. Pure, and safe to load in the
- * browser.
+ * What the table says about a game's life: how it ended, who came out on
+ * top, and the host's sheets for ending it. Every string a player reads about
+ * that lives here, word for word, so the tests can hold each one to the copy.
+ * Pure, and safe to load in the browser.
  */
 
 /**
@@ -55,3 +55,27 @@ export function endLine(over: PublicGameOver | null, st: readonly Standing[], me
   // Abandoned: everyone left, and the page says the table has closed rather than showing a final table.
   return top;
 }
+
+/**
+ * The host's "are you sure?" before ending the game for everyone. From the
+ * result sheet (`midHand` false) every hand so far has counted; mid-hand the
+ * one being played won't. `hands` is how many have finished.
+ */
+export function endSheet(midHand: boolean, hands: number): { title: string; body: string; confirmLabel: string; cancelLabel: string } {
+  const counted = countOf(hands, 'hand');
+  const body = !midHand
+    ? `Everyone will see the final scores from the ${counted} you've played.`
+    : hands === 0
+      ? 'No hands have finished yet, so nobody has any points.'
+      : `This hand won't count. Everyone will see the final scores from the ${counted} you've finished.`;
+  return { title: midHand ? 'End the game now?' : 'End the game here?', body, confirmLabel: 'End the game', cancelLabel: 'Keep playing' };
+}
+
+/** The host's Leave sheet, while the game is in play: leave (a bot takes the seat), end the game for everyone, or stay. */
+export const HOST_LEAVE = {
+  title: 'Leave the table?',
+  body: "A bot will play your seat so the others can carry on, and someone still here can start the next game. Or, if everyone's done, end the game for the whole table.",
+  leave: 'Leave',
+  end: 'End the game for everyone',
+  stay: 'Stay',
+} as const satisfies { title: string; body: string; leave: string; end: string; stay: string };

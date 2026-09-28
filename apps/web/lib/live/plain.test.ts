@@ -130,6 +130,10 @@ describe('plainError: the rest of what the server can say', () => {
     expect(api(409, 'game is over')).toBe("This game's finished. Head back to the room for the next one.");
   });
 
+  it('an end the caller has no powers for says who can, and what to do', () => {
+    expect(api(403, 'only the host can end the game')).toBe("Only the host can end the game. Ask them if everyone's had enough.");
+  });
+
   it('a lapsed session says to try again or come back through the link, by message or by any 401', () => {
     const line = "We've lost track of who you are on this phone. Try again, or open the invite link again.";
     expect(api(401, 'sign in first')).toBe(line);

@@ -12,7 +12,8 @@ import { analyseFor, coachFor, type CoachState } from '@/lib/coach';
 import { retryCanHelp } from '@/lib/front-door';
 import { ApiError, api, listen } from '@/lib/live/client';
 import { finalStandings } from '@/lib/live/final';
-import { endLine } from '@/lib/live/lifecycle-copy';
+import { handsPlayed } from '@/lib/live/lifecycle';
+import { HOST_LEAVE, endLine, endSheet } from '@/lib/live/lifecycle-copy';
 import { plainError } from '@/lib/live/plain';
 import { isPrivate, type GameSnapshot } from '@/lib/live/snapshot';
 import type { ClientAction } from '@/lib/live/types';
@@ -44,7 +45,10 @@ export function LiveTable({ gameId }: { gameId: string }) {
   // Why the last tap did nothing, shown over the table for a moment.
   const [notice, setNotice] = useState<string | null>(null);
   const clearNotice = useCallback(() => setNotice(null), []);
-  const [leaving, setLeaving] = useState<'asking' | 'going' | null>(null);
+  // One sheet over the table at a time: Leave, or the host's End.
+  const [sheet, setSheet] = useState<{ readonly kind: 'leave' | 'end' } | null>(null);
+  // A sheet's answer is on its way: its buttons wait for it.
+  const [sheetBusy, setSheetBusy] = useState(false);
   // Remembered on this phone, so turning the tutor off survives a refresh.
   const [tutorOn, toggleTutor] = useTutorOn();
   const supabaseRef = useRef<SupabaseClient | null>(null);
@@ -315,13 +319,32 @@ export function LiveTable({ gameId }: { gameId: string }) {
   }
 
   const leave = async () => {
-    setLeaving('going');
+    setSheetBusy(true);
     try {
       await api.leave(gameId);
       router.replace('/');
     } catch (err) {
-      setLeaving(null);
+      setSheetBusy(false);
+      setSheet(null);
       setNotice(plainError(err));
+    }
+  };
+
+  // The host ends the game for everyone: the final table comes back, for them and, by the poke, for the rest.
+  const endForEveryone = async () => {
+    setSheetBusy(true);
+    try {
+      take(await api.end(gameId));
+      setSheet(null);
+    } catch (err) {
+      if (err instanceof ApiError && err.snapshot) take(err.snapshot);
+      else void refetch(true);
+      setNotice(plainError(err));
+      // Nothing left to end, or not theirs to end: the sheet goes. A slow answer, or the table moving on under them, leaves it
+      // up for another tap (the server has already tried again on a fresh table).
+      if (err instanceof ApiError && (err.status === 403 || err.message === 'game is over')) setSheet(null);
+    } finally {
+      setSheetBusy(false);
     }
   };
 
@@ -352,19 +375,13 @@ export function LiveTable({ gameId }: { gameId: string }) {
       )
     : undefined;
 
+  // The sheets are for a game in play: one that ends while a sheet is open (the last hand scored, or ended by the host) closes it.
+  const open = snap.status === 'active' ? sheet : null;
+  const closeSheet = () => setSheet(null);
+
   return (
     <>
       <Notice text={notice} onDone={clearNotice} />
-      {leaving && (
-        <ConfirmSheet
-          title="Leave the table?"
-          body="A bot plays your seat from here, so the others can carry on. If you are the last one here, the game closes."
-          confirmLabel="Leave"
-          busy={leaving === 'going'}
-          onConfirm={leave}
-          onCancel={() => setLeaving(null)}
-        />
-      )}
       <Table
         // Each game starts the table afresh, so nothing picked in one game can carry into the next.
         key={gameId}
@@ -372,7 +389,9 @@ export function LiveTable({ gameId }: { gameId: string }) {
         label={ruleset.handSpec(view.progress).label}
         subtitle={`Table ${snap.roomCode}`}
         // Leaving is for a game in play: once it's over, the final table's button goes back to the room.
-        {...(snap.status === 'active' ? { onLeave: () => setLeaving('asking') } : {})}
+        {...(snap.status === 'active' ? { onLeave: () => setSheet({ kind: 'leave' }) } : {})}
+        // The host can end the game between hands; mid-hand, that's in their Leave sheet.
+        {...(snap.isHost && snap.status === 'active' && view.phase === 'finished' ? { onEndGame: () => setSheet({ kind: 'end' }) } : {})}
         clock={clock}
         nextLabel={snap.isHost ? 'Play again' : 'Back to the room'}
         names={names}
@@ -396,6 +415,30 @@ export function LiveTable({ gameId }: { gameId: string }) {
         marks={marks}
         {...(ending !== undefined ? { endLine: ending } : {})}
       />
+      {/* After the table, so a sheet opened from the result sheet is drawn over it. */}
+      {open?.kind === 'leave' &&
+        (snap.isHost ? (
+          <ConfirmSheet
+            title={HOST_LEAVE.title}
+            body={HOST_LEAVE.body}
+            confirmLabel={HOST_LEAVE.leave}
+            cancelLabel={HOST_LEAVE.stay}
+            busy={sheetBusy}
+            extras={[{ label: HOST_LEAVE.end, onClick: () => setSheet({ kind: 'end' }) }]}
+            onConfirm={leave}
+            onCancel={closeSheet}
+          />
+        ) : (
+          <ConfirmSheet
+            title="Leave the table?"
+            body="A bot plays your seat from here, so the others can carry on. If you are the last one here, the game closes."
+            confirmLabel="Leave"
+            busy={sheetBusy}
+            onConfirm={leave}
+            onCancel={closeSheet}
+          />
+        ))}
+      {open?.kind === 'end' && <ConfirmSheet {...endSheet(view.phase !== 'finished', handsPlayed(view))} busy={sheetBusy} onConfirm={endForEveryone} onCancel={closeSheet} />}
     </>
   );
 }

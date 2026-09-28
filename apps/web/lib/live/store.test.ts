@@ -76,6 +76,7 @@ import {
   type RoomRow,
 } from './store';
 import { commitArgs, type TableWrite } from './hand-log';
+import { STALE_GAME_MS } from './lifecycle';
 import { humanLevels, policyFor } from './policy';
 import type { GameOver } from './table-state';
 import type { LiveGame, LoggedMove, Seats } from './types';
@@ -460,7 +461,6 @@ describe('dealing a game', () => {
     const cases = [
       { deadlines: { claim: T + 30_000, turn: T + 90_000 }, wake: '2026-09-24T20:00:30.000Z' },
       { deadlines: { claim: T + 30_000, turn: null }, wake: '2026-09-24T20:00:30.000Z' },
-      { deadlines: { claim: null, turn: null }, wake: null },
     ];
     for (const { deadlines, wake } of cases) {
       supabase.log.length = 0;
@@ -468,6 +468,17 @@ describe('dealing a game', () => {
       await startGame(room, 'seed', seats, { ...first, deadlines });
       expect(wrote('live_state', 'insert')).toMatchObject({ wake_at: wake });
     }
+  });
+
+  it('wakes a table with no clock running when it would end as idle: six hours after the deal, the host’s own move', async () => {
+    supabase.log.length = 0;
+    answerAll(undefined, dealAnswers);
+    const before = Date.now();
+    await startGame(room, 'seed', seats, { ...first, deadlines: { claim: null, turn: null } });
+    const after = Date.now();
+    const wake = Date.parse((wrote('live_state', 'insert') as { wake_at: string }).wake_at);
+    expect(wake).toBeGreaterThanOrEqual(before + STALE_GAME_MS);
+    expect(wake).toBeLessThanOrEqual(after + STALE_GAME_MS);
   });
 
   it.each(AFTER_THE_GAME)('deletes the game when "$label" fails, and throws that failure', async ({ label, at }) => {

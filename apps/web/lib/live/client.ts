@@ -65,6 +65,8 @@ export const api = {
     call<GameSnapshot>(`/api/games/${gameId}/act`, { method: 'POST', body: JSON.stringify({ action, expectedVersion }) }),
   tick: (gameId: string) => call<GameSnapshot>(`/api/games/${gameId}/tick`, { method: 'POST' }),
   leave: (gameId: string) => call<{ abandoned: boolean }>(`/api/games/${gameId}/leave`, { method: 'POST' }),
+  /** the host ends the game for everyone: the final table comes back */
+  end: (gameId: string) => call<GameSnapshot>(`/api/games/${gameId}/end`, { method: 'POST' }),
   leaveRoom: (code: string) => call<RoomSnapshot>(`/api/rooms/${encodeURIComponent(code)}/leave`, { method: 'POST' }),
 };
 

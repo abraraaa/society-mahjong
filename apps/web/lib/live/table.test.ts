@@ -682,6 +682,54 @@ describe('the end of the game', () => {
     expect(r.tableState.over).toMatchObject({ how: 'abandoned', hands: 1 });
   });
 
+  /** A hand of the second round (its sixth), dealt, or played to the end by bots in every seat. */
+  const SOUTH_2: GameProgress = { roundWind: 'S', roundIndex: 1, handInRound: 1, handIndex: 5 };
+  const allBots = [seats[1], seats[2], seats[3], { kind: 'bot', name: 'Me' }] as unknown as Seats;
+  const HOST = { userId: 'u-me', name: 'Me' };
+
+  it('lets the host end the game mid-hand: that hand doesn’t count, no points move, and its log says the host ended it', { timeout: 60_000 }, () => {
+    const state = settle(startHand(karachi, { seed: 'end-host', progress: SOUTH_2, dealer: 1 }), karachi, seats);
+    expect(state.phase).not.toBe('finished');
+    const game: LiveGame = { state, deadlines: { claim: null, turn: T0 + 60_000 }, tableState: before };
+    const r = step({ game, ruleset: karachi, seats, policy, now: T0 + 1000, end: { how: 'host', by: HOST } });
+    expect(r).toMatchObject({ changed: true, gameOver: true, finishedHand: false, dealt: false, deadlines: { claim: null, turn: null } });
+    expect(r.state).toBe(state);
+    // Five hands finished before this one; this one is cut short.
+    expect(r.tableState.over).toEqual({ how: 'host', by: HOST, at: T0 + 1000, hands: 5, scores: before.scores, seats });
+    expect(r.moves).toEqual([{ by: 'host', userId: 'u-me', a: { type: 'endGame', how: 'host' } }]);
+    expect(r.moves[0]).not.toHaveProperty('seat');
+  });
+
+  it('lets the host end the game between hands, counting the hand just finished, with nothing more in its log', { timeout: 60_000 }, () => {
+    const done = settle(startHand(karachi, { seed: 'end-host-between', progress: SOUTH_2, dealer: 1 }), karachi, allBots);
+    expect(done.phase).toBe('finished');
+    const r = step({ game: { state: done, deadlines: { claim: null, turn: null }, tableState: before }, ruleset: karachi, seats, policy, now: T0, end: { how: 'host', by: HOST } });
+    expect(r).toMatchObject({ changed: true, gameOver: true, moves: [], deadlines: { claim: null, turn: null } });
+    expect(r.tableState.over).toEqual({ how: 'host', by: HOST, at: T0, hands: 6, scores: before.scores, seats });
+  });
+
+  it('records an end that finds the last hand scored as the game played out, whoever ends it', { timeout: 60_000 }, () => {
+    const done = settle(dealFirstHand(karachi, seats, 'end-last', policy, T0).state, karachi, allBots);
+    const parked = { ...done, progress: NORTH_3 };
+    const game: LiveGame = { state: parked, deadlines: { claim: null, turn: null }, tableState: before };
+    const byHost = step({ game, ruleset: karachi, seats, policy, now: T0, end: { how: 'host', by: HOST } });
+    expect(byHost.tableState.over).toEqual({ how: 'complete', by: HOST, at: T0, hands: 16, scores: before.scores, seats });
+    expect(byHost.moves).toEqual([]);
+    const idle = step({ game, ruleset: karachi, seats, policy, now: T0, end: { how: 'idle', by: null } });
+    expect(idle.tableState.over).toMatchObject({ how: 'complete', by: null, hands: 16 });
+    // Everyone leaving is still an abandon: there's nobody to show a final table to.
+    const left = step({ game, ruleset: karachi, seats, policy, now: T0, end: { how: 'abandoned', by: null } });
+    expect(left.tableState.over).toMatchObject({ how: 'abandoned', hands: 16 });
+  });
+
+  it('ends a game nobody is playing as idle, by nobody: the table’s own note, with no one’s id', () => {
+    const first = dealFirstHand(karachi, seats, 'end-idle', policy, T0);
+    const r = step({ game: { ...first, tableState: before }, ruleset: karachi, seats, policy, now: T0 + 1000, end: { how: 'idle', by: null } });
+    expect(r).toMatchObject({ changed: true, gameOver: true, deadlines: { claim: null, turn: null } });
+    expect(r.moves).toEqual([{ by: 'table', a: { type: 'endGame', how: 'idle' } }]);
+    expect(r.tableState.over).toEqual({ how: 'idle', by: null, at: T0 + 1000, hands: 0, scores: before.scores, seats });
+  });
+
   it('never takes an action and an end in one step', () => {
     const game = dealFirstHand(karachi, seats, 'end-both', policy, T0);
     expect(() => step({ game, ruleset: karachi, seats, policy, now: T0, action: { type: 'pass', seat: ME }, actor: ME, end: { how: 'abandoned', by: null } })).toThrow(/not both/);

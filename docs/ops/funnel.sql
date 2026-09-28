@@ -115,8 +115,10 @@ order by 1 desc;
 --   abandoned: every human stood up, so the game closed with no result.
 --   stalled:   still marked active, but nothing has happened for a day
 --              (no hand finished in the last 24 hours, or none at all since
---              a deal more than 24 hours ago). Nobody finished it and nobody
---              left properly; a room like this stays "playing" for good.
+--              a deal more than 24 hours ago). A game nobody plays ends as
+--              idle after six hours (the daily sweep ends it), so this
+--              should stay at or near zero; one that grows means the sweep
+--              isn't running or can't end those games.
 --   in_play:   active, with something in the last 24 hours.
 with last_seen as (
   select

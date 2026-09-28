@@ -5,8 +5,16 @@ import type { TableState } from './table-state';
 /** Where a room is in its life: waiting for people, at the table, or between games. */
 export type RoomStatus = 'lobby' | 'playing' | 'finished';
 
-/** Who is in a seat. Bots are seats too, so the engine never has to know the difference. */
-export type SeatEntry = { readonly kind: 'human'; readonly userId: string; readonly name: string } | { readonly kind: 'bot'; readonly name: string } | null;
+/**
+ * Who is in a seat. Bots are seats too, so the engine never has to know the
+ * difference. A person's `since` is when they sat down (ISO), which says who
+ * has sat longest when the host's powers pass on (seating.ts hostOf); a seat
+ * without one counts as the longest held.
+ */
+export type SeatEntry =
+  | { readonly kind: 'human'; readonly userId: string; readonly name: string; readonly since?: string }
+  | { readonly kind: 'bot'; readonly name: string }
+  | null;
 export type Seats = readonly [SeatEntry, SeatEntry, SeatEntry, SeatEntry];
 
 /** How long humans get. Bots act inline and never wait. */
@@ -49,12 +57,14 @@ export type GameEndHow = 'complete' | 'host' | 'idle' | 'abandoned';
 
 /**
  * A request to end the game before its last hand is scored, built by the
- * server only and never parsed from a body. For now the one kind is the last
+ * server only and never parsed from a body: the host ending it (`host`, by
+ * them), nobody having played it for hours (`idle`, by nobody), or the last
  * person leaving (`abandoned`, by nobody). A game whose last hand is scored
- * ends by itself, in the step that scores it.
+ * ends by itself, in the step that scores it, and an end that reaches a
+ * finished last hand records it as `complete` all the same.
  */
 export interface GameEnd {
-  readonly how: 'abandoned';
+  readonly how: 'host' | 'idle' | 'abandoned';
   readonly by: { readonly userId: string; readonly name: string } | null;
 }
 

@@ -52,12 +52,13 @@ const room: RoomRow = {
 };
 const active: GameRow = { id: GAME, room_id: 'r-1', seed: 'seed', status: 'active', hands_played: 15 };
 const over: GameOver = { how: 'complete', by: null, at: 1, hands: 16, scores: [9, -3, -3, -3], seats: room.seats };
+/** The table, last moved by a person a minute ago: a game in play, not one left for hours. */
 const meta = (o: GameOver | null): LiveMeta => ({
   version: 40,
   table: { v: 1, scores: [9, -3, -3, -3], over: o, extra: {} },
   legacy: false,
-  actedAt: 0,
-  updatedAt: 0,
+  actedAt: Date.now() - 60_000,
+  updatedAt: Date.now() - 60_000,
   hand: 15,
   seq: 99,
 });
