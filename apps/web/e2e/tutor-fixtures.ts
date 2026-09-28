@@ -13,10 +13,11 @@ import {
   type Seat,
 } from '@society/engine';
 import { analyseFor, coachFor, type CoachStage, type CoachState } from '../lib/coach';
-import { flowerSinceMyLastMove, myDiscardCount } from '../lib/coach/words';
+import { flowerSinceMyLastMove, myDiscardCount, textOf } from '../lib/coach/words';
 import { liveStage } from '../lib/live/level';
 import type { GameSnapshot } from '../lib/live/snapshot';
 import type { Deadlines } from '../lib/live/types';
+import { riverOrder } from '../lib/river';
 import { GAME_ID, USER_NAME } from './fixtures';
 
 /**
@@ -199,6 +200,12 @@ export interface TutorFixtures {
    * on her first turn the round's footnote comes first, and there's no room beside it for the flowers'.
    */
   readonly flowerTurn: GameSnapshot;
+  /**
+   * Two looks at the same hand-start bubble for a learner: Bilal deals, and Amna drew a flower in the deal. The next
+   * look is the table once Bilal has thrown and the bots have moved on, with Bilal to answer again before Amna's first
+   * turn and something in the river. The tutor's words are the same on both, and the flower is still news.
+   */
+  readonly handStartTwice: { readonly first: GameSnapshot; readonly next: GameSnapshot };
 }
 
 function build(): TutorFixtures {
@@ -259,7 +266,19 @@ function build(): TutorFixtures {
     }
     return null;
   });
-  return { otherWin, claim, claimAgain, flowerTurn };
+  const handStartTwice = search('two looks at the same hand-start bubble for Amna, with a flower from the deal to explain', (seed) => {
+    const s = settle(startHand(karachi, { seed, progress: EAST_HONOUR, dealer: 1 }));
+    if (s.players[ME].bonus.length === 0 || pending(s).join() !== '1') return null;
+    const after = settle(reduce(s, personMove(s, 1), karachi));
+    if (pending(after).join() !== '1') return null;
+    const first = snapshot(s, 9, 'learning');
+    const next = snapshot(after, 10, 'learning');
+    const [a, b] = [liveCoach(first), liveCoach(next)];
+    const same = a.moment === 'handStart' && b.moment === a.moment && b.action.kind === a.action.kind && textOf(b.say) === textOf(a.say);
+    const news = [a, b].every((c) => c.teach.some((t) => t.key === 'rule:flowers'));
+    return same && news && riverOrder(next.view).length > 0 ? { first, next } : null;
+  });
+  return { otherWin, claim, claimAgain, flowerTurn, handStartTwice };
 }
 
 let built: TutorFixtures | null = null;

@@ -4,7 +4,7 @@ import type { CoachHandRef, CoachMoment, CoachSegment, CoachState, CoachTarget }
 import { stepsAside, type CardClock } from '@/lib/coach/clock';
 import { GLOSSARY, TERMS, annotate, type Term } from '@/lib/coach/glossary';
 import { resolveHandRef } from '@/lib/coach/hand-card';
-import { lessonFor, lessonKey, taughtStore, type Lesson } from '@/lib/coach/teach';
+import { createLessons, lessonFor, lessonKey, taughtStore, type Lesson, type Lessons } from '@/lib/coach/teach';
 import { planCount } from '@/lib/coach/words';
 import { ClockLine, HandCard } from './hand-card';
 import { Tile } from './tile';
@@ -160,14 +160,13 @@ function useHydrating(): boolean {
 const NOTHING_TAUGHT: ReadonlySet<string> = new Set();
 /** Where the stylesheet hides the bubble's footnotes: a phone lying down has no room for them. */
 const SHORT_LANDSCAPE = '(orientation: landscape) and (height < 32rem)';
-/** Lessons remembered, so a view seen again (StrictMode, a poll, a retry) gets the notes it got the first time. */
-const LESSONS_KEPT = 50;
 
 /**
- * The footnotes for the tutor's state now: worked out once per view, before
- * it's painted, so a note comes with a new turn and never pops in after it,
- * and marked taught for the rest of the visit. Called once, at the table, so
- * the bubble and a sheet can't disagree. Null while the tutor is off.
+ * The footnotes for the tutor's state now: worked out before it's painted, so
+ * a note comes with a new line and never pops in after it, and marked taught
+ * for the rest of the visit. A line that stays on screen while the others move
+ * keeps its notes (`createLessons`). Called once, at the table, so the bubble
+ * and a sheet can't disagree. Null while the tutor is off.
  *
  * The first render after a page load can't read this visit's store (the
  * server rendered it), so it shows the notes a first visit would get, and
@@ -177,19 +176,16 @@ const LESSONS_KEPT = 50;
 export function useLesson(coach: CoachState, enabled: boolean): Lesson | null {
   const hydrating = useHydrating();
   const key = lessonKey(coach);
-  const cache = useRef(new Map<string, Lesson>());
+  const lessons = useRef<Lessons | null>(null);
   const [lesson, setLesson] = useState<Lesson | null>(null);
   useLayoutEffect(() => {
-    // Notes the stylesheet would hide aren't spent.
-    if (!enabled || window.matchMedia?.(SHORT_LANDSCAPE).matches) return;
-    const lessons = cache.current;
-    if (!lessons.has(key)) {
-      const next = lessonFor(coach, hydrating ? NOTHING_TAUGHT : taughtStore().all());
-      if (lessons.size >= LESSONS_KEPT) lessons.delete(lessons.keys().next().value!);
-      lessons.set(key, next);
-      taughtStore().add(next.marks);
+    lessons.current ??= createLessons(taughtStore);
+    // Notes the stylesheet would hide aren't spent. Once they're off the screen, a line that comes back is worked out afresh.
+    if (!enabled || window.matchMedia?.(SHORT_LANDSCAPE).matches) {
+      lessons.current.clear();
+      return;
     }
-    setLesson(lessons.get(key)!);
+    setLesson(lessons.current.next(coach, hydrating));
   }, [coach, key, enabled, hydrating]);
   if (!enabled) return null;
   if (lesson?.key === key) return lesson;

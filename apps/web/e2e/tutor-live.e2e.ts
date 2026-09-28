@@ -2,6 +2,8 @@ import { expect, test } from '@playwright/test';
 import { cardClockLine } from '../lib/coach/clock';
 import { cardCaption } from '../lib/coach/hand-card';
 import { TAUGHT_KEY, handNote, noteText } from '../lib/coach/teach';
+import { textOf } from '../lib/coach/words';
+import { riverOrder } from '../lib/river';
 import { POLL_MS } from '../lib/table-sync';
 import { ok, openTable, pauseClock } from './live';
 import { liveCoach, tutorFixtures } from './tutor-fixtures';
@@ -10,7 +12,8 @@ import { liveCoach, tutorFixtures } from './tutor-fixtures';
  * The tutor at a live table, on scenes made by the engine alone
  * (tutor-fixtures.ts): hand names that open the hand's card, wherever the
  * tutor says them, a card over a claim that shows the table's clock, and the
- * footnotes a first-timer gets the first time a hand or a flower comes up.
+ * footnotes a first-timer gets the first time a hand or a flower comes up,
+ * which stay for as long as the line they came with.
  */
 test.describe('the tutor at a live table', () => {
   test("(l-winner) the result line names the winner's hand, explains it the first time, and a tap shows the tiles they won with", async ({ page }) => {
@@ -61,6 +64,33 @@ test.describe('the tutor at a live table', () => {
     // Taught for the visit, and the glossary's footnote for "flowers" with it: the same words.
     const taught = await page.evaluate((key) => JSON.parse(sessionStorage.getItem(key) ?? '[]') as string[], TAUGHT_KEY);
     expect(taught).toEqual(expect.arrayContaining(['rule:flowers', 'term:bonus']));
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(l-line) a bubble keeps its footnote, and its height, while its words stay the same and the others move', async ({ page }) => {
+    const { first, next } = tutorFixtures().handStartTwice;
+    // Bilal throws and the bots move on while Amna waits: the page's next look brings the table on.
+    let moved = false;
+    const t = await openTable(page, { view: () => ok(moved ? next : first) }, { clock: true });
+    const coach = t.stage().locator('.coach');
+    const flowers = liveCoach(first).teach.find((x) => x.key === 'rule:flowers')!;
+    await expect(coach.locator('[data-note="rule:flowers"]')).toHaveText(noteText(flowers));
+    await pauseClock(page);
+    const look = async () => ({
+      say: await coach.locator('.say').textContent(),
+      notes: await coach.locator('[data-note]').evaluateAll((els) => els.map((e) => `${e.getAttribute('data-note')}: ${e.textContent}`)),
+      height: await coach.evaluate((e) => e.getBoundingClientRect().height),
+    });
+    const before = await look();
+    expect(before.say).toBe(textOf(liveCoach(first).say));
+
+    moved = true;
+    const looks = t.count('view');
+    await page.clock.runFor(POLL_MS);
+    await expect.poll(() => t.count('view')).toBeGreaterThan(looks);
+    await expect(t.stage().getByText(`${riverOrder(next.view).length} discarded`, { exact: true })).toBeVisible();
+    // A new view, and the same line: the note it came with stays, and the bubble doesn't shrink under the reader.
+    expect(await look()).toEqual(before);
     expect(t.pageErrors).toEqual([]);
   });
 

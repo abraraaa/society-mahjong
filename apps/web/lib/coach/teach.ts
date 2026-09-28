@@ -40,6 +40,17 @@ export function lessonKey(coach: CoachState): string {
   return `${coach.at.hand}.${coach.at.seq}|${coach.moment}|${textOf(coach.say)}|${coach.teach.map((t) => t.key).join(',')}`;
 }
 
+/**
+ * The line a lesson goes under, whichever view it's on: the hand, the moment,
+ * whether the tutor is asking for a move or waiting, its words, and what they
+ * could teach. A non-dealer's hand-start bubble stays the same line through
+ * the dealer's discard and every move after it, until their own turn. The same
+ * words asking for a move are a new line.
+ */
+export function lineKey(coach: CoachState): string {
+  return `${coach.at.hand}|${coach.moment}|${coach.action.kind}|${textOf(coach.say)}|${coach.teach.map((t) => `${t.key}:${t.place}`).join(',')}`;
+}
+
 /** A note as the reader sees it, which is what the budget counts: "label: text", or the text alone. */
 export function noteText(note: Pick<CoachTeach, 'label' | 'text'>): string {
   return note.label ? `${note.label}: ${note.text}` : note.text;
@@ -123,6 +134,54 @@ export function lessonFor(coach: CoachState, taught: ReadonlySet<string>): Lesso
 export interface TaughtStore {
   all(): ReadonlySet<string>;
   add(keys: readonly string[]): void;
+}
+
+/** Lessons remembered by view, so a view seen again (StrictMode, a poll, a retry) gets the notes it got the first time. */
+export const LESSONS_KEPT = 50;
+
+/** The table's lessons, one view after another. */
+export interface Lessons {
+  /** The lesson for this state. `fromNothing`: a new line gets the notes a first visit would (the render that hydrates the server's HTML). */
+  next(coach: CoachState, fromNothing?: boolean): Lesson;
+  /** Nothing's on screen any more (the tutor's off): the next line is worked out afresh. */
+  clear(): void;
+}
+
+/**
+ * Works out each view's lesson once, as the table sees the views:
+ *
+ * - The same view again gets the lesson it got the first time.
+ * - The same line on a new view (`lineKey`) keeps the lesson on screen, and
+ *   teaches nothing more. A note comes with a new line and stays with it: it
+ *   never goes, or turns into another, while the others move and the words
+ *   under it stay put.
+ * - Anything else is worked out from what this visit has been taught, and
+ *   marked taught.
+ */
+export function createLessons(store: () => TaughtStore, kept = LESSONS_KEPT): Lessons {
+  const byView = new Map<string, Lesson>();
+  let shown: { readonly line: string; readonly lesson: Lesson } | null = null;
+  return {
+    next(coach, fromNothing = false) {
+      const key = lessonKey(coach);
+      const line = lineKey(coach);
+      let lesson = byView.get(key);
+      if (!lesson) {
+        if (shown?.line === line) lesson = { ...shown.lesson, key };
+        else {
+          lesson = lessonFor(coach, fromNothing ? new Set() : store().all());
+          store().add(lesson.marks);
+        }
+        if (byView.size >= kept) byView.delete(byView.keys().next().value!);
+        byView.set(key, lesson);
+      }
+      shown = { line, lesson };
+      return lesson;
+    },
+    clear() {
+      shown = null;
+    },
+  };
 }
 
 /**
