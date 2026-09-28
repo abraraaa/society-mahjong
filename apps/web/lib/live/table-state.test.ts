@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { EVERYONE_HERE, markAway, markPresent, noteClockMove } from './absence';
 import { NEW_TABLE, TABLE_STATE_V, lastActed, parseTableState, sameTableState, tableStateJson, wakeAt, withLegacyScores, type GameOver, type TableState } from './table-state';
 import { STALE_GAME_MS } from './lifecycle';
 import type { Seats } from './types';
@@ -17,7 +18,7 @@ const OVER: GameOver = { how: 'complete', by: null, at: T0, hands: 16, scores: [
 describe('parseTableState', () => {
   it('reads 0005’s default, and anything that isn’t a document, as a legacy table with no scores of its own', () => {
     for (const x of [{}, null, undefined, 0, 'v1', [], [1, 2, 3, 4], true]) {
-      expect(parseTableState(x), JSON.stringify(x)).toEqual({ table: { v: TABLE_STATE_V, scores: null, over: null, extra: {} }, legacy: true });
+      expect(parseTableState(x), JSON.stringify(x)).toEqual({ table: { v: TABLE_STATE_V, scores: null, over: null, absence: EVERYONE_HERE, extra: {} }, legacy: true });
     }
   });
 
@@ -26,7 +27,10 @@ describe('parseTableState', () => {
   });
 
   it('reads a v1 table’s scores', () => {
-    expect(parseTableState({ v: 1, scores: [0, 14504, -8000, -6504] })).toEqual({ table: { v: 1, scores: [0, 14504, -8000, -6504], over: null, extra: {} }, legacy: false });
+    expect(parseTableState({ v: 1, scores: [0, 14504, -8000, -6504] })).toEqual({
+      table: { v: 1, scores: [0, 14504, -8000, -6504], over: null, absence: EVERYONE_HERE, extra: {} },
+      legacy: false,
+    });
   });
 
   it('gives a table whose scores are missing or wrong nobody any points, rather than failing', () => {
@@ -38,13 +42,13 @@ describe('parseTableState', () => {
   it('reads a newer deploy’s table as given, parts and all, so the service can see it isn’t its own', () => {
     const { table, legacy } = parseTableState({ v: 2, scores: [5, -5, 0, 0], ready: { hand: 3 } });
     expect(legacy).toBe(false);
-    expect(table).toEqual({ v: 2, scores: [5, -5, 0, 0], over: null, extra: { ready: { hand: 3 } } });
+    expect(table).toEqual({ v: 2, scores: [5, -5, 0, 0], over: null, absence: EVERYONE_HERE, extra: { ready: { hand: 3 } } });
   });
 
   it('reads how the game ended', () => {
     const { table, legacy } = parseTableState(JSON.parse(JSON.stringify({ v: 1, scores: OVER.scores, over: OVER })));
     expect(legacy).toBe(false);
-    expect(table).toEqual({ v: 1, scores: OVER.scores, over: OVER, extra: {} });
+    expect(table).toEqual({ v: 1, scores: OVER.scores, over: OVER, absence: EVERYONE_HERE, extra: {} });
     const byHost = { ...OVER, how: 'host', by: { userId: 'u-amna', name: 'Amna' }, hands: 7 };
     expect(parseTableState({ v: 1, scores: OVER.scores, over: byHost }).table.over).toEqual(byHost);
   });
@@ -76,29 +80,69 @@ describe('parseTableState', () => {
 describe('tableStateJson', () => {
   it('writes v1 with the scores, and no end while the game is in play', () => {
     expect(tableStateJson(NEW_TABLE)).toEqual({ v: 1, scores: [0, 0, 0, 0] });
-    expect(tableStateJson({ v: 1, scores: [3, -3, 0, 0], over: null, extra: {} })).toEqual({ v: 1, scores: [3, -3, 0, 0] });
+    expect(tableStateJson({ v: 1, scores: [3, -3, 0, 0], over: null, absence: EVERYONE_HERE, extra: {} })).toEqual({ v: 1, scores: [3, -3, 0, 0] });
   });
 
   it('writes how the game ended once it has, and reads it back the same', () => {
-    const t: TableState = { v: 1, scores: OVER.scores, over: OVER, extra: {} };
+    const t: TableState = { v: 1, scores: OVER.scores, over: OVER, absence: EVERYONE_HERE, extra: {} };
     const written = tableStateJson(t);
     expect(written).toEqual({ v: 1, scores: OVER.scores, over: OVER });
     expect(parseTableState(JSON.parse(JSON.stringify(written)))).toEqual({ table: t, legacy: false });
   });
 
   it('puts back the keys it doesn’t know, untouched, so an older deploy never erases a newer one’s bookkeeping', () => {
-    const stored = { v: 1, scores: [1, -1, 0, 0], ready: { hand: 3, dealAt: T0 }, absence: [{ userId: 'u-a', misses: 1 }], later: [1, { deep: true }] };
+    const stored = { v: 1, scores: [1, -1, 0, 0], ready: { hand: 3, dealAt: T0 }, handover: [{ userId: 'u-a', misses: 1 }], later: [1, { deep: true }] };
     const back = tableStateJson(parseTableState(stored).table);
     expect(back).toEqual(stored);
     // And it survives the database's round trip.
     expect(parseTableState(JSON.parse(JSON.stringify(back)))).toEqual(parseTableState(stored));
   });
 
+  it('writes who’s away only once some seat has something in it, and reads it back the same', () => {
+    expect(tableStateJson(NEW_TABLE)).not.toHaveProperty('absence');
+    const away = noteClockMove(markAway(EVERYONE_HERE, SEATS, 1, 'host'), SEATS, { by: 'clock', seat: 0, a: { type: 'discard', seat: 0, tile: 's5' } }, true);
+    const t: TableState = { ...NEW_TABLE, absence: markPresent(away, SEATS, 0, T0) };
+    const written = tableStateJson(t);
+    expect(written['absence']).toEqual([
+      {
+        userId: 'u-amna',
+        since: null,
+        misses: 0,
+        away: null,
+        clockMoves: 1,
+        lastClockMove: { by: 'clock', seat: 0, a: { type: 'discard', seat: 0, tile: 's5' } },
+        lastTap: T0,
+        played: { turns: 0, sets: 0, exchanges: 0, wins: 0, hands: 0 },
+      },
+      {
+        userId: 'u-bilal',
+        since: null,
+        misses: 0,
+        away: 'host',
+        clockMoves: 0,
+        lastClockMove: null,
+        lastTap: null,
+        played: { turns: 0, sets: 0, exchanges: 0, wins: 0, hands: 0 },
+      },
+      EVERYONE_HERE[2],
+      EVERYONE_HERE[3],
+    ]);
+    expect(parseTableState(JSON.parse(JSON.stringify(written)))).toEqual({ table: t, legacy: false });
+    // A tap alone is kept too: the host's hand-over is refused for someone who has just played (R8).
+    expect(tableStateJson({ ...NEW_TABLE, absence: markPresent(EVERYONE_HERE, SEATS, 1, T0) })['absence']).toHaveLength(4);
+  });
+
+  it('reads no one away on a legacy row, keeping whatever it held in `extra`', () => {
+    const { table } = parseTableState({ absence: [{ away: 'clock' }] });
+    expect(table.absence).toBe(EVERYONE_HERE);
+    expect(table.extra).toEqual({ absence: [{ away: 'clock' }] });
+  });
+
   it('writes a legacy table with its seeded scores as a v1 table', () => {
     const { table } = parseTableState({ note: 'kept' });
     const written = tableStateJson(withLegacyScores(table, [7, -7, 0, 0]));
     expect(written).toEqual({ note: 'kept', v: 1, scores: [7, -7, 0, 0] });
-    expect(parseTableState(written)).toEqual({ table: { v: 1, scores: [7, -7, 0, 0], over: null, extra: { note: 'kept' } }, legacy: false });
+    expect(parseTableState(written)).toEqual({ table: { v: 1, scores: [7, -7, 0, 0], over: null, absence: EVERYONE_HERE, extra: { note: 'kept' } }, legacy: false });
   });
 });
 
@@ -119,7 +163,7 @@ describe('withLegacyScores', () => {
   });
 
   it('leaves a table that has its own scores alone', () => {
-    const own: TableState = { v: 1, scores: [9, -9, 0, 0], over: null, extra: {} };
+    const own: TableState = { v: 1, scores: [9, -9, 0, 0], over: null, absence: EVERYONE_HERE, extra: {} };
     expect(withLegacyScores(own, [1, 1, 1, 1])).toBe(own);
   });
 });
@@ -134,6 +178,13 @@ describe('sameTableState', () => {
     expect(sameTableState(a, { ...a, extra: { ready: { hand: 3, userIds: [] } } })).toBe(false);
     expect(sameTableState(a, { ...a, extra: {} })).toBe(false);
     expect(sameTableState(NEW_TABLE, { ...NEW_TABLE, scores: null })).toBe(false);
+  });
+
+  it('ignores when each person last tapped, and nothing else about who’s away', () => {
+    const tapped: TableState = { ...NEW_TABLE, absence: markPresent(EVERYONE_HERE, SEATS, 0, T0) };
+    expect(sameTableState(NEW_TABLE, tapped)).toBe(true);
+    expect(sameTableState(tapped, { ...tapped, absence: markPresent(tapped.absence, SEATS, 0, T0 + 5_000) })).toBe(true);
+    expect(sameTableState(NEW_TABLE, { ...NEW_TABLE, absence: markAway(EVERYONE_HERE, SEATS, 1, 'host') })).toBe(false);
   });
 
   it('tells an ended game from one in play, and one end from another', () => {

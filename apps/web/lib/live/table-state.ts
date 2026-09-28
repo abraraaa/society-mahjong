@@ -1,5 +1,6 @@
+import { EVERYONE_HERE, isFresh, parseAbsence, sameAbsence } from './absence';
 import { STALE_GAME_MS } from './lifecycle';
-import type { Deadlines, GameEndHow, SeatEntry, Seats } from './types';
+import type { AwayReason, Deadlines, GameEndHow, Move, SeatEntry, Seats } from './types';
 
 /**
  * live_state.table_state: the table's own bookkeeping, as one JSON document
@@ -7,8 +8,8 @@ import type { Deadlines, GameEndHow, SeatEntry, Seats } from './types';
  * as the hand, so the two can never disagree.
  *
  * Each part arrives with the code that first uses it. Today that's the
- * running scores and how the game ended; who's away and the next-hand ready
- * check come later. Parsing is tolerant, and it keeps every top-level key it
+ * running scores, who's away and how the game ended; the next-hand ready
+ * check comes later. Parsing is tolerant, and it keeps every top-level key it
  * doesn't know in `extra` and writes it back untouched, so an older deploy
  * never erases a newer one's bookkeeping. A row whose `v` is newer than this
  * code knows isn't saved over at all (service.ts).
@@ -40,21 +41,53 @@ export interface GameOver {
   readonly seats: Seats;
 }
 
+/** What a bot has done for an away seat since its person went: shown to them when they look again (presence.ts awaySummary). */
+export interface AwayPlayed {
+  readonly turns: number;
+  readonly sets: number;
+  readonly exchanges: number;
+  readonly wins: number;
+  readonly hands: number;
+}
+
+/**
+ * One seat's absence (absence.ts): whose it is (the person's id, and the
+ * `since` of the sitting), how many clocks in a row have run out on them,
+ * whether a bot is playing their tiles and why, the clock moves made for
+ * them (a count, and the last, for the notice), when they last tapped (for
+ * the host's hand-over, R8), and what the bot has played for them while away.
+ */
+export interface SeatAbsence {
+  readonly userId: string | null;
+  readonly since: string | null;
+  readonly misses: number;
+  readonly away: AwayReason | null;
+  readonly clockMoves: number;
+  /** unstamped: the notice needs the move, not its version; it can hold the tiles passed, so only its own person ever sees it */
+  readonly lastClockMove: Move | null;
+  readonly lastTap: number | null;
+  readonly played: AwayPlayed;
+}
+
+export type Absence = readonly [SeatAbsence, SeatAbsence, SeatAbsence, SeatAbsence];
+
 export interface TableState {
   readonly v: number;
   /** the game's running totals, a finished hand's points already in; null only on a legacy row, whose totals are still in rooms.ledger */
   readonly scores: Scores4 | null;
   /** how the game ended; null while it's in play */
   readonly over: GameOver | null;
+  /** who's away, per seat; everyone here on a fresh or legacy table */
+  readonly absence: Absence;
   /** top-level keys this code doesn't know, written back untouched */
   readonly extra: Readonly<Record<string, unknown>>;
 }
 
 /** A game that has just been dealt: nobody has any points yet, and it's in play. */
-export const NEW_TABLE: TableState = { v: TABLE_STATE_V, scores: [0, 0, 0, 0], over: null, extra: {} };
+export const NEW_TABLE: TableState = { v: TABLE_STATE_V, scores: [0, 0, 0, 0], over: null, absence: EVERYONE_HERE, extra: {} };
 
-/** The keys this code reads. Everything else goes in `extra`, and so does an `over` it can't read (parseOver). */
-const KNOWN: readonly string[] = ['v', 'scores', 'over'];
+/** The keys this code reads. Everything else goes in `extra`, and so does an `over` it can't read (parseOver), and anything a legacy row holds besides. */
+const KNOWN: readonly string[] = ['v', 'scores', 'over', 'absence'];
 
 const END_HOWS: readonly GameEndHow[] = ['complete', 'host', 'idle', 'abandoned'];
 
@@ -120,14 +153,21 @@ export function parseTableState(x: unknown): { readonly table: TableState; reado
   const scores = legacy ? null : (scores4(doc['scores']) ?? [0, 0, 0, 0]);
   // A legacy row is a game in play, whatever else it holds.
   const over = scores === null ? null : parseOver(doc['over'], scores);
-  const extra = Object.fromEntries(Object.entries(doc).filter(([key]) => !KNOWN.includes(key) || (key === 'over' && over === null)));
-  return { table: { v: legacy ? TABLE_STATE_V : (v as number), scores, over, extra }, legacy };
+  // So is everyone at it here.
+  const absence = legacy ? EVERYONE_HERE : parseAbsence(doc['absence']);
+  const extra = Object.fromEntries(Object.entries(doc).filter(([key]) => !KNOWN.includes(key) || (key === 'over' && over === null) || (key === 'absence' && legacy)));
+  return { table: { v: legacy ? TABLE_STATE_V : (v as number), scores, over, absence, extra }, legacy };
 }
 
-/** The document to store: written as this code's version, with the keys it doesn't know put back as they were. `over` is written only once it's set. */
+/**
+ * The document to store: written as this code's version, with the keys it
+ * doesn't know put back as they were. `absence` is written only once some
+ * seat has something in it, and `over` only once it's set.
+ */
 export function tableStateJson(t: TableState): Record<string, unknown> {
   const over = t.over && { ...t.over, by: t.over.by && { ...t.over.by }, scores: [...t.over.scores], seats: [...t.over.seats] };
-  return { ...t.extra, v: TABLE_STATE_V, scores: [...(t.scores ?? [0, 0, 0, 0])], ...(over ? { over } : {}) };
+  const absence = t.absence.every((e) => isFresh(e) && e.lastTap === null) ? null : t.absence.map((e) => ({ ...e, played: { ...e.played } }));
+  return { ...t.extra, v: TABLE_STATE_V, scores: [...(t.scores ?? [0, 0, 0, 0])], ...(absence ? { absence } : {}), ...(over ? { over } : {}) };
 }
 
 /** JSON values compared by what they hold, whatever order an object's keys are in. */
@@ -139,9 +179,13 @@ function sameJson(a: unknown, b: unknown): boolean {
   return keys.length === Object.keys(b).length && keys.every((k) => Object.hasOwn(b, k) && sameJson(a[k], b[k]));
 }
 
-/** Whether two documents would store the same thing, so a step that changes neither the hand nor this writes nothing. */
+/**
+ * Whether two documents would tell the table the same thing, so a step that
+ * changes neither the hand nor this writes nothing. When each person last
+ * tapped isn't news by itself (sameAbsence): it's saved with whatever else is.
+ */
 export function sameTableState(a: TableState, b: TableState): boolean {
-  return a.v === b.v && sameJson(a.scores, b.scores) && sameJson(a.over, b.over) && sameJson(a.extra, b.extra);
+  return a.v === b.v && sameJson(a.scores, b.scores) && sameJson(a.over, b.over) && sameAbsence(a.absence, b.absence) && sameJson(a.extra, b.extra);
 }
 
 /**

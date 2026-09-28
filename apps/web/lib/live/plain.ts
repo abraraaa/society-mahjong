@@ -19,6 +19,10 @@ const GAME_OVER = "This game's finished. Head back to the room for the next one.
 const BOT_SEAT = "A bot's playing your seat for the rest of this game. When it's over, open the invite link again to sit back in.";
 const HOST_ONLY = 'Only the host can start the game.';
 const HOST_ENDS = "Only the host can end the game. Ask them if everyone's had enough.";
+const HOST_HANDS_OVER = "Only the host can let a bot play for someone. Ask them if a friend's stepped away.";
+const SOMEONE_ELSE = 'You can only let a bot play for someone else. Tap their name at the top of the table.';
+const BOT_ALREADY = "A bot's already playing that seat, so there's nothing to do.";
+const JUST_PLAYED = "They've just played, so they're still at the table.";
 const IN_PROGRESS = "There's already a game going at this table.";
 const SEATS_CHANGED = 'Someone sat down or got up just then. Check the seats and start again.';
 const LEAVE_FROM_TABLE = "The game's started, so leave from the table instead.";
@@ -86,6 +90,11 @@ const BY_MESSAGE = new Map<string, string>(
     'game has no live state': NO_GAME,
     'game is over': GAME_OVER,
     'only the host can end the game': HOST_ENDS,
+    'only the host can hand a seat to a bot': HOST_HANDS_OVER,
+    'that is your own seat': SOMEONE_ELSE,
+    'that is not a seat': SOMEONE_ELSE,
+    'a bot already plays that seat': BOT_ALREADY,
+    'that player has just played': JUST_PLAYED,
     'sign in first': SIGNED_OUT,
     'something went wrong': FALLBACK,
     // hCaptcha: the guest closed the puzzle, or left it until it lapsed.

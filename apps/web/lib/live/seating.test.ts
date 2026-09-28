@@ -1,38 +1,49 @@
 import { describe, expect, it } from 'vitest';
 import type { Seat } from '@society/engine';
+import { EVERYONE_HERE, isAway, markAway, markPresent } from './absence';
 import { hostOf, seatJoiner, seatsBack, vacate } from './seating';
+import type { Absence } from './table-state';
 import type { Seats } from './types';
 
 const host = { kind: 'human', userId: 'u-host', name: 'Abrar' } as const;
 const bilal = { kind: 'human', userId: 'u-bilal', name: 'Bilal' } as const;
 const bot = { kind: 'bot', name: 'Sana' } as const;
 const zara = { userId: 'u-zara', name: 'Zara' };
+const NOW = Date.UTC(2026, 8, 28, 19, 30);
+/** When Zara sits down, as her seat keeps it. */
+const SINCE = '2026-09-28T19:30:00.000Z';
 
 describe('seatJoiner', () => {
   it('takes the first empty seat and leaves the others as they were', () => {
     const seats: Seats = [host, null, bilal, null];
-    expect(seatJoiner(seats, 'lobby', zara)).toEqual([host, { kind: 'human', ...zara }, bilal, null]);
+    expect(seatJoiner(seats, 'lobby', zara, NOW)).toEqual([host, { kind: 'human', ...zara, since: SINCE }, bilal, null]);
   });
 
   it('leaves bots in their seats until the game is over', () => {
     const seats: Seats = [host, bot, null, null];
-    expect(seatJoiner(seats, 'lobby', zara)).toEqual([host, bot, { kind: 'human', ...zara }, null]);
-    expect(seatJoiner([host, bot, bot, bot], 'playing', zara)).toBeNull();
+    expect(seatJoiner(seats, 'lobby', zara, NOW)).toEqual([host, bot, { kind: 'human', ...zara, since: SINCE }, null]);
+    expect(seatJoiner([host, bot, bot, bot], 'playing', zara, NOW)).toBeNull();
   });
 
   it('takes a bot’s seat between games, so a late friend can play the next one', () => {
-    expect(seatJoiner([host, bot, bot, bot], 'finished', zara)).toEqual([host, { kind: 'human', ...zara }, bot, bot]);
+    expect(seatJoiner([host, bot, bot, bot], 'finished', zara, NOW)).toEqual([host, { kind: 'human', ...zara, since: SINCE }, bot, bot]);
   });
 
   it('returns null for a full table', () => {
     const full: Seats = [host, bilal, { kind: 'human', userId: 'u-c', name: 'C' }, { kind: 'human', userId: 'u-d', name: 'D' }];
-    expect(seatJoiner(full, 'lobby', zara)).toBeNull();
-    expect(seatJoiner(full, 'finished', zara)).toBeNull();
+    expect(seatJoiner(full, 'lobby', zara, NOW)).toBeNull();
+    expect(seatJoiner(full, 'finished', zara, NOW)).toBeNull();
+  });
+
+  it('stamps the new seat with when they sat down, so who has sat longest can be told and their absence starts afresh', () => {
+    const out = seatJoiner([host, null, null, null], 'lobby', zara, NOW)!;
+    expect(out[1]).toEqual({ kind: 'human', userId: 'u-zara', name: 'Zara', since: SINCE });
+    expect(new Date(SINCE).getTime()).toBe(NOW);
   });
 
   it('does not touch the seats it was given', () => {
     const seats: Seats = [host, null, null, null];
-    const out = seatJoiner(seats, 'lobby', zara);
+    const out = seatJoiner(seats, 'lobby', zara, NOW);
     expect(out).not.toBe(seats);
     expect(seats).toEqual([host, null, null, null]);
   });
@@ -64,7 +75,7 @@ describe('seatsBack', () => {
   });
 
   it('never takes a seat from a person, nor seats anyone twice', () => {
-    const zaraSeated = { kind: 'human', ...zara } as const;
+    const zaraSeated = { kind: 'human', ...zara, since: SINCE } as const;
     // Zara has taken seat 1 in the lobby since: it's hers.
     expect(seatsBack([host, zaraSeated, bot, null], [host, bilal, bot, null])).toBeNull();
     // Bilal is sitting in seat 3 now: seat 1's bot stays.
@@ -113,6 +124,14 @@ describe('hostOf', () => {
   it('passes over anyone who isn’t here, the host included', () => {
     expect(hostOf('u-host', [host, bilal, amna, null], allBut(0))).toBe('u-bilal');
     expect(hostOf('u-host', [host, bilal, amna, null], allBut(0, 1))).toBe('u-amna');
+  });
+
+  it('passes over a host a bot is playing for (away), and comes back to them once they’re back', () => {
+    const seats = [host, { ...bilal, since: '2026-09-24T19:05:00Z' }, bot, null] as const;
+    const away = markAway(EVERYONE_HERE, seats, 0, 'clock');
+    const here = (a: Absence) => (seat: Seat) => seats[seat]?.kind === 'human' && !isAway(a, seats, seat);
+    expect(hostOf('u-host', seats, here(away))).toBe('u-bilal');
+    expect(hostOf('u-host', seats, here(markPresent(away, seats, 0, 1)))).toBe('u-host');
   });
 
   it('falls back to the seated host when nobody is here, and to nobody when the host isn’t seated either', () => {

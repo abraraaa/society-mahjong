@@ -99,7 +99,9 @@ describe('a finished room, a week on', () => {
   it('still seats a newcomer within the week', async () => {
     const { room: after, seated } = await joinRoom(finished(ROOM_OPEN_MS - MINUTE), 'u-sana', 'Sana');
     expect(seated).toBe(true);
-    expect(after.seats[1]).toEqual({ kind: 'human', userId: 'u-sana', name: 'Sana' });
+    // Stamped with when she sat, for who has sat longest and a fresh absence.
+    expect(after.seats[1]).toEqual({ kind: 'human', userId: 'u-sana', name: 'Sana', since: expect.any(String) });
+    expect(Date.now() - Date.parse((after.seats[1] as { since: string }).since)).toBeLessThan(60_000);
   });
 
   it('lets its own people back in after the week', async () => {

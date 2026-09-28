@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { EVERYONE_HERE } from '../../../../../lib/live/absence';
 import type { NextRequest } from 'next/server';
 import type { GameRow, LiveMeta, RoomRow } from '../../../../../lib/live/store';
 import type { GameOver } from '../../../../../lib/live/table-state';
@@ -114,7 +115,15 @@ describe('POST /api/rooms/[code]/start', () => {
     const over: GameOver = { how: 'complete', by: null, at: 1, hands: 16, scores: [0, 0, 0, 0], seats: room.seats };
     db.room = room;
     db.game = game('active');
-    db.meta = { version: 40, table: { v: 1, scores: [0, 0, 0, 0], over, extra: {} }, legacy: false, actedAt: 0, updatedAt: 0, hand: 15, seq: 99 } satisfies LiveMeta;
+    db.meta = {
+      version: 40,
+      table: { v: 1, scores: [0, 0, 0, 0], over, absence: EVERYONE_HERE, extra: {} },
+      legacy: false,
+      actedAt: 0,
+      updatedAt: 0,
+      hand: 15,
+      seq: 99,
+    } satisfies LiveMeta;
     // The finish closes the room, which moves its updated_at: the deal is guarded by the room as the finish left it.
     db.after = { ...room, status: 'finished', updated_at: '2026-09-24T00:05:00Z' };
     const res = await start();
@@ -156,12 +165,20 @@ describe('POST /api/rooms/[code]/start, a room nobody is playing in', () => {
     const first = table.dealFirstHand(karachi, seats, 'stale-1', policyFor(['new']), stale);
     db.room = { ...room, seats };
     db.game = game('active');
-    db.meta = { version: 7, table: { v: 1, scores: [0, 0, 0, 0], over: null, extra: {} }, legacy: false, actedAt: stale, updatedAt: stale, hand: 0, seq: 1 } satisfies LiveMeta;
+    db.meta = {
+      version: 7,
+      table: { v: 1, scores: [0, 0, 0, 0], over: null, absence: EVERYONE_HERE, extra: {} },
+      legacy: false,
+      actedAt: stale,
+      updatedAt: stale,
+      hand: 0,
+      seq: 1,
+    } satisfies LiveMeta;
     db.live = {
       version: 7,
       state: first.state,
       deadlines: first.deadlines,
-      table: { v: 1, scores: [0, 0, 0, 0], over: null, extra: {} },
+      table: { v: 1, scores: [0, 0, 0, 0], over: null, absence: EVERYONE_HERE, extra: {} },
       legacy: false,
       wakeAt: null,
       actedAt: stale,
@@ -187,7 +204,7 @@ describe('POST /api/rooms/[code]/start, a room nobody is playing in', () => {
     db.game = game('active');
     db.meta = {
       version: 7,
-      table: { v: 1, scores: [0, 0, 0, 0], over: null, extra: {} },
+      table: { v: 1, scores: [0, 0, 0, 0], over: null, absence: EVERYONE_HERE, extra: {} },
       legacy: false,
       actedAt: Date.now() - 60_000,
       updatedAt: 0,

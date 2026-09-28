@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EVERYONE_HERE } from './absence';
 import type { HandState } from '@society/engine';
 
 /**
@@ -154,7 +155,7 @@ const dealAnswers = (q: Query): unknown => (q.target === 'games' ? newGame : q.t
 /** Hana's win, as one request writes it: the hand ends, its points are in the running totals, and a clock waits on nobody. */
 const write: TableWrite = {
   state: wonHand,
-  table: { v: 1, scores: [-8, 8, 0, 0], over: null, extra: {} },
+  table: { v: 1, scores: [-8, 8, 0, 0], over: null, absence: EVERYONE_HERE, extra: {} },
   deadlines: { claim: null, turn: null },
   wakeAt: null,
   acted: true,
@@ -215,7 +216,7 @@ describe('reads', () => {
       version: 7,
       state: wonHand,
       deadlines: { claim: null, turn: T + 90_000 },
-      table: { v: 1, scores: [-8, 8, 0, 0], over: null, extra: { ready: { hand: 2 } } },
+      table: { v: 1, scores: [-8, 8, 0, 0], over: null, absence: EVERYONE_HERE, extra: { ready: { hand: 2 } } },
       legacy: false,
       wakeAt: T + 90_000,
       actedAt: T - 60_000,
@@ -729,7 +730,7 @@ describe('what the room routes read of a live table', () => {
     }));
     expect(await liveMeta(GAME)).toEqual({
       version: 12,
-      table: { v: 1, scores: OVER.scores, over: JSON.parse(JSON.stringify(OVER)), extra: {} },
+      table: { v: 1, scores: OVER.scores, over: JSON.parse(JSON.stringify(OVER)), absence: EVERYONE_HERE, extra: {} },
       legacy: false,
       actedAt: T - 60_000,
       updatedAt: T,
@@ -835,6 +836,19 @@ describe('after a hand ends', () => {
     expect(log).toHaveBeenCalledWith('recordHand: could not write profile', 'u-abrar', DOWN.message);
   });
 
+  it('leaves out a seat a bot was playing for when the hand ended: its win isn’t its person’s', async () => {
+    answerAll(undefined, (q) => (q.target === 'profiles' && q.steps[0]?.[0] === 'select' ? [{ id: 'u-abrar', stats: { hands: 4, wins: 1 } }] : null));
+    const away = seats.map((s) => s?.kind === 'human' && s.userId === 'u-hana');
+    await recordHand(seats, wonHand, away);
+    const asked = supabase.log.filter(is('profiles', 'select')).flatMap((q) => q.steps.filter(([m]) => m === 'in').map(([, args]) => args[1]));
+    expect(asked).toEqual([['u-abrar']]);
+    expect(ran()).toEqual(['profiles:select', 'profiles:update']);
+    // Everyone away: nothing to tally, nothing asked.
+    supabase.log.length = 0;
+    await recordHand(seats, wonHand, [true, true, true, true]);
+    expect(supabase.log).toHaveLength(0);
+  });
+
   it('asks nothing of the database when no human sat the hand', async () => {
     const bots: Seats = [
       { kind: 'bot', name: 'Bilal' },
@@ -844,5 +858,18 @@ describe('after a hand ends', () => {
     ];
     await recordHand(bots, wonHand);
     expect(supabase.log).toHaveLength(0);
+  });
+});
+
+describe('createRoom', () => {
+  it('seats the host with when they sat down, so the host’s powers pass to whoever has sat longest after them', async () => {
+    answerAll(undefined, () => room);
+    const before = Date.now();
+    await createRoom({ code: 'ABCD', hostId: 'u-abrar', hostName: 'Abrar', rulesetId: 'karachi', options: {} });
+    const insert = supabase.log[0]!.steps.find(([m]) => m === 'insert')![1][0] as { seats: Seats };
+    expect(insert.seats).toEqual([{ kind: 'human', userId: 'u-abrar', name: 'Abrar', since: expect.any(String) }, null, null, null]);
+    const since = Date.parse((insert.seats[0] as { since: string }).since);
+    expect(since).toBeGreaterThanOrEqual(before);
+    expect(since).toBeLessThanOrEqual(Date.now());
   });
 });

@@ -1,5 +1,8 @@
+import type { Seat } from '@society/engine';
 import type { CoachStage } from '@/lib/coach';
-import type { TimerPolicy } from './types';
+import { isAway } from './absence';
+import type { Absence } from './table-state';
+import type { Seats, TimerPolicy } from './types';
 
 /**
  * Claim windows and turn limits by player level (docs/MULTIPLAYER.md §3). The
@@ -32,6 +35,16 @@ export function policyFor(stages: readonly CoachStage[], strict = false): TimerP
 /** The levels of the humans at a table, from a per-seat list: bots and empty seats (null) drop out. */
 export function humanLevels(levels: readonly (CoachStage | null)[]): CoachStage[] {
   return levels.filter((l): l is CoachStage => l !== null);
+}
+
+/**
+ * The levels of the humans who are here (R10), from a per-seat list: bots,
+ * empty seats and anyone a bot is playing for (away) drop out. The clocks
+ * are sized by these, so an away first-timer doesn't slow the others, and
+ * gets their long clocks back the moment they return.
+ */
+export function presentLevels(levels: readonly (CoachStage | null)[], seats: Seats, a: Absence | undefined): CoachStage[] {
+  return humanLevels(levels.map((l, i) => (i < 4 && seats[i]?.kind === 'human' && !isAway(a, seats, i as Seat) ? l : null)));
 }
 
 /**

@@ -82,8 +82,8 @@ export async function roomById(id: string): Promise<RoomRow | null> {
 }
 
 export async function createRoom(input: { code: string; hostId: string; hostName: string; rulesetId: RulesetId; options: Record<string, unknown> }): Promise<RoomRow> {
-  // The host's name is capped where it enters the room, whoever the caller is.
-  const seats: Seats = [{ kind: 'human', userId: input.hostId, name: cleanDisplayName(input.hostName) ?? 'Guest' }, null, null, null];
+  // The host's name is capped where it enters the room, whoever the caller is; `since` says they've sat there from the start.
+  const seats: Seats = [{ kind: 'human', userId: input.hostId, name: cleanDisplayName(input.hostName) ?? 'Guest', since: new Date().toISOString() }, null, null, null];
   const data = must(
     await db().from('rooms').insert({ code: input.code, host_id: input.hostId, ruleset_id: input.rulesetId, options: input.options, seats }).select(ROOM_COLUMNS).single(),
     'create the room',
@@ -289,13 +289,15 @@ export async function countHand(gameId: string): Promise<void> {
 
 /**
  * Count the hand on each human's profile and move their stage with it, so a
- * table's clocks quicken as it learns. Read-modify-write: the one way to
- * lose a count is the same person finishing two hands at once, which a
+ * table's clocks quicken as it learns. A seat flagged in `away` (a bot was
+ * playing it for its person when the hand ended) isn't counted: the bot's
+ * play, and above all its win, isn't theirs. Read-modify-write: the one way
+ * to lose a count is the same person finishing two hands at once, which a
  * timer can bear.
  */
-export async function recordHand(seats: Seats, state: HandState): Promise<void> {
+export async function recordHand(seats: Seats, state: HandState, away: readonly boolean[] = []): Promise<void> {
   const winner: Seat | null = state.result?.type === 'win' ? state.result.winner : null;
-  const humans = seats.flatMap((s, i) => (s?.kind === 'human' ? [{ id: s.userId, won: i === winner }] : []));
+  const humans = seats.flatMap((s, i) => (s?.kind === 'human' && !away[i] ? [{ id: s.userId, won: i === winner }] : []));
   if (humans.length === 0) return;
   const client = db();
   const ids = humans.map((h) => h.id);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { countOf, isolate, nameList, numberWord } from './words';
+import { countOf, isolate, nameList, numberWord, timesOf } from './words';
 
 describe('numberWord', () => {
   it('writes one to nine as words, and anything else in digits', () => {
@@ -20,6 +20,14 @@ describe('countOf', () => {
     expect(countOf(16, 'hand')).toBe('16 hands');
     expect(countOf(1, 'turn')).toBe('one turn');
     expect(countOf(3, 'set')).toBe('three sets');
+  });
+});
+
+describe('timesOf', () => {
+  it('says how many times the way a sentence does: once, twice, then a word to nine, then digits', () => {
+    expect([1, 2, 3, 9].map(timesOf)).toEqual(['once', 'twice', 'three times', 'nine times']);
+    expect(timesOf(10)).toBe('10 times');
+    expect(timesOf(12)).toBe('12 times');
   });
 });
 

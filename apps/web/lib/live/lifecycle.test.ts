@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { karachi, type GameProgress, type HandState } from '@society/engine';
+import { karachi, type GameProgress, type HandState, type Seat } from '@society/engine';
+import { EVERYONE_HERE, markAway } from './absence';
 import { STALE_GAME_MS, addHandScores, endOfGame, handsPlayed, isLastHand, isStale, presentAtEnd, publicGameOver } from './lifecycle';
 import { dealFirstHand } from './table';
 import { NEW_TABLE, type GameOver, type Scores4 } from './table-state';
@@ -116,13 +117,20 @@ describe('presentAtEnd', () => {
   const over = (how: GameEndHow): GameOver => ({ how, by: null, at: 0, hands: 16, scores: [0, 0, 0, 0], seats: SEATS });
 
   it('is the people seated at the end, never a bot or an empty seat', () => {
-    expect(presentAtEnd(over('complete'))).toEqual(['u-amna', 'u-bilal']);
-    expect(presentAtEnd(over('host'))).toEqual(['u-amna', 'u-bilal']);
+    expect(presentAtEnd(over('complete'), undefined)).toEqual(['u-amna', 'u-bilal']);
+    expect(presentAtEnd(over('host'), EVERYONE_HERE)).toEqual(['u-amna', 'u-bilal']);
+  });
+
+  it('leaves out anyone a bot was playing for when it ended', () => {
+    const bilal = SEATS.findIndex((s) => s?.kind === 'human' && s.userId === 'u-bilal') as Seat;
+    const away = markAway(EVERYONE_HERE, SEATS, bilal, 'clock');
+    expect(presentAtEnd(over('complete'), away)).toEqual(['u-amna']);
+    expect(presentAtEnd(over('host'), away)).toEqual(['u-amna']);
   });
 
   it('is nobody for a game that ended because nobody was playing, or because everyone left', () => {
-    expect(presentAtEnd(over('idle'))).toEqual([]);
-    expect(presentAtEnd(over('abandoned'))).toEqual([]);
+    expect(presentAtEnd(over('idle'), undefined)).toEqual([]);
+    expect(presentAtEnd(over('abandoned'), undefined)).toEqual([]);
   });
 });
 

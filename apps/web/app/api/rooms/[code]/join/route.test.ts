@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { EVERYONE_HERE } from '../../../../../lib/live/absence';
 import type { NextRequest } from 'next/server';
 import type { GameRow, LiveMeta, RoomRow } from '../../../../../lib/live/store';
 import type { GameOver } from '../../../../../lib/live/table-state';
@@ -59,7 +60,7 @@ const over: GameOver = { how: 'complete', by: null, at: 1, hands: 16, scores: [9
 /** The table, last moved by a person a minute ago: a game in play, not one left for hours. */
 const meta = (o: GameOver | null): LiveMeta => ({
   version: 40,
-  table: { v: 1, scores: [9, -3, -3, -3], over: o, extra: {} },
+  table: { v: 1, scores: [9, -3, -3, -3], over: o, absence: EVERYONE_HERE, extra: {} },
   legacy: false,
   actedAt: Date.now() - 60_000,
   updatedAt: Date.now() - 60_000,

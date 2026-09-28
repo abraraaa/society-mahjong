@@ -1,7 +1,9 @@
 import { analysisBot, karachi, startHand, viewFor, type GameProgress, type HandState, type Seat, type TileKind } from '@society/engine';
+import { EVERYONE_HERE, noteClockMove } from '../lib/live/absence';
 import { publicGameOver } from '../lib/live/lifecycle';
-import type { GameSnapshot } from '../lib/live/snapshot';
+import { ownAbsence, publicSeats, type GameSnapshot } from '../lib/live/snapshot';
 import { deadlinesFor, settle, step, type StepResult } from '../lib/live/table';
+import { NEW_TABLE, type Absence } from '../lib/live/table-state';
 import type { ClientAction, Deadlines, Seats, TimerPolicy } from '../lib/live/types';
 
 /**
@@ -38,6 +40,11 @@ const WEST_GOULASH: GameProgress = { roundWind: 'W', roundIndex: 2, handInRound:
 /** The game's sixteenth hand, its last. */
 const NORTH_LAST: GameProgress = { roundWind: 'N', roundIndex: 3, handInRound: 3, handIndex: 15 };
 
+/** The seats and Amna's own absence, as the server sends them for a table where `absence` says who's away. */
+function presence(absence: Absence): Pick<GameSnapshot, 'seats' | 'mine'> {
+  return { seats: publicSeats(SEATS, absence), mine: ownAbsence(SEATS, absence, ME) };
+}
+
 function snapshot(state: HandState, version: number, deadlines: Deadlines, status: GameSnapshot['status'] = 'active', extra: Partial<GameSnapshot> = {}): GameSnapshot {
   return {
     gameId: GAME_ID,
@@ -50,6 +57,7 @@ function snapshot(state: HandState, version: number, deadlines: Deadlines, statu
     seats: SEATS.map((s) => (s ? { kind: s.kind, name: s.name } : null)),
     scores: [0, 0, 0, 0],
     me: ME,
+    mine: ownAbsence(SEATS, EVERYONE_HERE, ME),
     view: viewFor(state, karachi, ME),
     status,
     now: MADE_AT,
@@ -101,8 +109,18 @@ export interface Fixtures {
   readonly solidTurn: GameSnapshot;
   /** The same turn after Bilal got up from the table: a bot plays his seat, under his name. Getting up changes the seats and not the table, so the version is the same. */
   readonly bilalLeft: GameSnapshot;
-  /** Amna's turn clock ran out, and the tick that found it had a bot move for her: what that tick answers her own phone, with the stand-in's move. */
+  /** Amna's turn clock ran out, and the tick that found it had a bot move for her: the table after it, with that move in her own absence (`mine`). */
   readonly timedOut: GameSnapshot;
+  /** Amna's second turn in a row whose clock ran out, the first already missed: a bot plays her tiles now, and it's Bilal's turn. Bilal has the host's powers while she's away. */
+  readonly awayTurn: GameSnapshot;
+  /** The same, after her "I'm back". */
+  readonly awayBack: GameSnapshot;
+  /** Amna's turn, the host's table (hers), after she handed Bilal's seat to a bot. */
+  readonly bilalAway: GameSnapshot;
+  /** A West pass of three tiles: Bilal, host while she's away, handed Amna's seat to a bot, which passed her tiles at once; Bilal still owes his. */
+  readonly awayWest: GameSnapshot;
+  /** Amna's turn, at a table where she isn't the host. */
+  readonly notHost: GameSnapshot;
   /** The table after her discard: Bilal's turn, so she has no Discard button. */
   readonly turnAfter: GameSnapshot;
   /** The same hand, finished, with the game over. */
@@ -137,9 +155,30 @@ function build(): Fixtures {
     return end && { t, after, end };
   });
 
-  // Her clock runs out on that turn, and a tick finds it: the stand-in's move is told to her phone alone, as the tick route does.
-  const expired = step({ game: live.t, ruleset: karachi, seats: SEATS, policy: POLICY, now: live.t.deadlines.turn! + 1 });
-  const timedOut = snapshot(expired.state, 6, expired.deadlines, 'active', { standIns: expired.standIns.filter((x) => x.seat === ME) });
+  // Her clock runs out on that turn, and a tick finds it: the stand-in's move is kept in her own absence, which only she is sent.
+  const expired = step({ game: { ...live.t, tableState: NEW_TABLE }, ruleset: karachi, seats: SEATS, policy: POLICY, now: live.t.deadlines.turn! + 1 });
+  const timedOut = snapshot(expired.state, 6, expired.deadlines, 'active', presence(expired.tableState.absence));
+
+  // Her second turn in a row with nobody at her phone: the first miss is behind her, and this one makes her away. The seed is one
+  // where Bilal's turn comes next, so the table waits on him.
+  const away = search('a second missed turn that leaves Bilal to play', (seed) => {
+    const t = deal(seed, EAST_HONOUR);
+    if (t.state.phase !== 'turn' || t.state.turn !== ME) return null;
+    const missed = noteClockMove(EVERYONE_HERE, SEATS, { by: 'clock', seat: ME, a: { type: 'pass', seat: ME } }, true);
+    const r = step({ game: { ...t, tableState: { ...NEW_TABLE, absence: missed } }, ruleset: karachi, seats: SEATS, policy: POLICY, now: t.deadlines.turn! + 1 });
+    if (r.state.phase !== 'turn' || r.state.turn !== 1 || r.tableState.absence[ME].away !== 'clock') return null;
+    const back = step({ game: r, ruleset: karachi, seats: SEATS, policy: POLICY, now: MADE_AT + 1, change: { type: 'back', seat: ME } });
+    return { r, back };
+  });
+  // The host, Amna, hands Bilal's seat to a bot on her own turn: nobody was waiting on him, so her clock runs on.
+  const handed = step({
+    game: { ...live.t, tableState: NEW_TABLE },
+    ruleset: karachi,
+    seats: SEATS,
+    policy: POLICY,
+    now: MADE_AT,
+    change: { type: 'letBotPlay', seat: 1, bySeat: ME, sawAt: null },
+  });
 
   // The step that scores the last hand ends the game by itself: that step's end is what the page is told.
   const last = search('a last hand that plays out and ends the game', (seed) => {
@@ -170,6 +209,16 @@ function build(): Fixtures {
     return { w, conflict, landed, tiles };
   });
 
+  // Bilal hands Amna's seat to a bot during a West pass both owe: her bot passes her tiles at once, and he still owes his.
+  const westAway = step({
+    game: { ...west.w, tableState: NEW_TABLE },
+    ruleset: karachi,
+    seats: SEATS,
+    policy: POLICY,
+    now: MADE_AT,
+    change: { type: 'letBotPlay', seat: ME, bySeat: 1, sawAt: null },
+  });
+
   return {
     turn: snapshot(live.t.state, 5, live.t.deadlines),
     newTurn: { ...snapshot(live.t.state, 5, live.t.deadlines), stage: 'new' },
@@ -178,6 +227,11 @@ function build(): Fixtures {
       seats: SEATS.map((s, i) => (i === 1 ? { kind: 'bot', name: 'Bilal' } : s && { kind: s.kind, name: s.name })),
     }),
     timedOut,
+    awayTurn: snapshot(away.r.state, 7, away.r.deadlines, 'active', { ...presence(away.r.tableState.absence), isHost: false }),
+    awayBack: snapshot(away.back.state, 8, away.back.deadlines, 'active', presence(away.back.tableState.absence)),
+    bilalAway: snapshot(handed.state, 6, handed.deadlines, 'active', presence(handed.tableState.absence)),
+    awayWest: snapshot(westAway.state, 2, westAway.deadlines, 'active', { ...presence(westAway.tableState.absence), isHost: false }),
+    notHost: { ...snapshot(live.t.state, 5, live.t.deadlines), isHost: false },
     turnAfter: snapshot(live.after.state, 6, live.after.deadlines),
     finished: snapshot(live.end.state, 9, { claim: null, turn: null }, 'finished'),
     handDone: snapshot(live.end.state, 9, { claim: null, turn: null }, 'active', { scores: [...(live.end.tableState.scores ?? [0, 0, 0, 0])] }),

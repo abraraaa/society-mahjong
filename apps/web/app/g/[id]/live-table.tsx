@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { getRuleset, type Seat } from '@society/engine';
 import { Table } from '@/components/table';
 import { NameGate } from '@/components/name-gate';
+import { AwayNote } from '@/components/away-note';
 import { ConfirmSheet } from '@/components/confirm-sheet';
 import { Notice } from '@/components/notice';
 import { Trouble, Waiting } from '@/components/trouble';
@@ -15,7 +16,7 @@ import { finalStandings } from '@/lib/live/final';
 import { handsPlayed } from '@/lib/live/lifecycle';
 import { HOST_LEAVE, endLine, endSheet } from '@/lib/live/lifecycle-copy';
 import { plainError } from '@/lib/live/plain';
-import { clockMoveNotice, seatMarks, tableNews } from '@/lib/live/presence';
+import { IM_BACK, awaySummary, awayTitle, canLetBotPlay, letBotPlayLabel, letBotPlaySheet, seatMarks, tableNews } from '@/lib/live/presence';
 import { isPrivate, type GameSnapshot } from '@/lib/live/snapshot';
 import type { ClientAction } from '@/lib/live/types';
 import { NeedsCaptcha, ensureSession } from '@/lib/supabase/session';
@@ -46,10 +47,13 @@ export function LiveTable({ gameId }: { gameId: string }) {
   // Why the last tap did nothing, shown over the table for a moment.
   const [notice, setNotice] = useState<string | null>(null);
   const clearNotice = useCallback(() => setNotice(null), []);
-  // One sheet over the table at a time: Leave, or the host's End.
-  const [sheet, setSheet] = useState<{ readonly kind: 'leave' | 'end' } | null>(null);
+  // One sheet over the table at a time: Leave, the host's End, or the host handing a seat to a bot (with the server's clock on
+  // the table they were looking at when they tapped the name).
+  const [sheet, setSheet] = useState<{ readonly kind: 'leave' | 'end' } | { readonly kind: 'bot'; readonly seat: Seat; readonly sawAt: number } | null>(null);
   // A sheet's answer is on its way: its buttons wait for it.
   const [sheetBusy, setSheetBusy] = useState(false);
+  // "I'm back" is on its way.
+  const [backing, setBacking] = useState(false);
   // Remembered on this phone, so turning the tutor off survives a refresh.
   const [tutorOn, toggleTutor] = useTutorOn();
   const supabaseRef = useRef<SupabaseClient | null>(null);
@@ -69,11 +73,11 @@ export function LiveTable({ gameId }: { gameId: string }) {
   const [sync, setSync] = useState<{ serverNow: number; at: number } | null>(null);
   const [now, setNow] = useState<number | null>(null);
 
-  // Takes a snapshot, and says what changed at the table since the one before (someone left, say) in the line at the top.
-  // A tap's own failure, told after this, still has the last word. Returns what it said, for a caller with more to add.
-  const take = useCallback((s: GameSnapshot): string | null => {
+  // Takes a snapshot, and says what changed at the table since the one before (someone left or stepped away, a clock ran out
+  // on the reader, whichever phone found it) in the line at the top. A tap's own failure, told after this, has the last word.
+  const take = useCallback((s: GameSnapshot): void => {
     const prev = latestRef.current;
-    if (prev && s.version < prev.version) return null; // an older reply arriving late
+    if (prev && s.version < prev.version) return; // an older reply arriving late
     const news = prev ? tableNews(prev, s) : null;
     if (news) setNotice(news);
     latestRef.current = s;
@@ -85,7 +89,6 @@ export function LiveTable({ gameId }: { gameId: string }) {
     setSync({ serverNow: s.now, at });
     setNow(at);
     setSnap(s);
-    return news;
   }, []);
 
   // A once-a-second tick while any clock is running, for the countdown.
@@ -212,16 +215,12 @@ export function LiveTable({ gameId }: { gameId: string }) {
     // A clock that has already run out (a phone waking up) is resolved at once,
     // so the stale table is on screen for as short a time as possible.
     const wait = Math.max(0, Math.min(...due) + skew - Date.now() + 750);
+    // What a clock did for the reader comes back in their own absence (tableNews), on this tick or whichever look sees it first.
     const t = setTimeout(
       () =>
         api
           .tick(gameId)
-          .then((s) => {
-            const news = take(s);
-            // This tick ran the reader's own clock out, and a bot moved for them: that comes first, then anything else that changed.
-            const mine = s.standIns?.find((x) => x.seat === s.me);
-            if (mine) setNotice([clockMoveNotice({ by: 'clock', seat: mine.seat, a: mine.action }), news].filter((x) => x).join(' '));
-          })
+          .then(take)
           .catch(() => refetch()),
       wait,
     );
@@ -235,6 +234,18 @@ export function LiveTable({ gameId }: { gameId: string }) {
     snap?.seats.forEach((s, i) => {
       if (s) out[i as Seat] = i === snap.me ? 'You' : s.name;
     });
+    return out;
+  }, [snap]);
+  // The host can tap the name of anyone at the table who's still here, to let a bot play for them. The sheet keeps the server's
+  // clock on the table the host was looking at when they tapped (sawAt), so a tap of that person's since then turns it down (R8).
+  // Worked out once per table, not per render: it's that table's clock the handlers must carry, so seats alone won't do.
+  const seatActions = useMemo(() => {
+    const out: Partial<Record<Seat, { label: string; onTap: () => void }>> = {};
+    if (!snap) return out;
+    for (const seat of [0, 1, 2, 3] as const) {
+      const s = snap.seats[seat];
+      if (s && canLetBotPlay(snap, seat)) out[seat] = { label: letBotPlayLabel(s.name), onTap: () => setSheet({ kind: 'bot', seat, sawAt: snap.now }) };
+    }
     return out;
   }, [snap]);
   const analysis = useMemo(() => (view && ruleset ? analyseFor(view, ruleset) : null), [view, ruleset]);
@@ -356,6 +367,35 @@ export function LiveTable({ gameId }: { gameId: string }) {
     }
   };
 
+  // The host hands someone's seat to a bot. Whatever comes back, the sheet goes: the table (or the refusal's copy of it) shows
+  // how things stand, and why, if it didn't happen.
+  const letBotPlay = async (seat: Seat, sawAt: number) => {
+    setSheetBusy(true);
+    try {
+      take(await api.letBotPlay(gameId, seat, sawAt));
+    } catch (err) {
+      if (err instanceof ApiError && err.snapshot) take(err.snapshot);
+      setNotice(plainError(err));
+    } finally {
+      setSheetBusy(false);
+      setSheet(null);
+    }
+  };
+
+  // "I'm back": the bot hands the reader's seat back; "Welcome back." comes with the table (tableNews).
+  const comeBack = () => {
+    setBacking(true);
+    api
+      .back(gameId)
+      .then(take)
+      .catch((err: unknown) => {
+        // Turned down with the table attached (the game ended, say): show it as it stands.
+        if (err instanceof ApiError && err.snapshot) take(err.snapshot);
+        setNotice(plainError(err));
+      })
+      .finally(() => setBacking(false));
+  };
+
   const deadline = snap.deadlines.turn ?? snap.deadlines.claim;
   const clock =
     deadline !== null && sync && now !== null
@@ -382,6 +422,12 @@ export function LiveTable({ gameId }: { gameId: string }) {
   // The sheets are for a game in play: one that ends while a sheet is open (the last hand scored, or ended by the host) closes it.
   const open = snap.status === 'active' ? sheet : null;
   const closeSheet = () => setSheet(null);
+  // While a bot plays the reader's tiles, the note says so, over the hand, until they're back: only while a hand is being
+  // played (a finished one has its result sheet), and never under another sheet.
+  const away = snap.status === 'active' && view.phase !== 'finished' && !open ? snap.mine?.away : null;
+  const awayNote = away ? <AwayNote title={awayTitle(away)} detail={awaySummary(snap.mine!.played)} actionLabel={IM_BACK} busy={backing} onAction={comeBack} /> : undefined;
+  const botSheet = open?.kind === 'bot' ? open : null;
+  const botName = botSheet ? (snap.seats[botSheet.seat]?.name ?? '') : '';
 
   return (
     <>
@@ -417,6 +463,8 @@ export function LiveTable({ gameId }: { gameId: string }) {
         scores={scores}
         handsPerRound={ruleset.handsPerRound}
         marks={seatMarks(snap)}
+        seatActions={seatActions}
+        awayNote={awayNote}
         {...(ending !== undefined ? { endLine: ending } : {})}
       />
       {/* Each question opens on the top layer (ConfirmSheet), over the result sheet or whatever other sheet the table has up. */}
@@ -443,6 +491,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
           />
         ))}
       {open?.kind === 'end' && <ConfirmSheet {...endSheet(view.phase !== 'finished', handsPlayed(view))} busy={sheetBusy} onConfirm={endForEveryone} onCancel={closeSheet} />}
+      {botSheet && <ConfirmSheet {...letBotPlaySheet(botName)} busy={sheetBusy} onConfirm={() => void letBotPlay(botSheet.seat, botSheet.sawAt)} onCancel={closeSheet} />}
     </>
   );
 }
