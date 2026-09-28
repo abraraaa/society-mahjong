@@ -2,7 +2,7 @@ import 'server-only';
 import type { Seat } from '@society/engine';
 import { isClosedRoom } from '../front-door';
 import { recordEvent } from './events';
-import { lastGameFrom, type LastGameRow } from './final';
+import { lastGameFrom, lastGameFromOver, type LastGameRow } from './final';
 import { SEAT_ATTEMPTS, hostOf, isHere, seatJoiner, seatOffer, takeSeat, vacate, type Circle, type SeatOffer } from './seating';
 import { HttpError } from './errors';
 import { logError } from './log';
@@ -27,6 +27,13 @@ export type RoomCircle = Circle & { readonly lastGame: LastGameRow | null };
  * (an abandon) the room's latest finished game, read then, so an abandoned
  * game never hides the room's last real result.
  *
+ * The finish closes the room before it writes the game's own row (store.ts
+ * finishGame), so for a moment on every finish, and for as long as a finish
+ * that failed part way leaves it so, the current game still reads active.
+ * Its end is saved on its live table all the same, and that's what's read
+ * then (final.ts lastGameFromOver): who's here is judged by that end, and
+ * it's the last game, not the one before.
+ *
  * In 'show' mode (a lobby snapshot) a read that fails is logged as
  * room_circle_failed and gives null: the lobby then tags nobody and shows no
  * last game, and its next poll tries again. In 'decide' mode (the start, and
@@ -38,7 +45,7 @@ export async function roomCircle(room: RoomRow, mode: 'show'): Promise<RoomCircl
 export async function roomCircle(room: RoomRow, mode: 'show' | 'decide'): Promise<RoomCircle | null> {
   try {
     const between = room.status === 'finished' && room.current_game_id !== null;
-    const [members, current] = await Promise.all([roomMembers(room.id), between ? lastGameOf(room.current_game_id!) : Promise.resolve(null)]);
+    const [members, current] = await Promise.all([roomMembers(room.id), between ? currentGame(room.current_game_id!) : Promise.resolve(null)]);
     const lastGame = !between ? null : current?.status === 'finished' ? current : await lastFinishedGame(room.id);
     return {
       seen: new Map(members.map((m) => [m.userId, m.lastSeenAt])),
@@ -50,6 +57,14 @@ export async function roomCircle(room: RoomRow, mode: 'show' | 'decide'): Promis
     logError('room_circle_failed', err, { roomId: room.id });
     return null;
   }
+}
+
+/** The room's current game as the lobby reads it (lastGameOf), or, while its row still reads active, the end its live table has saved. */
+async function currentGame(gameId: string): Promise<LastGameRow | null> {
+  const row = await lastGameOf(gameId);
+  if (row?.status !== 'active') return row;
+  const over = (await liveMeta(gameId))?.table.over;
+  return over ? lastGameFromOver(over) : row;
 }
 
 /** The circle with one person checked in at `at`, as their touch has just written it: no second read. */
@@ -148,9 +163,10 @@ async function playingScores(room: RoomRow): Promise<readonly number[] | null> {
  * already seated just checks in (touchMember), in any status, and nothing is
  * written to the room. A newcomer between games (or before the first) is
  * seated by R18's order (seating.ts seatJoiner): a bot keeping their own seat,
- * an empty seat, a bot's, then the seat of someone who isn't here (never the
- * host's), unless the room has been quiet for six weeks and they've never
- * been part of it (R24); then they're checked in. Someone arriving at a game
+ * an empty seat, a bot keeping nobody's, a bot keeping someone else's, then
+ * the seat of someone who isn't here (never the host's, kept or not),
+ * unless the room has been quiet for six weeks and they've never been part
+ * of it (R24); then they're checked in. Someone arriving at a game
  * in play is offered a bot's seat to take over (`offer`, R21), with nothing
  * written: the seat is theirs only once they take it (sitDown). With no bot
  * playing, they're turned away. The seat write is optimistic on the room's
@@ -158,46 +174,57 @@ async function playingScores(room: RoomRow): Promise<readonly number[] | null> {
  * the second of them on a fresh read, and nobody ends up in someone else's
  * seat.
  *
+ * Only what a newcomer's seat rests on is read for real, so a failed read
+ * turns nobody away on a guess, and blocks nobody for no reason: whether the
+ * room is closed to them is asked of the members only when the room's own
+ * writes say it's been quiet, and the whole circle (with the last game's end)
+ * only when R18's last step is needed, every other seat being a person's.
+ *
  * `circle` is who's been seen at the room, for the lobby snapshot, with the
  * caller's own check-in in it only when it was written: after a failed touch
  * it says what the next poll will say, and that poll checks them in. It's
  * null for a room in play (the lobby doesn't show one), or when it couldn't
- * be read for someone already seated.
+ * be read for the snapshot.
  */
 export async function joinRoom(room: RoomRow, userId: string, name: string, now = Date.now()): Promise<Joined> {
-  const checkIn = async (r: RoomRow, circle: RoomCircle | null) => {
-    const touched = await touchMember(r.id, userId, now);
+  // The circle for the snapshot, read beside the touch when it isn't already in hand.
+  const checkIn = async (r: RoomRow, known: RoomCircle | Promise<RoomCircle | null> | null) => {
+    const [touched, circle] = await Promise.all([touchMember(r.id, userId, now), known]);
     return touched && circle !== null ? withCheckIn(circle, userId, now) : circle;
   };
   const none = { seated: false, displaced: false, offer: null } as const;
   let current = room;
-  if (seatOf(current.seats, userId) !== null) {
-    const circle = current.status === 'playing' ? null : await roomCircle(current, 'show');
-    return { ...none, room: current, circle: await checkIn(current, circle) };
-  }
+  if (seatOf(current.seats, userId) !== null) return { ...none, room: current, circle: await checkIn(current, current.status === 'playing' ? null : roomCircle(current, 'show')) };
   if (current.status === 'playing') return offered(current, userId);
-  // Read for real: whether the room is closed to this person depends on it, and so may whose seat they're given, and a blip
-  // mustn't turn anyone away for good, or displace anyone on a guess.
-  let circle = await roomCircle(current, 'decide');
+  // Read for real when it's read at all, and judged afresh against the room as each try reads it (it may have been dealt again,
+  // or a game finished, since): a blip mustn't turn anyone away for good, or displace anyone on a guess.
   for (let attempt = 1; ; attempt++) {
-    if (seatOf(current.seats, userId) !== null) return { ...none, room: current, circle: await checkIn(current, circle) };
+    if (seatOf(current.seats, userId) !== null) return { ...none, room: current, circle: await checkIn(current, roomCircle(current, 'show')) };
     if (current.status === 'playing') return offered(current, userId);
     // A code is enough to sit down, so a room doesn't stay open to strangers forever: after six quiet weeks only its own people get in.
-    const lastSeen = Math.max(Number.NEGATIVE_INFINITY, ...circle.seen.values());
-    if (!circle.seen.has(userId) && isClosedRoom(current, now, Number.isFinite(lastSeen) ? lastSeen : null)) throw new HttpError(410, 'this table has closed');
-    const seats = seatJoiner(current.seats, current.status, { userId, name }, now, { hostId: current.host_id, circle });
+    if (isClosedRoom(current, now)) {
+      const members = await roomMembers(current.id);
+      const lastSeen = Math.max(Number.NEGATIVE_INFINITY, ...members.map((m) => m.lastSeenAt));
+      if (!members.some((m) => m.userId === userId) && isClosedRoom(current, now, Number.isFinite(lastSeen) ? lastSeen : null)) throw new HttpError(410, 'this table has closed');
+    }
+    const joiner = { userId, name };
+    let circle: RoomCircle | null = null;
+    let seats = seatJoiner(current.seats, current.status, joiner, now, { hostId: current.host_id, circle });
+    // Every seat is a person's (or the host's, kept): only now does it matter who's here, for whose seat they may be given.
+    if (!seats && current.seats.some((s) => s?.kind === 'human' && s.userId !== current.host_id)) {
+      circle = await roomCircle(current, 'decide');
+      seats = seatJoiner(current.seats, current.status, joiner, now, { hostId: current.host_id, circle });
+    }
     if (!seats) throw new HttpError(409, 'this table is full');
     const updated_at = await saveSeats(current.id, seats, current.updated_at);
     if (updated_at) {
       const seated = { ...current, seats, updated_at };
       const at = seatOf(seats, userId);
       const displaced = at !== null && current.seats[at]?.kind === 'human';
-      return { room: seated, seated: true, displaced, offer: null, circle: await checkIn(seated, circle) };
+      return { room: seated, seated: true, displaced, offer: null, circle: await checkIn(seated, circle ?? roomCircle(seated, 'show')) };
     }
     if (attempt >= SEAT_ATTEMPTS) throw new HttpError(409, 'that seat was just taken; try again');
     current = await requireRoom(current.code);
-    // The room may have been dealt again, or a game finished, since: who's here is judged against it as it now is.
-    if (current.status !== 'playing') circle = await roomCircle(current, 'decide');
   }
 }
 

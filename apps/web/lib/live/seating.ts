@@ -37,31 +37,47 @@ function heldFor(entry: SeatEntry): string | null {
  * 1. a bot keeping the joiner's own seat;
  * 2. an empty seat;
  * 3. a bot keeping nobody's seat;
- * 4. a bot keeping someone else's seat;
+ * 4. a bot keeping someone else's seat, but never the host's (the host
+ *    comes back to it: a newcomer never takes the host's seat);
  * 5. the seat of someone who isn't here (isHere), least recently seen first
  *    (nobody seen before anyone seen, then the oldest visit; ties by seat),
  *    but never the room's host's.
+ * A `circle` of null means who's here isn't known yet: steps 1 to 4 only,
+ * so the caller reads it only when nothing else is free.
  * A room in play seats nobody this way (null): someone arriving then takes a
  * bot's seat over instead (takeSeat).
  *
  * Without it, the order before rooms knew who was here: the first empty seat,
  * or between games (a finished room) the first bot's.
  */
-export function seatJoiner(seats: Seats, status: RoomStatus, joiner: Joiner, now: number, pick?: { readonly hostId: string; readonly circle: Circle }): Seats | null {
+export function seatJoiner(seats: Seats, status: RoomStatus, joiner: Joiner, now: number, pick?: SeatPick): Seats | null {
   const at = pick ? pickSeat(seats, status, joiner, now, pick) : seats.findIndex((s) => s === null || (status === 'finished' && s.kind === 'bot'));
   return at < 0 ? null : withSeat(seats, at, sitting(joiner, now));
 }
 
+/** What seatJoiner picks by, between games: the room's host, and who's been seen at the room (null: not read, so R18's last step isn't tried). */
+export interface SeatPick {
+  readonly hostId: string;
+  readonly circle: Circle | null;
+}
+
 /** R18's order (seatJoiner): the seat the joiner gets, or -1. */
-function pickSeat(seats: Seats, status: RoomStatus, joiner: Joiner, now: number, pick: { readonly hostId: string; readonly circle: Circle }): number {
+function pickSeat(seats: Seats, status: RoomStatus, joiner: Joiner, now: number, pick: SeatPick): number {
   if (status === 'playing') return -1;
   const first = (test: (s: SeatEntry) => boolean) => seats.findIndex(test);
-  const steps = [first((s) => heldFor(s) === joiner.userId), first((s) => s === null), first((s) => s?.kind === 'bot' && heldFor(s) === null), first((s) => s?.kind === 'bot')];
+  const steps = [
+    first((s) => heldFor(s) === joiner.userId),
+    first((s) => s === null),
+    first((s) => s?.kind === 'bot' && heldFor(s) === null),
+    first((s) => s?.kind === 'bot' && heldFor(s) !== pick.hostId),
+  ];
   const found = steps.find((i) => i >= 0);
   if (found !== undefined) return found;
+  const circle = pick.circle;
+  if (circle === null) return -1;
   // Someone else's seat, then: never the host's, and never anyone here. Unseen first, then the longest since they were seen.
   const away = seats.flatMap((s, i) =>
-    s?.kind === 'human' && s.userId !== pick.hostId && !isHere(s, pick.circle, now) ? [{ i, seen: pick.circle.seen.get(s.userId) ?? Number.NEGATIVE_INFINITY }] : [],
+    s?.kind === 'human' && s.userId !== pick.hostId && !isHere(s, circle, now) ? [{ i, seen: circle.seen.get(s.userId) ?? Number.NEGATIVE_INFINITY }] : [],
   );
   away.sort((a, b) => (a.seen === b.seen ? a.i - b.i : a.seen < b.seen ? -1 : 1));
   return away[0]?.i ?? -1;

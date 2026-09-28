@@ -102,13 +102,19 @@ creates it, and the server does everything else with the service role.
    get in, and their check-in opens it again. Standing up from the lobby
    works before the first game and between games. A newcomer is seated, in
    this order: a bot keeping their own seat, an empty seat, a bot keeping
-   nobody's seat, a bot keeping someone else's, and last the seat of someone
-   seated who isn't here (below), the one seen longest ago first (nobody
-   seen before anyone seen), never the room's host's. Someone whose seat was
-   given away like that and comes back before the start is seated the same
-   way; only when every other seat is the host's or someone here's are they
-   told the table is full. Someone who opens the link once a game has
-   started is offered a bot's seat to take over instead (below).
+   nobody's seat, a bot keeping someone else's (never the host's), and last
+   the seat of someone seated who isn't here (below), the one seen longest
+   ago first (nobody seen before anyone seen), never the room's host's. So
+   a newcomer never takes the host's seat, kept or not. Someone whose seat
+   was given away like that and comes back before the start is seated the
+   same way; only when every other seat is the host's or someone here's are
+   they told the table is full. That includes someone who still has the
+   lobby open when it happens: its poll finds them unseated and sits them
+   down again, as opening the link would. Only what a newcomer's seat rests
+   on is read: who's been seen at the room only when its own writes say
+   it's been quiet for six weeks, and who's here only when every other seat
+   is a person's. Someone who opens the link once a game has started is
+   offered a bot's seat to take over instead (below).
 3. **Start.** Every empty seat gets a bot, and so does every seat whose
    person isn't here: that bot keeps the seat for them (`kept: 'late'`), and
    a bot already keeping someone's seat goes on keeping it. Nobody's seat is
@@ -386,9 +392,13 @@ here should have them, and the lobby says who that is ("Waiting for Ayesha
 to start."). A finished room also shows its last game ("Last game: Ayesha
 finished top on +14,504."), read from its latest finished game and that
 game's `game_players`: an abandoned game never hides the one before it.
+The finish closes the room before it writes the game's own row, so for a
+moment (or longer, if that last write fails) the room is between games
+while its game still reads active; the lobby then goes by the end saved on
+the live table, for who's here and for the last game.
 If who's been seen can't be read, the lobby tags nobody and its next poll
-tries again; Start and a newcomer's join fail instead, so nobody is dealt
-out or turned away on a guess.
+tries again; Start fails instead, and so does a newcomer's join that needs
+the answer, so nobody is dealt out, displaced or turned away on a guess.
 
 **Leaving.** Any seat can stand up from a live table (Leave, top right,
 with a confirmation that says opening the invite link again sits them back

@@ -328,7 +328,9 @@ export function LiveTable({ gameId }: { gameId: string }) {
         setTakeError(null);
         try {
           await api.sit(snap.roomCode, offer.seat, name);
-          // Seated now: the channels are joined again as a seated player, and the table looked at again.
+          // Seated now: the channels are joined again as a seated player, and the table looked at again. Anything said while they
+          // were deciding is old by now, and mustn't pop up over the table they sit down at.
+          setNotice(null);
           setAttempt((n) => n + 1);
           await refetch();
         } catch (err) {

@@ -35,7 +35,8 @@ vi.mock('./store', () => ({
 
 import { ROOM_OPEN_MS } from '../front-door';
 import { HttpError, SupabaseError } from './errors';
-import type { LastGameRow } from './final';
+import { lastGameFromOver, type LastGameRow } from './final';
+import type { GameOver } from './table-state';
 import { joinRoom, leaveRoom, requireRoom, roomCircle, roomSnapshot, sitDown, type RoomCircle } from './rooms';
 import { HERE_FOR_MS } from './seating';
 import * as events from './events';
@@ -217,6 +218,43 @@ describe('who has been seen at a room', () => {
     expect(circle!.lastEndedAt).toBe(9);
     expect(circle!.lastGame).toBe(db.lastFinished);
     expect(store.lastFinishedGame).toHaveBeenCalledWith('r-1');
+  });
+
+  it('while the finish has closed the room but not written the game yet, goes by the end saved on the table: who’s here, and the last game', async () => {
+    const seats: RoomRow['seats'] = [room.seats[0], { kind: 'human', userId: 'u-bilal', name: 'Bilal' }, { kind: 'bot', name: 'Sana' }, { kind: 'bot', name: 'Omar' }];
+    const over: GameOver = { how: 'complete', by: null, at: 7, hands: 16, scores: [100, 14504, -8000, -6604], seats };
+    db.current = { status: 'active', endedAt: null, how: null, hands: 15, players: [] } satisfies LastGameRow;
+    db.lastFinished = ended('finished', 2);
+    db.meta = playingMeta({ table: { ...playingMeta().table, over } });
+    const circle = await roomCircle(finished, 'show');
+    expect(circle!.lastEndedAt).toBe(7);
+    expect(circle!.lastGame).toEqual(lastGameFromOver(over));
+    expect(store.liveMeta).toHaveBeenCalledWith(GAME);
+    expect(store.lastFinishedGame).not.toHaveBeenCalled();
+    // The lobby shows this game, not the one before, with Bilal on top.
+    expect(roomSnapshot({ ...finished, seats }, 'u-abrar', Date.now(), circle).lastGame).toMatchObject({
+      hands: 16,
+      me: 0,
+      rows: expect.arrayContaining([{ seat: 1, name: 'Bilal', bot: false, score: 14504 }]),
+    });
+  });
+
+  it('after an abandon saved on the table but not yet on the game, judges who’s here by its end and shows the last finished game', async () => {
+    db.current = { status: 'active', endedAt: null, how: null, hands: 3, players: [] } satisfies LastGameRow;
+    db.lastFinished = ended('finished', 2);
+    db.meta = playingMeta({ table: { ...playingMeta().table, over: { how: 'abandoned', by: null, at: 9, hands: 3, scores: [0, 0, 0, 0], seats: room.seats } } });
+    const circle = await roomCircle(finished, 'show');
+    expect(circle!.lastEndedAt).toBe(9);
+    expect(circle!.lastGame).toBe(db.lastFinished);
+  });
+
+  it('with no end saved on the table either, reads the game as it stands', async () => {
+    db.current = { status: 'active', endedAt: null, how: null, hands: 3, players: [] } satisfies LastGameRow;
+    db.lastFinished = ended('finished', 2);
+    db.meta = playingMeta();
+    const circle = await roomCircle(finished, 'show');
+    expect(circle!.lastEndedAt).toBeNull();
+    expect(circle!.lastGame).toBe(db.lastFinished);
   });
 
   it('reads no game before the room’s first, or while one is in play', async () => {
@@ -408,6 +446,56 @@ describe('a newcomer between games, when every seat is taken', () => {
     const out = await joinRoom(after, 'u-omar', 'Omar');
     expect(out).toMatchObject({ seated: true, displaced: false });
     expect(out.room.seats[3]).toMatchObject({ userId: 'u-omar' });
+  });
+});
+
+describe('a newcomer’s join reads only what their seat rests on', () => {
+  const finished: RoomRow = { ...room, status: 'finished' };
+  const down = () => new SupabaseError('read the last game', { message: 'TypeError: fetch failed' });
+
+  it('sits them down in an open room with a free seat when the last game, or who has been seen, can’t be read', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(store.lastGameOf).mockRejectedValueOnce(down());
+    const first = await joinRoom(finished, 'u-sana', 'Sana');
+    expect(first).toMatchObject({ seated: true, displaced: false });
+    // The lobby's snapshot tags nobody this once; its next poll reads again.
+    expect(first.circle).toBeNull();
+    vi.mocked(store.roomMembers).mockRejectedValueOnce(down());
+    expect((await joinRoom(finished, 'u-hana', 'Hana')).seated).toBe(true);
+    expect(JSON.parse(log.mock.calls[0]![0] as string)).toMatchObject({ event: 'room_circle_failed' });
+    log.mockRestore();
+  });
+
+  it('asks who’s here only once every other seat is a person’s, and then for real', async () => {
+    await joinRoom(finished, 'u-sana', 'Sana');
+    // Seated first; the circle read after is only for the lobby's snapshot.
+    expect(vi.mocked(store.saveSeats).mock.invocationCallOrder[0]!).toBeLessThan(vi.mocked(store.lastGameOf).mock.invocationCallOrder[0]!);
+    vi.clearAllMocks();
+    const full: RoomRow = {
+      ...finished,
+      seats: [room.seats[0], { kind: 'human', userId: 'u-b', name: 'B' }, { kind: 'human', userId: 'u-c', name: 'C' }, { kind: 'human', userId: 'u-d', name: 'D' }],
+    };
+    vi.mocked(store.lastGameOf).mockRejectedValueOnce(down());
+    await expect(joinRoom(full, 'u-sana', 'Sana')).rejects.toBeInstanceOf(SupabaseError);
+    expect(store.saveSeats).not.toHaveBeenCalled();
+  });
+
+  it('never gives a newcomer the host’s own kept seat, so the host is never told their own table is full', async () => {
+    const HOUR = 60 * 60 * 1000;
+    const keptForHost = { kind: 'bot', name: 'Sana', heldFor: 'u-abrar', keptName: 'Abrar', kept: 'left' } as const;
+    const people = [
+      { kind: 'human', userId: 'u-bilal', name: 'Bilal' },
+      { kind: 'human', userId: 'u-hana', name: 'Hana' },
+      { kind: 'human', userId: 'u-omar', name: 'Omar' },
+    ] as const;
+    const r: RoomRow = { ...finished, seats: [keptForHost, ...people] };
+    db.members = ['u-bilal', 'u-hana', 'u-omar'].map((userId) => ({ userId, lastSeenAt: Date.now() - HOUR }));
+    await expect(joinRoom(r, 'u-zara', 'Zara')).rejects.toMatchObject({ status: 409, message: 'this table is full' });
+    expect(store.saveSeats).not.toHaveBeenCalled();
+    // The host sits back down in it.
+    const back = await joinRoom(r, 'u-abrar', 'Abrar');
+    expect(back).toMatchObject({ seated: true, displaced: false });
+    expect(back.room.seats[0]).toMatchObject({ kind: 'human', userId: 'u-abrar' });
   });
 });
 

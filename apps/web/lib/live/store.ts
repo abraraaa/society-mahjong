@@ -7,7 +7,7 @@ import { HttpError, must, SupabaseError, type SupabaseFailure } from './errors';
 import { finalPlayers, type LastGameRow } from './final';
 import { commitArgs, type TableWrite } from './hand-log';
 import { presentAtEnd } from './lifecycle';
-import { SEAT_ATTEMPTS, seatsBack } from './seating';
+import { SEAT_ATTEMPTS, SEEN_REFRESH_MS, seatsBack } from './seating';
 import { stageFromStats, tallyHand, type ProfileStats } from './stage';
 import { NEW_TABLE, parseTableState, tableStateJson, wakeAt, type Absence, type GameOver, type TableState } from './table-state';
 import type { Deadlines, GameEndHow, LiveGame, LoggedMove, RoomStatus, SeatEntry, Seats } from './types';
@@ -105,21 +105,35 @@ export async function createRoom(input: { code: string; hostId: string; hostName
  * Never writes `rooms`, so it can't move `updated_at` under a host tapping
  * Start. Best-effort: a failure is logged as member_touch_failed and gives
  * false, and the lobby's next poll tries again; true when it wrote.
+ *
+ * A person with no profile row can never be checked in (room_members.user_id
+ * references profiles). That's logged once as profile_missing, and this
+ * server doesn't try that person again for SEEN_REFRESH_MS, so a lobby left
+ * open doesn't write, fail and log every five seconds.
  */
 export async function touchMember(roomId: string, userId: string, at: number): Promise<boolean> {
+  if ((noProfile.get(userId) ?? Number.NEGATIVE_INFINITY) > at) return false;
   try {
-    must(
-      await db()
-        .from('room_members')
-        .upsert({ room_id: roomId, user_id: userId, last_seen_at: new Date(at).toISOString() }, { onConflict: 'room_id,user_id' }),
-      'check in at the room',
-    );
+    const res = await db()
+      .from('room_members')
+      .upsert({ room_id: roomId, user_id: userId, last_seen_at: new Date(at).toISOString() }, { onConflict: 'room_id,user_id' });
+    if (res.error?.code === NO_SUCH_ROW) {
+      if (noProfile.size >= NO_PROFILE_KEPT) noProfile.clear();
+      noProfile.set(userId, at + SEEN_REFRESH_MS);
+      logError('profile_missing', new SupabaseError('check in at the room', res.error), { roomId });
+      return false;
+    }
+    must(res, 'check in at the room');
     return true;
   } catch (err) {
     logError('member_touch_failed', err, { roomId });
     return false;
   }
 }
+
+/** People whose check-in found no profile row, and until when this server leaves them be (touchMember). Kept small: it's only ever a handful. */
+const noProfile = new Map<string, number>();
+const NO_PROFILE_KEPT = 500;
 
 /** Everyone who has sat at the room, and when each was last seen there (room_members). A failed read throws. */
 export async function roomMembers(roomId: string): Promise<{ userId: string; lastSeenAt: number }[]> {

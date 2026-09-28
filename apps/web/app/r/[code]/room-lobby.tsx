@@ -7,7 +7,7 @@ import { RoomWaiting } from '@/components/room-waiting';
 import { TakeSeat } from '@/components/take-seat';
 import { Trouble, Waiting } from '@/components/trouble';
 import { retryCanHelp } from '@/lib/front-door';
-import { api, listen, type RoomSnapshot } from '@/lib/live/client';
+import { ApiError, api, listen, type RoomSnapshot } from '@/lib/live/client';
 import { joinRetryLabel, plainError } from '@/lib/live/plain';
 import { NeedsCaptcha, ensureSession } from '@/lib/supabase/session';
 import { useGuestName } from '@/lib/supabase/use-guest-name';
@@ -40,6 +40,8 @@ export function RoomLobby({ code }: { code: string }) {
   const [taking, setTaking] = useState(false);
   const [takeError, setTakeError] = useState<string | null>(null);
   const supabaseRef = useRef<SupabaseClient | null>(null);
+  // Standing up from the lobby: a poll that lands meanwhile finds them unseated, and mustn't sit them down again.
+  const leavingRef = useRef(false);
 
   const goToGame = useCallback((gameId: string) => router.replace(`/g/${gameId}`), [router]);
 
@@ -73,18 +75,44 @@ export function RoomLobby({ code }: { code: string }) {
 
   // Live seat changes and the start signal, with a poll as the fallback: for someone seated. Someone looking at a seat to take
   // over has nothing to wait for, and the lobby's poll is for its own people.
+  // Someone whose seat has gone between games (a newcomer's join read them as not here a moment before their check-in landed)
+  // is sat down again, as opening the link would do: a free seat, a bot's, or another regular's who isn't here, else the full
+  // line and a way to check again. The poll says so with a refusal (not at this table) or, for the host, a lobby without them.
   const seated = room !== null && room.me !== null;
   useEffect(() => {
     const supabase = supabaseRef.current;
-    if (!room || !supabase || !seated) return;
+    if (!room || !supabase || !seated || !name) return;
+    let rejoining = false;
+    const rejoin = () => {
+      if (rejoining || leavingRef.current) return;
+      rejoining = true;
+      api
+        .join(code, name)
+        .then((snap) => {
+          setRoom(snap);
+          if (snap.status === 'playing' && snap.gameId && snap.me !== null) goToGame(snap.gameId);
+        })
+        .catch((e: unknown) => {
+          setRoom(null);
+          setError(plainError(e));
+          setDeadEnd(!retryCanHelp(e));
+          setRetryLabel(joinRetryLabel(e));
+        })
+        .finally(() => {
+          rejoining = false;
+        });
+    };
     const refresh = () =>
       api
         .room(code)
         .then((snap) => {
+          if (snap.me === null && snap.status !== 'playing') return rejoin();
           setRoom(snap);
           if (snap.status === 'playing' && snap.gameId) goToGame(snap.gameId);
         })
-        .catch(() => {});
+        .catch((err: unknown) => {
+          if (err instanceof ApiError && err.status === 403) rejoin();
+        });
     const stop = listen(supabase, `room:${room.id}`, {
       seats: () => refresh(),
       started: (p) => (typeof p['gameId'] === 'string' ? goToGame(p['gameId']) : refresh()),
@@ -96,7 +124,7 @@ export function RoomLobby({ code }: { code: string }) {
     };
     // room.id is stable once set; re-subscribing on every seat change would drop messages.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [room?.id, seated, code, goToGame]);
+  }, [room?.id, seated, code, name, goToGame]);
 
   if (!name) {
     return (
@@ -178,6 +206,7 @@ export function RoomLobby({ code }: { code: string }) {
   };
 
   const leave = async () => {
+    leavingRef.current = true;
     try {
       await api.leaveRoom(code);
     } catch {

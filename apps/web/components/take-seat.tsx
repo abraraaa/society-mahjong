@@ -7,11 +7,17 @@ import type { SeatOffer } from '@/lib/live/seating';
  * their own seat back, the seat kept for them since the deal, or another
  * bot's, with the points they'd carry on with. One tap takes it; a quiet link
  * goes back.
+ *
+ * Nothing moves while they read a refusal. The refusal has its line kept for
+ * it (two lines' worth, and an alert region that's there before anything is
+ * said in it), and the column hangs from the top rather than the middle, so
+ * the next seat's words, which may run longer or shorter, never move the
+ * title, only what's below a body that has changed length.
  */
 export function TakeSeat({ offer, busy, error, onTake, cancelHref = '/' }: { offer: SeatOffer; busy: boolean; error?: string | null; onTake: () => void; cancelHref?: string }) {
   const { title, body, confirmLabel, cancelLabel } = takeSeatCopy(offer);
   return (
-    <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-6 px-6 py-10">
+    <main className="mx-auto flex min-h-dvh max-w-md flex-col gap-6 px-6 pt-[20dvh] pb-10">
       <div className="space-y-2">
         <h1 className="font-display text-3xl">{title}</h1>
         <p className="text-ivory-200/70 text-sm">{body}</p>
@@ -20,11 +26,9 @@ export function TakeSeat({ offer, busy, error, onTake, cancelHref = '/' }: { off
         <button type="button" className="btn btn-primary btn-block min-h-[52px] text-[18px]" disabled={busy} onClick={onTake}>
           {busy ? 'One moment…' : confirmLabel}
         </button>
-        {error && (
-          <p className="text-center text-sm text-red-300" role="alert">
-            {error}
-          </p>
-        )}
+        <p className="min-h-10 text-center text-sm text-red-300" role="alert">
+          {error}
+        </p>
         <Link href={cancelHref} className="link-quiet">
           {cancelLabel}
         </Link>
