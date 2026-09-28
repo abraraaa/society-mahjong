@@ -1,7 +1,9 @@
 /** Coach regressions: `pnpm --filter @society/web test`. */
 import { describe, expect, it } from 'vitest';
 import {
+  ALL_TILE_KINDS,
   ROUND_WINDS,
+  analysisBot,
   countOf,
   isDragonTile,
   isWindTile,
@@ -14,7 +16,7 @@ import {
   type TileKind,
   type Wind,
 } from '@society/engine';
-import { admitsRun, analyseFor, claimLine, coachFor, runNoteApplies, runTileFor, shortOfLine, washoutLine } from './coach';
+import { admitsRun, analyseFor, claimLine, coachFor, runNoteApplies, runTileFor, shortOfLine, suggestedDiscard, washoutLine } from './coach';
 import { GLOSSARY } from './glossary';
 import { goalFor } from './goal';
 import { hasWrittenShape, titleOf } from './shape';
@@ -956,5 +958,144 @@ describe('a plan that holds steady, and says when it switches', () => {
     expect(seen.switches).toBeGreaterThan(0);
     expect(seen.closer + seen.caughtUp).toBeGreaterThan(0);
     expect(seen.wins).toBeGreaterThan(0);
+  });
+});
+
+describe('kongs: advised when they cost the hand nothing, and warned off when they would set it back', () => {
+  const K2 = " Don't press Kong: it would set your hand back.";
+  /** The player's turn with these kongs on offer. */
+  const kongView = (round: Wind, handInRound: number, tiles: readonly TileKind[], kong: readonly TileKind[]) =>
+    ({ ...turnView(round, handInRound, tiles), seq: 5, legal: { discard: tiles, kong } }) as unknown as PrivatePlayerView;
+  const coachAt = (view: PrivatePlayerView, opts: { stage?: 'learning' | 'solid'; firstLook?: boolean; mark?: PlanMark; analysis?: ReturnType<typeof analyseFor> } = {}) =>
+    coachFor({
+      view,
+      ruleset: karachi,
+      analysis: opts.analysis ?? analyseFor(view, karachi),
+      stage: opts.stage ?? 'learning',
+      names: NAMES,
+      firstLook: opts.firstLook ?? false,
+      mark: opts.mark ?? null,
+    });
+  // The goulash: four 2 Bamboo, pungs of 5 Dots and 7 Characters, the East wind paired. Two tiles off, with the kong or without.
+  const free: TileKind[] = ['s2', 's2', 's2', 's2', 'p5', 'p5', 'p5', 'm7', 'm7', 'm7', 'WE', 'WE', 'DR', 'DG'];
+  // East hand 2: the four 3 Bamboo make three runs of Chow + 5 Honours, and a kong of them would break those up.
+  const costly: TileKind[] = ['s1', 's2', 's3', 's3', 's3', 's3', 's4', 's5', 'WE', 'WS', 'WW', 'WN', 'DR', 'm9'];
+
+  it('advises a kong that costs nothing, lights its tile, and keeps a tile to let go for someone who would rather not', () => {
+    const view = kongView('E', 0, free, ['s2']);
+    const analysis = analyseFor(view, karachi);
+    const coach = coachAt(view);
+    expect(analysis.bestDiscard).not.toBeNull();
+    expect(coach.action).toEqual({ kind: 'kong', tile: 's2', discard: analysis.bestDiscard });
+    expect(suggestedDiscard(coach.action)).toBe(analysis.bestDiscard);
+    expect(coach.highlight).toEqual(['s2']);
+    expect(textOf(coach.say)).toBe('Kong 2 Bamboo: with four of a kind you draw an extra tile, and it costs your hand nothing.');
+    expect(coach.say[0]).toEqual({ text: 'Kong 2 Bamboo', action: true });
+    // The bots' own rule says the same.
+    expect(analysisBot(view, karachi)).toEqual({ type: 'declareKong', seat: 0, tile: 's2' });
+    // On the dealer's first turn, before any discard, the round's footnote still comes with it.
+    const first = coachAt({ ...view, events: [] } as unknown as PrivatePlayerView);
+    expect(first.action.kind).toBe('kong');
+    expect(first.teach.map((x) => `${x.key}:${x.place}`)).toEqual(['round:goulash:note']);
+  });
+
+  it('keeps K1 within the bubble for every tile, with no hand in reach to cost', () => {
+    for (const k of ALL_TILE_KINDS) {
+      const tiles: TileKind[] = [k, k, k, k, ...ALL_TILE_KINDS.filter((x) => x !== k).slice(0, 10)];
+      const view = kongView('S', 0, tiles, [k]);
+      const coach = coachAt(view, { analysis: { ...analyseFor(view, karachi), candidates: [] } });
+      expect(coach.action.kind, k).toBe('kong');
+      expect(textOf(coach.say), k).toBe(`Kong ${tileName(k)}: with four of a kind you draw an extra tile, and it costs your hand nothing.`);
+      expect(visibleLength(textOf(coach.say)), k).toBeLessThanOrEqual(SAY_BUDGET);
+    }
+  });
+
+  it('keeps the kong as the tip, lit, for a regular, with nothing said', () => {
+    const coach = coachAt(kongView('E', 0, free, ['s2']), { stage: 'solid' });
+    expect(coach.action.kind).toBe('kong');
+    expect(coach.highlight).toEqual(['s2']);
+    expect(coach.say).toEqual([]);
+  });
+
+  it('says not to press Kong when it would set the hand back, and offers the discard as usual', () => {
+    const view = kongView('E', 1, costly, ['s3']);
+    const analysis = analyseFor(view, karachi);
+    const coach = coachAt(view);
+    expect(analysisBot(view, karachi)?.type).toBe('discard');
+    expect(coach.action).toEqual({ kind: 'discard', tile: analysis.bestDiscard });
+    expect(suggestedDiscard(coach.action)).toBe(analysis.bestDiscard);
+    expect(coach.highlight).toEqual([analysis.bestDiscard]);
+    // The usual words, with K2 after them.
+    const without = coachAt({ ...view, legal: { discard: costly } } as unknown as PrivatePlayerView);
+    expect(textOf(coach.say)).toBe(`${textOf(without.say)}${K2}`);
+    expect(visibleLength(textOf(coach.say))).toBeLessThanOrEqual(SAY_BUDGET);
+  });
+
+  it('says it after a switch line too', () => {
+    const view = kongView('E', 1, costly, ['s3']);
+    const lead = analyseFor(view, karachi).candidates[0]!;
+    const mark: PlanMark = {
+      game: 'g',
+      hand: view.progress.handIndex,
+      patternId: lead.patternId,
+      title: titleOf(lead),
+      switched: { fromId: 'karachi.east.hoveringAngel', fromTitle: 'Hovering Angel', toldAt: 5 },
+    };
+    const coach = coachAt(view, { mark });
+    expect(coach.planSwitch).not.toBeNull();
+    expect(textOf(coach.say)).toMatch(/^Discard .+\. Switching to .+ Don't press Kong: it would set your hand back\.$/);
+    expect(visibleLength(textOf(coach.say))).toBeLessThanOrEqual(SAY_BUDGET);
+  });
+
+  it("keeps a first look's aim, and its tile to let go, with a free kong on offer: a lit Kong with nothing said would only puzzle", () => {
+    const view = kongView('E', 0, free, ['s2']);
+    const coach = coachAt(view, { firstLook: true });
+    expect(coach.action).toEqual({ kind: 'discard', tile: analyseFor(view, karachi).bestDiscard });
+    expect(textOf(coach.say).startsWith(coach.goal.aim)).toBe(true);
+    expect(textOf(coach.say)).not.toContain('Kong');
+  });
+
+  it('gives no tile for the Discard button when the tip is to wait, claim, pass or win', () => {
+    expect(suggestedDiscard({ kind: 'discard', tile: 'p1' })).toBe('p1');
+    expect(suggestedDiscard({ kind: 'kong', tile: 's2', discard: 'DG' })).toBe('DG');
+    expect(suggestedDiscard({ kind: 'kong', tile: 's2', discard: null })).toBeNull();
+    for (const action of [{ kind: 'wait' }, { kind: 'win' }, { kind: 'pass', tile: 'p1' }, { kind: 'exchange', tiles: ['p1', 'p2', 'p3'] }] as const) {
+      expect(suggestedDiscard(action)).toBeNull();
+    }
+  });
+
+  it('advises exactly the kongs the bots would make, and warns off the rest, over seeded play following the tutor', { timeout: 120_000 }, () => {
+    const seen = { advised: 0, warned: 0 };
+    // Kong turns are rare: these three hands give six kongs that would cost and four that don't.
+    for (const [round, h] of [
+      ['N', 0],
+      ['W', 6],
+      ['E0', 6],
+    ] as const) {
+      playHand({
+        seed: `kong-${round}-${h}`,
+        progress: ROUNDS[round],
+        dealer: (h % 4) as 0 | 1 | 2 | 3,
+        onView: (view) => {
+          if (view.phase !== 'turn' || view.turn !== view.me || !view.legal.kong?.length || view.legal.win) return;
+          const coach = coachOf(view);
+          const where = `${round} ${h} seq ${view.seq} ${view.concealed.join(' ')}: ${textOf(coach.say)}`;
+          const bot = analysisBot(view, karachi);
+          expect(visibleLength(textOf(coach.say)), where).toBeLessThanOrEqual(SAY_BUDGET);
+          if (bot?.type === 'declareKong') {
+            expect(coach.action, where).toMatchObject({ kind: 'kong', tile: bot.tile });
+            expect(textOf(coach.say), where).toMatch(/^Kong .+: with four of a kind you draw an extra tile, and it costs your hand nothing\.$/);
+            seen.advised++;
+          } else {
+            expect(coach.action.kind, where).toBe('discard');
+            expect(textOf(coach.say).endsWith(K2), where).toBe(true);
+            seen.warned++;
+          }
+        },
+      });
+    }
+    // The corpus has to reach both.
+    expect(seen.advised).toBeGreaterThan(0);
+    expect(seen.warned).toBeGreaterThan(0);
   });
 });

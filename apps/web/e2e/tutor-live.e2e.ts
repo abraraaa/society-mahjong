@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import { tileName } from '@society/engine';
+import { tileName, type PrivatePlayerView } from '@society/engine';
 import { FIRST_LOOK_NOTE } from '../lib/coach';
 import { cardClockLine } from '../lib/coach/clock';
 import { cardCaption } from '../lib/coach/hand-card';
@@ -35,8 +35,9 @@ async function openThenLook(page: Page, s: { readonly before: GameSnapshot; read
  * tutor says them, a card over a claim that shows the table's clock, a win the
  * claim sheet leaves to the table's clock rather than passing on, the
  * footnotes a first-timer gets the first time a hand, a flower or a run tile
- * going past comes up, which stay for as long as the line they came with, and
- * the round's aim for someone who takes a bot's seat over part-way through.
+ * going past comes up, which stay for as long as the line they came with, the
+ * round's aim for someone who takes a bot's seat over part-way through, and a
+ * kong that costs nothing lit as the tip.
  */
 test.describe('the tutor at a live table', () => {
   test("(l-winner) the result line names the winner's hand, explains it the first time, and a tap shows the tiles they won with", async ({ page }) => {
@@ -351,6 +352,37 @@ test.describe('the tutor at a live table', () => {
     expect(next).toMatch(/^Discard /);
     expect(next).not.toContain(first.goal.aim);
     await expect(say).toHaveText(next);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(l-kong) a kong that costs her hand nothing is the lit button, and Discard steps back but still offers a tile', async ({ page }) => {
+    const snap = tutorFixtures().kongTurn;
+    const coach = liveCoach(snap);
+    const tip = coach.action;
+    if (tip.kind !== 'kong' || !tip.discard) throw new Error('the fixture advises a kong, with a tile to let go instead');
+    const hand = (snap.view as PrivatePlayerView).concealed;
+    const t = await openTable(page, { view: () => ok(snap) });
+    const row = t.stage().locator('.action-row');
+    const kong = row.getByRole('button', { name: `Kong ${tileName(tip.tile)}`, exact: true });
+    await expect(kong).toHaveClass(/\bbtn-primary\b/);
+    const discard = row.locator('.btn-discard');
+    await expect(discard).toBeEnabled();
+    await expect(discard).toHaveClass(/\bbtn-ghost\b/);
+    await expect(discard).toHaveText(`Discard ${tileName(tip.discard)}`);
+    // Stepping back doesn't narrow it: the Discard button keeps its width whatever its style.
+    expect((await discard.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(13.25 * 16 - 1);
+    const lead = t.stage().locator('.coach .say b').first();
+    expect((await lead.textContent()) ?? '').toMatch(/^Kong /);
+    await expect(t.stage().locator('.coach .say')).toHaveText(textOf(coach.say));
+    // A pick of her own makes Discard the lit button again, with her tile.
+    const other = hand.findIndex((k) => k !== tip.tile && k !== tip.discard);
+    const picked = `Discard ${tileName(hand[other]!)}`;
+    // A tap straight after the table arrives is let go (the settling time), so tap until the pick shows.
+    await expect(async () => {
+      if ((await discard.textContent()) !== picked) await t.stage().locator('.hand-tray .tile').nth(other).click();
+      await expect(discard).toHaveText(picked, { timeout: 500 });
+    }).toPass({ timeout: 15_000 });
+    await expect(discard).toHaveClass(/\bbtn-primary\b/);
     expect(t.pageErrors).toEqual([]);
   });
 

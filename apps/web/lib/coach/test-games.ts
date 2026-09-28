@@ -77,6 +77,7 @@ function tutorMove(view: PrivatePlayerView): Action | null {
   const a = coachOf(view).action;
   const seat = view.me;
   if (a.kind === 'discard') return { type: 'discard', seat, tile: a.tile };
+  if (a.kind === 'kong') return { type: 'declareKong', seat, tile: a.tile };
   if (a.kind === 'claim') return { type: 'claim', seat, claim: a.option };
   if (a.kind === 'pass') return { type: 'pass', seat };
   if (a.kind === 'win') return { type: 'declareWin', seat };

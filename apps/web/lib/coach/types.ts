@@ -101,6 +101,8 @@ export interface CoachTarget {
 export type CoachAction =
   | { readonly kind: 'wait' }
   | { readonly kind: 'discard'; readonly tile: TileKind }
+  /** a kong that costs the hand nothing; `discard` is the tile to let go instead, for someone who'd rather not */
+  | { readonly kind: 'kong'; readonly tile: TileKind; readonly discard: TileKind | null }
   | { readonly kind: 'exchange'; readonly tiles: readonly TileKind[] }
   | { readonly kind: 'claim'; readonly option: ClaimOption; readonly tile: TileKind }
   | { readonly kind: 'pass'; readonly tile: TileKind }

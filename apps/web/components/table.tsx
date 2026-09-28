@@ -10,7 +10,7 @@ import { River } from '@/components/river';
 import { riverOrder } from '@/lib/river';
 import { NO_SCORES, handDeltas, signed, standings, type Scores } from '@/lib/ledger';
 import { LIFT_SETTLE_MS, discardOffer, handBoundary, heldSelection, selectTile, settling, type Selection } from '@/lib/table-flow';
-import type { CoachState } from '@/lib/coach';
+import { suggestedDiscard, type CoachState } from '@/lib/coach';
 import { cardClockFor, claimSheetClock } from '@/lib/coach/clock';
 import { CLAIM_PASS_MARGIN_MS } from '@/lib/live/timing';
 import type { Lesson } from '@/lib/coach/teach';
@@ -148,7 +148,9 @@ function TableInner({
   const advice = tutorOn ? coach : null;
   // This view's first-sight footnotes, for the bubble and the sheets alike.
   const lesson = useLesson(coach, tutorOn);
-  const suggested = advice && advice.action.kind === 'discard' ? advice.action.tile : null;
+  const suggested = advice ? suggestedDiscard(advice.action) : null;
+  // The kong the tutor advises, when it costs the hand nothing: its button is the lit one.
+  const kongTip = advice?.action.kind === 'kong' ? advice.action.tile : null;
   // The player's own pick wins over the tutor's, but only a tile they hold is ever offered.
   const offer = discardOffer(view, selected, suggested);
   const hasActions = !!legal.win || !!legal.kong?.length || offer !== null || myTurn;
@@ -207,12 +209,13 @@ function TableInner({
         </button>
       )}
       {legal.kong?.map((k) => (
-        <button key={k} className="btn btn-ghost" disabled={busy} onClick={() => act({ type: 'declareKong', seat: ME, tile: k })}>
+        <button key={k} className={`btn ${kongTip === k ? 'btn-primary' : 'btn-ghost'}`} disabled={busy} onClick={() => act({ type: 'declareKong', seat: ME, tile: k })}>
           Kong {tileName(k)}
         </button>
       ))}
       {offer ? (
-        <button className="btn btn-primary" disabled={busy} onClick={() => act({ type: 'discard', seat: ME, tile: offer })}>
+        // While a kong is the tip and nothing's picked, Discard steps back and offers the tile to let go instead.
+        <button className={`btn ${kongTip && !selected ? 'btn-ghost' : 'btn-primary'} btn-discard`} disabled={busy} onClick={() => act({ type: 'discard', seat: ME, tile: offer })}>
           Discard {tileName(offer)}
         </button>
       ) : (
@@ -220,7 +223,7 @@ function TableInner({
         // the button waits, disabled, where it will be, so a pick doesn't
         // squeeze the felt and move the river.
         myTurn && (
-          <button className="btn btn-primary" disabled>
+          <button className="btn btn-primary btn-discard" disabled>
             Discard
           </button>
         )

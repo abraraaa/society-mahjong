@@ -395,8 +395,10 @@ h3 {
 }
 /* Discard names the tile, from "Discard 1 Dot" (about 140px) to "Discard Green
    Dragon" (209px). Sized for the longest, so flipping through the hand
-   changes the words on the button and never moves its edges. */
-.action-row > .btn-primary {
+   changes the words on the button and never moves its edges, whether it's
+   the lit button or stepping back for a kong the tutor advises (which
+   doesn't grow to its width when it's lit). */
+.action-row > .btn-discard {
   min-width: 13.25rem;
 }
 

@@ -55,6 +55,7 @@ const isBot = (seat: Seat) => SEATING[seat].kind === 'bot';
 /** The names the live page gives the seats: 'You' for Amna, as live-table.tsx does. */
 const LIVE_NAMES: Readonly<Record<Seat, string>> = { 0: 'You', 1: SEATING[1].name, 2: SEATING[2].name, 3: SEATING[3].name };
 
+const GOULASH: GameProgress = { roundWind: 'E', roundIndex: 0, handInRound: 0, handIndex: 0 };
 const EAST_HONOUR: GameProgress = { roundWind: 'E', roundIndex: 0, handInRound: 1, handIndex: 1 };
 const SOUTH: GameProgress = { roundWind: 'S', roundIndex: 1, handInRound: 0, handIndex: 4 };
 
@@ -279,6 +280,8 @@ export interface TutorFixtures {
   readonly takeOver: { readonly theirs: GameSnapshot; readonly mine: GameSnapshot; readonly after: GameSnapshot; readonly later: GameSnapshot };
   /** The same, taken over on Amna's own turn, after the bot's first discard for the seat. */
   readonly takeOverOnTurn: GameSnapshot;
+  /** Amna's turn in the opening goulash, for a learner, with a kong on offer that costs her hand nothing: the tutor advises it. */
+  readonly kongTurn: GameSnapshot;
 }
 
 /** Plays the people's moves, as the server's bot would make them, until Amna has a decision to make: null if the hand ends first. */
@@ -438,7 +441,20 @@ function build(): TutorFixtures {
     }
     return null;
   });
-  return { otherWin, claim, winClaim, claimAgain, flowerTurn, missedRun, handStartTwice, takeOver, takeOverOnTurn };
+  const kongTurn = search("Amna's goulash turn with a kong the tutor advises", (seed) => {
+    let s = settle(startHand(karachi, { seed, progress: GOULASH, dealer: 0 }));
+    for (let i = 0; i < 400 && s.phase !== 'finished'; i++) {
+      if (s.phase === 'turn' && s.turn === ME) {
+        const snap = snapshot(s, 9, 'learning');
+        if (liveCoach(snap).action.kind === 'kong') return snap;
+      }
+      const seat = pending(s)[0];
+      if (seat === undefined) return null;
+      s = settle(reduce(s, personMove(s, seat), karachi));
+    }
+    return null;
+  });
+  return { otherWin, claim, winClaim, claimAgain, flowerTurn, missedRun, handStartTwice, takeOver, takeOverOnTurn, kongTurn };
 }
 
 let built: TutorFixtures | null = null;
