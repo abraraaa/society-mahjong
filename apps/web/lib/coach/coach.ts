@@ -270,6 +270,16 @@ export function shortOfLine(away: number, hand: Part): Part[] {
   return [` You were ${tilesWord(away)} short of `, hand, '.'];
 }
 
+/**
+ * E4: the wall ran dry. `brief` keeps only the first sentence, so that E5 still
+ * fits after it: with the whole line, E5 fits only for the shortest hand name at
+ * one tile short. The sheet's heading and standings already show that nothing
+ * changed hands.
+ */
+export function washoutLine(brief = false): CoachSegment[] {
+  return line(`Washed out: the wall's run dry and nobody won.${brief ? '' : ' No points change hands.'}`);
+}
+
 /** The first of `attempts` that fits the bubble, or the last one: the action is never cut, only the words after it. */
 function fitting(attempts: readonly CoachSegment[][]): CoachSegment[] {
   return attempts.find((say) => visibleLength(textOf(say)) <= SAY_BUDGET) ?? attempts[attempts.length - 1]!;
@@ -297,8 +307,10 @@ export function coachFor(input: CoachInput): CoachState {
   // --- hand end: the debrief, where a beginner learns most -------------------
   if (view.phase === 'finished') {
     const outcome = outcomeOf(input, target, spec.patterns);
-    // How close the player got, when it fits after the line that says how the hand ended.
-    const withShort = (ended: CoachSegment[]) => fitting(target && target.away > 0 ? [line(...ended, ...shortOfLine(target.away, named(target.hand))), ended] : [ended]);
+    // How close the player got, after the line that says how the hand ended: its full words when they
+    // leave room, then its shorter ones, and only when neither fits, the full words alone.
+    const withShort = (ended: CoachSegment[], ...shorter: CoachSegment[][]) =>
+      fitting(target && target.away > 0 ? [...[ended, ...shorter].map((words) => line(...words, ...shortOfLine(target.away, named(target.hand)))), ended] : [ended]);
     let say: CoachSegment[];
     let reason: string | null = null;
     if (outcome?.type === 'win' && outcome.winnerIsMe) {
@@ -314,7 +326,7 @@ export function coachFor(input: CoachInput): CoachState {
       say = withShort(winnerLine(outcome.winnerName ?? 'Someone', outcome.hand ? named(outcome.hand.ref) : 'a complete hand', how));
       reason = 'the hand is over';
     } else {
-      say = withShort(line("Washed out: the wall's run dry and nobody won. No points change hands."));
+      say = withShort(washoutLine(), washoutLine(true));
       reason = 'the wall ran dry';
     }
     return { ...base, moment: 'handEnd', action: { kind: 'wait' }, say, reason, highlight: [], outcome };

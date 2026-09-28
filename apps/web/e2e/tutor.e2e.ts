@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { ALL_TILE_KINDS, isBonusTile, karachi, tileName, type GameProgress } from '@society/engine';
-import { howWon, shortOfLine, winnerLine } from '../lib/coach/coach';
+import { howWon, shortOfLine, washoutLine, winnerLine } from '../lib/coach/coach';
 import { titleOf } from '../lib/coach/shape';
 import { LONG_NAME } from '../lib/coach/test-games';
 import type { CoachHandRef, CoachSegment } from '../lib/coach/types';
@@ -147,12 +147,14 @@ async function measure(page: Page, parts: readonly Part[]): Promise<{ height: nu
   }, parts);
 }
 
+const named = (title: string): CoachSegment => ({ text: title, hand: { patternId: '', title, shape: '', whose: 'example', layout: [] } satisfies CoachHandRef });
+const shortOf = (away: number, title: string): CoachSegment[] => shortOfLine(away, named(title)).map((p) => (typeof p === 'string' ? { text: p } : p));
+const rounds: GameProgress[] = ['E', 'S', 'W', 'N'].flatMap((w, i) => [0, 1].map((h) => ({ roundWind: w as 'E', roundIndex: i, handInRound: h, handIndex: 0 })));
+
 /** The longest "{Name} wins with {title}, …" plus " You were {n} short of {title}." that the budget keeps, with a 24-character name. */
 function longestResultLine(): CoachSegment[] {
-  const named = (title: string): CoachSegment => ({ text: title, hand: { patternId: '', title, shape: '', whose: 'example', layout: [] } satisfies CoachHandRef });
   const tiles = ALL_TILE_KINDS.filter((k) => !isBonusTile(k)).map(tileName);
   const hows = [howWon(null), ...tiles.flatMap((t) => [howWon(t), howWon(t, LONG_NAME)])];
-  const rounds: GameProgress[] = ['E', 'S', 'W', 'N'].flatMap((w, i) => [0, 1].map((h) => ({ roundWind: w as 'E', roundIndex: i, handInRound: h, handIndex: 0 })));
   let best: CoachSegment[] = [];
   let bestLength = 0;
   for (const progress of rounds) {
@@ -161,11 +163,26 @@ function longestResultLine(): CoachSegment[] {
       for (const mine of titles)
         for (const how of hows)
           for (let away = 1; away <= 13; away++) {
-            const say = [...winnerLine(LONG_NAME, named(won), how), ...shortOfLine(away, named(mine)).map((p) => (typeof p === 'string' ? { text: p } : p))];
+            const say = [...winnerLine(LONG_NAME, named(won), how), ...shortOf(away, mine)];
             const length = visibleLength(textOf(say));
             if (length <= SAY_BUDGET && length > bestLength) [best, bestLength] = [say, length];
           }
   }
+  return best;
+}
+
+/** The longest washout line, whole or brief, plus " You were {n} short of {title}." that the budget keeps. */
+function longestWashoutLine(): CoachSegment[] {
+  let best: CoachSegment[] = [];
+  let bestLength = 0;
+  for (const progress of rounds)
+    for (const mine of new Set(karachi.handSpec(progress).patterns.map(titleOf)))
+      for (let away = 1; away <= 13; away++)
+        for (const brief of [false, true]) {
+          const say = [...washoutLine(brief), ...shortOf(away, mine)];
+          const length = visibleLength(textOf(say));
+          if (length <= SAY_BUDGET && length > bestLength) [best, bestLength] = [say, length];
+        }
   return best;
 }
 
@@ -189,6 +206,8 @@ for (const [width, height] of [
       // The first line that took a fourth line when names were buttons.
       [{ b: 'Discard 5 Dots' }, '. Switching to ', { name: 'Any Damn Hand' }, ': ', { name: 'Monty Wriggly Snake v2' }, " can't be made now."],
       partsOf(longestResultLine()),
+      // A washout, and how close the player got.
+      partsOf(longestWashoutLine()),
     ];
     for (const parts of cases) {
       const m = await measure(page, parts);
@@ -228,6 +247,8 @@ function scene(page: Page) {
     return {
       over: inSheets.some((b) => b.textContent === 'Next hand' || b.textContent === 'Play again'),
       claimWin: inSheets.some((b) => b.textContent === 'Mahjong!' && enabled(b)),
+      // The claim the tutor advises is the claim sheet's primary button.
+      advised: [...document.querySelectorAll('[data-sheet="claim"] .btn-primary')].some(enabled),
       pass: inSheets.some((b) => b.textContent === 'Pass' && enabled(b)),
       win: row.some((b) => b.textContent === 'Mahjong!' && enabled(b)),
       discard: row.some((b) => b.textContent?.startsWith('Discard ') && enabled(b)),
@@ -235,7 +256,7 @@ function scene(page: Page) {
   });
 }
 
-test("(t-result) the result line's hand name opens the winning hand, every tile lit", async ({ page }) => {
+test("(t-result) the result line's hand name opens its card: the winning hand, every tile lit, or after a washout the player's own", async ({ page }) => {
   test.setTimeout(240_000);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -244,8 +265,10 @@ test("(t-result) the result line's hand name opens the winning hand, every tile 
   const stage = page.locator('.table-stage');
   const result = page.locator('.sheet', { has: page.getByRole('button', { name: 'Next hand' }) });
 
-  // The deal is random per visit, and a washout's line may have no room left to name a hand: deal again until someone wins.
+  // The deal is random per visit, and most first hands wash out: every visit checks the card its line names, and
+  // the test deals again, up to three visits, until it has seen a winner's card too.
   let won = false;
+  let checked = 0;
   for (let visit = 0; visit < 3 && !won; visit++) {
     await page.clock.resume();
     await page.goto('/play/solo');
@@ -255,12 +278,13 @@ test("(t-result) the result line's hand name opens the winning hand, every tile 
     await pauseClock(page);
     await page.clock.runFor(SETTLE_MS + 100);
 
-    // Play the hand out on the tutor's advice, taking any win offered.
+    // Play the hand out on the tutor's advice, taking any win offered and any claim it advises.
     for (let i = 0; ; i++) {
       expect(i, 'the hand ends').toBeLessThan(800);
       const s = await scene(page);
       if (s.over) break;
       if (s.claimWin) await page.locator('.sheet').getByRole('button', { name: 'Mahjong!' }).click();
+      else if (s.advised) await page.locator('[data-sheet="claim"] .btn-primary').click();
       else if (s.pass) await page.locator('.sheet').getByRole('button', { name: 'Pass', exact: true }).click();
       else if (s.win) await stage.locator('.action-row').getByRole('button', { name: 'Mahjong!' }).click();
       else if (s.discard)
@@ -274,15 +298,17 @@ test("(t-result) the result line's hand name opens the winning hand, every tile 
     const washout = (await result.locator('h2').textContent()) === 'Washed out';
     const name = result.locator('.term.hand');
     if ((await name.count()) === 0) {
+      // Only a washout that left the player no hand they could still make has no hand to name.
       expect(washout, 'a win always names the hand').toBe(true);
       continue;
     }
     const card = page.locator('[data-sheet="card"]');
     await name.first().click();
     await expect(card).toBeVisible();
+    await expect(card).toHaveAttribute('aria-label', (await name.first().textContent()) ?? '');
     if (washout) {
-      // How close the player got: their own hand.
-      await expect(card).toHaveAttribute('data-whose', 'yours');
+      // How close the player got: their own nearest lay-out, or the hand's example when it has none.
+      expect(['yours', 'example']).toContain(await card.getAttribute('data-whose'));
     } else {
       // The winner's own tiles, or the example when their lay-out couldn't be worked out in time: nothing faded either way.
       expect(['winner', 'example']).toContain(await card.getAttribute('data-whose'));
@@ -290,8 +316,10 @@ test("(t-result) the result line's hand name opens the winning hand, every tile 
       await expect(card.locator('.tile[data-dim="true"]')).toHaveCount(0);
       won = true;
     }
+    checked++;
     await card.getByRole('button', { name: 'Got it' }).click();
     await expect(card).toBeHidden();
   }
+  expect(checked, 'a result line named a hand, and its card was checked').toBeGreaterThan(0);
   expect(errors).toEqual([]);
 });

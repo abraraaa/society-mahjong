@@ -161,18 +161,32 @@ export function liveCoach(s: GameSnapshot): CoachState {
   return coachFor({ view, ruleset: karachi, analysis: analyseFor(view, karachi), stage: s.stage ?? 'new', names: LIVE_NAMES });
 }
 
-/** The first seed of `tutor-0`, `tutor-1`, ... for which `make` returns something. */
-function search<T>(what: string, make: (seed: string) => T | null): T {
-  for (let i = 0; i < 200; i++) {
+/** The first seed of `tutor-{from}`, `tutor-{from + 1}`, ... for which `make` returns something. */
+function search<T>(what: string, make: (seed: string) => T | null, from = 0): T {
+  for (let i = from; i < from + 200; i++) {
     const found = make(`tutor-${i}`);
     if (found) return found;
   }
   throw new Error(`no seed gives ${what}`);
 }
 
+/** Amna is asked about a discard she could take, and it isn't a win. */
+function offered(s: HandState): boolean {
+  const claims = s.phase === 'claim' ? legalActions(s, karachi, ME).claims : undefined;
+  return !!claims && claims.length > 0 && !claims.some((c) => c.type === 'win');
+}
+
+/** The tutor's line at a claim names a hand, so there's a card to open from it. */
+const namesAHand = (snap: GameSnapshot) => liveCoach(snap).say.some((x) => x.hand);
+
 export interface TutorFixtures {
   /** A finished East hand won by one of the bots, for a first-timer: the result line names the winner's hand. */
   readonly otherWin: GameSnapshot;
+  /**
+   * Two claim windows for Amna, the second the table's reply to her pass on the first: the claim sheet stays up
+   * between them. The first window's clock is short (8.5 s before the sheet passes for her), the second's an hour.
+   */
+  readonly claimAgain: { readonly first: GameSnapshot; readonly next: GameSnapshot };
 }
 
 function build(): TutorFixtures {
@@ -182,7 +196,30 @@ function build(): TutorFixtures {
     const snap = snapshot(end, 9, 'new');
     return liveCoach(snap).outcome?.hand?.ref.whose === 'winner' ? snap : null;
   });
-  return { otherWin };
+  // Back-to-back windows are rare: tutor-51 is the first seed that gives them today, so the search starts there
+  // rather than playing out fifty hands first. An engine change that moves the deal still searches on from it.
+  const claimAgain = search(
+    'a claim window whose pass brings Amna the next one straight away',
+    (seed) => {
+      let s = settle(startHand(karachi, { seed, progress: EAST_HONOUR, dealer: 0 }));
+      for (let i = 0; i < 400 && s.phase !== 'finished'; i++) {
+        if (offered(s)) {
+          const after = settle(reduce(s, { type: 'pass', seat: ME }, karachi));
+          if (offered(after) && after.discardCount !== s.discardCount) {
+            const first = snapshot(s, 9, 'new', 'active', deadlines(s, { claimMs: 10_000, turnMs: HOUR }));
+            const next = snapshot(after, 10, 'new');
+            if (namesAHand(first) && namesAHand(next)) return { first, next };
+          }
+        }
+        const seat = pending(s)[0];
+        if (seat === undefined) return null;
+        s = settle(reduce(s, personMove(s, seat), karachi));
+      }
+      return null;
+    },
+    51,
+  );
+  return { otherWin, claimAgain };
 }
 
 let built: TutorFixtures | null = null;

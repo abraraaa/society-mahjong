@@ -12,12 +12,12 @@ import {
   type TileKind,
   type Wind,
 } from '@society/engine';
-import { analyseFor, coachFor, runNoteApplies } from './coach';
+import { analyseFor, coachFor, runNoteApplies, shortOfLine, washoutLine } from './coach';
 import { goalFor } from './goal';
 import { hasWrittenShape, titleOf } from './shape';
 import { stripGroups } from './strip';
 import { NAMES as LONG_NAMES, ROUNDS, coachOf, playHand } from './test-games';
-import type { CoachState } from './types';
+import type { CoachSegment, CoachState } from './types';
 import { SAY_BUDGET, textOf, visibleLength } from './words';
 
 const progressFor = (roundWind: Wind, handInRound: number): GameProgress => ({
@@ -135,6 +135,9 @@ function waitingView(round: Wind, handInRound: number, tiles: readonly TileKind[
 
 const NAMES = { 0: 'You', 1: 'Bilal', 2: 'Sana', 3: 'Ayesha' } as const;
 
+/** A sentence's parts as segments, the way the tutor joins them: words as they are, a hand's name as itself. */
+const partsText = (parts: readonly (CoachSegment | string)[]): CoachSegment[] => parts.map((p) => (typeof p === 'string' ? { text: p } : p));
+
 describe('the run rule, explained only when it bites', () => {
   const noteFor = (round: Wind, handInRound: number, tiles: TileKind[], discard: TileKind) => {
     const view = turnView(round, handInRound, tiles);
@@ -239,7 +242,11 @@ describe('hand names, wherever the tutor says them', () => {
                 expect(named?.owner).toBe(LONG_NAMES[result.winner]);
                 seen.otherWins++;
               }
-              if (result?.type === 'draw') seen.washouts++;
+              if (result?.type === 'draw') {
+                // After a washout the line always goes on to say how close the player got, naming their hand.
+                if (coach.target && coach.target.away > 0) expect(named, where).toBe(coach.target.hand);
+                seen.washouts++;
+              }
             }
           },
         });
@@ -285,12 +292,36 @@ describe('hand names, wherever the tutor says them', () => {
     expect(seen.size).toBeGreaterThan(0);
   });
 
-  it("drops how close the player got when it won't fit after the line that says how the hand ended", () => {
+  it('keeps how close the player got after a washout, shortening the washout line to make room', () => {
     const tiles: TileKind[] = ['m1', 'm1', 'm1', 'p7', 'p7', 'p7', 'DR', 'DR', 'WW', 'WW', 's4', 's5', 's9'];
     const finished = { ...turnView('E', 0, tiles), phase: 'finished', result: { type: 'draw' } } as unknown as PrivatePlayerView;
     const coach = coachFor({ view: finished, ruleset: karachi, analysis: analyseFor(finished, karachi), stage: 'new', names: NAMES });
-    expect(coach.target!.away).toBeGreaterThan(0);
-    // "Washed out: …" and " You were two tiles short of Goulash." together are over the budget, so the second goes.
+    const target = coach.target!;
+    expect(target.away).toBeGreaterThan(0);
+    // The whole washout line and E5 together are over the budget, so the washout line loses its second sentence, not E5.
+    const whole = [...washoutLine(), ...partsText(shortOfLine(target.away, target.title))];
+    expect(visibleLength(textOf(whole))).toBeGreaterThan(SAY_BUDGET);
+    expect(textOf(coach.say)).toBe(textOf([...washoutLine(true), ...partsText(shortOfLine(target.away, target.title))]));
+    expect(coach.say.filter((x) => x.hand).map((x) => x.hand)).toEqual([target.hand]);
+    expect(visibleLength(textOf(coach.say))).toBeLessThanOrEqual(SAY_BUDGET);
+  });
+
+  it('has room for how close the player got after a washout, for every hand the ruleset deals and every count', () => {
+    const titles = new Set<string>();
+    for (const wind of ROUND_WINDS) for (const handInRound of [0, 1]) for (const p of karachi.handSpec(progressFor(wind, handInRound)).patterns) titles.add(titleOf(p));
+    for (const title of titles)
+      for (let away = 1; away <= 14; away++) {
+        const say = textOf([...washoutLine(true), ...partsText(shortOfLine(away, title))]);
+        expect(visibleLength(say), say).toBeLessThanOrEqual(SAY_BUDGET);
+      }
+  });
+
+  it("says the whole washout line when there's nothing to add", () => {
+    // Nothing to be short of: an analysis that found no hand the player could still make.
+    const tiles: TileKind[] = ['m1', 'm1', 'm1', 'p7', 'p7', 'p7', 'DR', 'DR', 'WW', 'WW', 's4', 's5', 's9'];
+    const finished = { ...turnView('E', 0, tiles), phase: 'finished', result: { type: 'draw' } } as unknown as PrivatePlayerView;
+    const analysis = { ...analyseFor(finished, karachi), candidates: [] };
+    const coach = coachFor({ view: finished, ruleset: karachi, analysis, stage: 'new', names: NAMES });
     expect(textOf(coach.say)).toBe("Washed out: the wall's run dry and nobody won. No points change hands.");
   });
 });

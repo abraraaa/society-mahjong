@@ -393,6 +393,7 @@ function TableInner({
         <ClaimSheet
           discardKind={view.lastDiscard.kind}
           discarderName={names[view.lastDiscard.from]}
+          discardCount={view.discardCount}
           coach={coach}
           options={legal.claims!}
           onClaim={(claim) => act({ type: 'claim', seat: ME, claim })}
