@@ -1,12 +1,17 @@
 import type { NextRequest } from 'next/server';
-import { currentUser } from '@/lib/live/auth';
-import { broadcast, roomPoke } from '@/lib/live/broadcast';
-import { errorResponse, json } from '@/lib/live/http';
-import { joinRoom, requireRoom, roomSnapshot } from '@/lib/live/rooms';
-import { HttpError } from '@/lib/live/service';
-import { cleanDisplayName } from '@/lib/live/validate';
+// Relative, not '@/lib', so vitest can load this handler without an alias.
+import { currentUser } from '../../../../../lib/live/auth';
+import { broadcast, roomPoke } from '../../../../../lib/live/broadcast';
+import { errorResponse, json } from '../../../../../lib/live/http';
+import { joinRoom, requireRoom, roomSnapshot } from '../../../../../lib/live/rooms';
+import { HttpError, settleRoomGame } from '../../../../../lib/live/service';
+import { cleanDisplayName } from '../../../../../lib/live/validate';
 
-/** A room code is enough to sit down. Idempotent: a returning player gets their seat back. */
+/**
+ * A room code is enough to sit down. Idempotent: a returning player gets their seat back. A room whose game has ended,
+ * but whose end isn't all recorded yet, is finished first (settleRoomGame), so a friend arriving after the last hand
+ * finds the room between games rather than "already started".
+ */
 export async function POST(req: NextRequest, ctx: { params: Promise<{ code: string }> }) {
   try {
     const user = await currentUser();
@@ -14,7 +19,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ code: stri
     const { code } = await ctx.params;
     const body = (await req.json().catch(() => null)) as { name?: unknown } | null;
     const name = cleanDisplayName(body?.name) ?? user.name;
-    const { room, seated } = await joinRoom(await requireRoom(code), user.id, name);
+    const { room, seated } = await joinRoom(await settleRoomGame(await requireRoom(code)), user.id, name);
     const snap = roomSnapshot(room, user.id);
     if (seated) await broadcast([roomPoke(room.id, 'seats', { seats: snap.seats })]);
     return json(snap);

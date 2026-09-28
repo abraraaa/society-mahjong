@@ -70,6 +70,12 @@ describe('docs/ops/funnel.sql', () => {
     expect(missing).toEqual([]);
   });
 
+  it('splits the finished games by how they ended, in query 4', () => {
+    const q4 = FUNNEL.split(';')[3]!;
+    expect(q4).toMatch(/\bg\.ended_how\b/);
+    for (const how of ['complete', 'host', 'idle']) expect(q4).toContain(`status = 'finished' and ended_how = '${how}'`);
+  });
+
   it('reads the tables under the aliases the checks above expect', () => {
     for (const [alias, table] of Object.entries(ALIASES)) {
       const froms = [...FUNNEL.matchAll(new RegExp(`\\bpublic\\.${table} (\\w+)`, 'g'))].map((m) => m[1]);

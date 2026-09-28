@@ -207,7 +207,7 @@ describe('commitHands', () => {
 describe('commitArgs', () => {
   it('gives exactly commit_table’s nine arguments, times as ISO strings or null', { timeout: 60_000 }, () => {
     const { live, ended } = threeWrites();
-    const table = { v: 1, scores: [3, -3, 0, 0] as const, extra: { ready: { hand: 0 } } };
+    const table = { v: 1, scores: [3, -3, 0, 0] as const, over: null, extra: { ready: { hand: 0 } } };
     const w: TableWrite = { state: { seq: 7 } as never, table, deadlines: { claim: T0 + 20_000, turn: null }, wakeAt: T0 + 20_000, acted: true, hands: [live, ended] };
     const args = commitArgs('g-1', 6, w);
     expect(Object.keys(args).sort()).toEqual(['p_acted', 'p_claim_deadline', 'p_expected', 'p_game_id', 'p_hands', 'p_state', 'p_table_state', 'p_turn_deadline', 'p_wake_at']);

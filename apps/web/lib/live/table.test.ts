@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { IllegalAction, analysisBot, karachi, legalActions, viewFor, type HandState, type Seat } from '@society/engine';
+import { IllegalAction, analysisBot, karachi, legalActions, startHand, viewFor, type GameProgress, type HandState, type Seat } from '@society/engine';
 import type { ClientAction, LiveGame, Move } from './types';
-import { NotYourMove, actionIsForSeat, dealFirstHand, decisionRandom, resolveExpired, settle, step, type StepInput } from './table';
+import { GameIsOver, NotYourMove, actionIsForSeat, dealFirstHand, decisionRandom, rejectionStatus, resolveExpired, settle, step, type StepInput } from './table';
 import { isHuman, isPlayerMove, seatOf, type Seats } from './types';
 import { replayHand, stamp } from './hand-log';
 import { policyFor } from './policy';
@@ -460,7 +460,7 @@ describe('the moves a step makes', () => {
  */
 describe('the running scores', () => {
   /** Where the game stood before this hand, with a key from a newer deploy that must come through untouched. */
-  const table: TableState = { v: 1, scores: [100, -100, 0, 0], extra: { later: { kept: true } } };
+  const table: TableState = { v: 1, scores: [100, -100, 0, 0], over: null, extra: { later: { kept: true } } };
 
   /** The totals with a won hand's transfers added, worked out here rather than by the code under test. */
   function plus(scores: readonly number[], s: HandState): number[] {
@@ -512,25 +512,6 @@ describe('the running scores', () => {
     expect(fresh).toMatchObject({ changed: false, tableState: NEW_TABLE });
   });
 
-  it('gives a "next hand" on the finished last hand changed and gameOver, with the hand and the table as they were', () => {
-    const game = dealFirstHand(karachi, seats, 'scores-2', policy, T0);
-    const done = settle(game.state, karachi, [seats[1], seats[2], seats[3], { kind: 'bot', name: 'Me' }] as unknown as Seats);
-    const lastHand = { ...done, progress: { roundWind: 'N' as const, roundIndex: 3, handInRound: 3, handIndex: 15 } };
-    const r = step({
-      game: { state: lastHand, deadlines: { claim: null, turn: null }, tableState: table },
-      ruleset: karachi,
-      seats,
-      policy,
-      now: T0,
-      action: { type: 'nextHand' },
-      actor: ME,
-      seed: 'scores-2',
-    });
-    expect(r).toMatchObject({ changed: true, gameOver: true, finishedHand: false, deadlines: { claim: null, turn: null } });
-    expect(r.state).toBe(lastHand);
-    expect(r.tableState).toBe(table);
-  });
-
   it('adds the points of a hand dealt and finished in the same step', { timeout: 60_000 }, () => {
     // Four bots: the deal of the next hand plays it to its end in the step that deals it.
     const bots = [
@@ -553,5 +534,204 @@ describe('the running scores', () => {
     expect(won).toMatchObject({ dealt: true, finishedHand: true, changed: true });
     expect(won!.state.progress.handIndex).toBe(1);
     expect(won!.tableState.scores).toEqual(plus(table.scores!, won!.state));
+  });
+});
+
+/**
+ * The game ends in the step that ends it (R12): its last hand scored, however
+ * that happened, needs no tap, and the end is saved in table_state.over with
+ * the step's own totals. After that the table takes nothing more.
+ */
+describe('the end of the game', () => {
+  const NORTH_3: GameProgress = { roundWind: 'N', roundIndex: 3, handInRound: 3, handIndex: 15 };
+  const before: TableState = { v: 1, scores: [100, -100, 0, 0], over: null, extra: { later: { kept: true } } };
+
+  /** The totals with a won hand's transfers added, worked out here rather than by the code under test. */
+  function plus(scores: readonly number[], s: HandState): number[] {
+    const next = [...scores];
+    if (s.result?.type === 'win') for (const t of s.result.settlement.transfers) ((next[t.from]! -= t.amount), (next[t.to]! += t.amount));
+    return next;
+  }
+
+  /** The game's sixteenth hand, dealt and played by the bots up to the person's first decision. */
+  function lastHand(seed: string): LiveGame {
+    const state = settle(startHand(karachi, { seed, progress: NORTH_3, dealer: 3 }), karachi, seats);
+    return { state, deadlines: { claim: null, turn: T0 + 60_000 }, tableState: before };
+  }
+
+  /** The person plays the last hand out: the step that finishes it, and the table before that step. */
+  function playLast(seed: string): { last: ReturnType<typeof step>; prev: LiveGame } {
+    let game = lastHand(seed);
+    for (let i = 0; i < 400; i++) {
+      const a = (analysisBot(viewFor(game.state, karachi, ME), karachi) ?? { type: 'pass', seat: ME }) as ClientAction;
+      const r = step({ game, ruleset: karachi, seats, policy, now: T0 + i * 1000, action: a, actor: ME });
+      if (r.state.phase === 'finished') return { last: r, prev: game };
+      expect(r.gameOver).toBe(false);
+      expect(r.tableState.over).toBeNull();
+      game = r;
+    }
+    throw new Error('the hand never finished');
+  }
+
+  /** The first seed whose last hand the person's own move ends with a win (searched once). */
+  let won: { last: ReturnType<typeof step>; prev: LiveGame; seed: string } | null = null;
+  function wonLast(): { last: ReturnType<typeof step>; prev: LiveGame; seed: string } {
+    for (const seed of ['end-1', 'end-2', 'end-3', 'end-4', 'end-5', 'end-6', 'end-7', 'end-8']) {
+      if (won) break;
+      const played = playLast(seed);
+      if (played.last.state.result?.type === 'win') won = { ...played, seed };
+    }
+    if (!won) throw new Error('no seed gave a won last hand');
+    return won;
+  }
+
+  it('ends the game with the move that scores its last hand, with no tap, no clock and the hand’s points in', { timeout: 60_000 }, () => {
+    const { last } = wonLast();
+    expect(last).toMatchObject({ changed: true, gameOver: true, finishedHand: true, dealt: false, deadlines: { claim: null, turn: null } });
+    expect(last.tableState.scores).toEqual(plus(before.scores!, last.state));
+    expect(last.tableState.over).toEqual({ how: 'complete', by: null, at: expect.any(Number), hands: 16, scores: last.tableState.scores, seats });
+    // The rest of the table's bookkeeping comes through untouched.
+    expect(last.tableState.extra).toEqual({ later: { kept: true } });
+    // No note: the log's last move is the one that won.
+    expect(last.moves.every((m) => m.a.type !== 'endGame')).toBe(true);
+  });
+
+  it('ends it the same when the last hand ends on a clock, through a tick', { timeout: 60_000 }, () => {
+    const { prev } = wonLast();
+    const late = (prev.deadlines.turn ?? prev.deadlines.claim)! + 1;
+    const r = step({ game: prev, ruleset: karachi, seats, policy, now: late });
+    expect(r.state.phase).toBe('finished');
+    expect(r.moves[0]).toMatchObject({ by: 'clock', seat: ME });
+    expect(r).toMatchObject({ changed: true, gameOver: true, finishedHand: true, deadlines: { claim: null, turn: null } });
+    expect(r.tableState.over).toMatchObject({ how: 'complete', at: late, hands: 16, scores: plus(before.scores!, r.state) });
+  });
+
+  it('ends a finished last hand the natural end never saw, saved before it existed, on a "next hand" tap', () => {
+    const done = settle(dealFirstHand(karachi, seats, 'end-legacy', policy, T0).state, karachi, [seats[1], seats[2], seats[3], { kind: 'bot', name: 'Me' }] as unknown as Seats);
+    const parked = { ...done, progress: NORTH_3 };
+    const r = step({
+      game: { state: parked, deadlines: { claim: null, turn: null }, tableState: before },
+      ruleset: karachi,
+      seats,
+      policy,
+      now: T0,
+      action: { type: 'nextHand' },
+      actor: ME,
+    });
+    expect(r).toMatchObject({ changed: true, gameOver: true, finishedHand: false, dealt: false, moves: [], deadlines: { claim: null, turn: null } });
+    expect(r.state).toBe(parked);
+    // The hand's points were already in the totals: the end takes them as they stand.
+    expect(r.tableState).toEqual({ ...before, over: { how: 'complete', by: null, at: T0, hands: 16, scores: before.scores, seats } });
+  });
+
+  it('takes nothing more once the game is over: every move and end is refused, and a bare step changes nothing', { timeout: 60_000 }, () => {
+    const { last, seed } = wonLast();
+    const ended: LiveGame = last;
+    const tries: Partial<StepInput>[] = [
+      { action: { type: 'nextHand' }, actor: ME, seed },
+      { action: { type: 'pass', seat: ME }, actor: ME },
+      { action: { type: 'discard', seat: ME, tile: 'm1' }, actor: ME },
+      { end: { how: 'abandoned', by: null } },
+    ];
+    for (const t of tries) {
+      const err = (() => {
+        try {
+          step({ game: ended, ruleset: karachi, seats, policy, now: T0 + 999_000, ...t });
+        } catch (e) {
+          return e;
+        }
+        return null;
+      })();
+      expect(err, JSON.stringify(t)).toBeInstanceOf(GameIsOver);
+      expect((err as Error).message).toBe('game is over');
+      expect(rejectionStatus(err)).toBe(409);
+    }
+    // A tick or a sweep long after: nothing to do, nothing to write, and the table comes back as it was.
+    const quiet = step({ game: ended, ruleset: karachi, seats, policy, now: T0 + 999_000 });
+    expect(quiet).toMatchObject({ changed: false, gameOver: false, moves: [], dealt: false, finishedHand: false, standIns: [] });
+    expect(quiet.state).toBe(ended.state);
+    expect(quiet.tableState).toBe(ended.tableState);
+    expect(quiet.deadlines).toBe(ended.deadlines);
+  });
+
+  it('abandons a hand in play with one note, saying nobody ended it, and counts only the hands that finished', () => {
+    const first = dealFirstHand(karachi, seats, 'end-abandon', policy, T0);
+    const game: LiveGame = { ...first, tableState: before };
+    expect(game.state.phase).not.toBe('finished');
+    const r = step({ game, ruleset: karachi, seats, policy, now: T0 + 1000, end: { how: 'abandoned', by: null } });
+    expect(r).toMatchObject({ changed: true, gameOver: true, finishedHand: false, dealt: false, deadlines: { claim: null, turn: null } });
+    expect(r.state).toBe(game.state);
+    expect(r.moves).toEqual([{ by: 'table', a: { type: 'endGame', how: 'abandoned' } }]);
+    expect(r.moves[0]).not.toHaveProperty('seat');
+    expect(r.tableState.over).toEqual({ how: 'abandoned', by: null, at: T0 + 1000, hands: 0, scores: before.scores, seats });
+    // The note replays as nothing: the hand's log still gives the hand.
+    expect(replayHand(karachi, 'end-abandon', { progress: game.state.progress, dealer: game.state.dealer }, [...stamp(first.moves, 1), ...stamp(r.moves, 2)])).toEqual(game.state);
+  });
+
+  it('logs no note for an end between hands, whose log is already complete', () => {
+    const done = settle(dealFirstHand(karachi, seats, 'end-between', policy, T0).state, karachi, [seats[1], seats[2], seats[3], { kind: 'bot', name: 'Me' }] as unknown as Seats);
+    const r = step({
+      game: { state: done, deadlines: { claim: null, turn: null }, tableState: before },
+      ruleset: karachi,
+      seats,
+      policy,
+      now: T0,
+      end: { how: 'abandoned', by: null },
+    });
+    expect(r).toMatchObject({ gameOver: true, moves: [] });
+    expect(r.tableState.over).toMatchObject({ how: 'abandoned', hands: 1 });
+  });
+
+  /** A hand of the second round (its sixth), dealt, or played to the end by bots in every seat. */
+  const SOUTH_2: GameProgress = { roundWind: 'S', roundIndex: 1, handInRound: 1, handIndex: 5 };
+  const allBots = [seats[1], seats[2], seats[3], { kind: 'bot', name: 'Me' }] as unknown as Seats;
+  const HOST = { userId: 'u-me', name: 'Me' };
+
+  it('lets the host end the game mid-hand: that hand doesn’t count, no points move, and its log says the host ended it', { timeout: 60_000 }, () => {
+    const state = settle(startHand(karachi, { seed: 'end-host', progress: SOUTH_2, dealer: 1 }), karachi, seats);
+    expect(state.phase).not.toBe('finished');
+    const game: LiveGame = { state, deadlines: { claim: null, turn: T0 + 60_000 }, tableState: before };
+    const r = step({ game, ruleset: karachi, seats, policy, now: T0 + 1000, end: { how: 'host', by: HOST } });
+    expect(r).toMatchObject({ changed: true, gameOver: true, finishedHand: false, dealt: false, deadlines: { claim: null, turn: null } });
+    expect(r.state).toBe(state);
+    // Five hands finished before this one; this one is cut short.
+    expect(r.tableState.over).toEqual({ how: 'host', by: HOST, at: T0 + 1000, hands: 5, scores: before.scores, seats });
+    expect(r.moves).toEqual([{ by: 'host', userId: 'u-me', a: { type: 'endGame', how: 'host' } }]);
+    expect(r.moves[0]).not.toHaveProperty('seat');
+  });
+
+  it('lets the host end the game between hands, counting the hand just finished, with nothing more in its log', { timeout: 60_000 }, () => {
+    const done = settle(startHand(karachi, { seed: 'end-host-between', progress: SOUTH_2, dealer: 1 }), karachi, allBots);
+    expect(done.phase).toBe('finished');
+    const r = step({ game: { state: done, deadlines: { claim: null, turn: null }, tableState: before }, ruleset: karachi, seats, policy, now: T0, end: { how: 'host', by: HOST } });
+    expect(r).toMatchObject({ changed: true, gameOver: true, moves: [], deadlines: { claim: null, turn: null } });
+    expect(r.tableState.over).toEqual({ how: 'host', by: HOST, at: T0, hands: 6, scores: before.scores, seats });
+  });
+
+  it('records an end that finds the last hand scored as the game played out, whoever ends it', { timeout: 60_000 }, () => {
+    const done = settle(dealFirstHand(karachi, seats, 'end-last', policy, T0).state, karachi, allBots);
+    const parked = { ...done, progress: NORTH_3 };
+    const game: LiveGame = { state: parked, deadlines: { claim: null, turn: null }, tableState: before };
+    const byHost = step({ game, ruleset: karachi, seats, policy, now: T0, end: { how: 'host', by: HOST } });
+    expect(byHost.tableState.over).toEqual({ how: 'complete', by: HOST, at: T0, hands: 16, scores: before.scores, seats });
+    expect(byHost.moves).toEqual([]);
+    const idle = step({ game, ruleset: karachi, seats, policy, now: T0, end: { how: 'idle', by: null } });
+    expect(idle.tableState.over).toMatchObject({ how: 'complete', by: null, hands: 16 });
+    // Everyone leaving is still an abandon: there's nobody to show a final table to.
+    const left = step({ game, ruleset: karachi, seats, policy, now: T0, end: { how: 'abandoned', by: null } });
+    expect(left.tableState.over).toMatchObject({ how: 'abandoned', hands: 16 });
+  });
+
+  it('ends a game nobody is playing as idle, by nobody: the table’s own note, with no one’s id', () => {
+    const first = dealFirstHand(karachi, seats, 'end-idle', policy, T0);
+    const r = step({ game: { ...first, tableState: before }, ruleset: karachi, seats, policy, now: T0 + 1000, end: { how: 'idle', by: null } });
+    expect(r).toMatchObject({ changed: true, gameOver: true, deadlines: { claim: null, turn: null } });
+    expect(r.moves).toEqual([{ by: 'table', a: { type: 'endGame', how: 'idle' } }]);
+    expect(r.tableState.over).toEqual({ how: 'idle', by: null, at: T0 + 1000, hands: 0, scores: before.scores, seats });
+  });
+
+  it('never takes an action and an end in one step', () => {
+    const game = dealFirstHand(karachi, seats, 'end-both', policy, T0);
+    expect(() => step({ game, ruleset: karachi, seats, policy, now: T0, action: { type: 'pass', seat: ME }, actor: ME, end: { how: 'abandoned', by: null } })).toThrow(/not both/);
   });
 });

@@ -194,6 +194,16 @@ begin
     raise exception 'a seat was given a person with no profile';
   exception when foreign_key_violation then null;
   end;
+  -- The finish writes the game's row from how it ended, as store.ts finishGame sends it. Who ended it must have a profile
+  -- row too, or it's refused as 23503, which the finish answers by writing the row without them.
+  begin
+    update public.games set ended_by = gen_random_uuid() where id = g;
+    raise exception 'a game was ended by a person with no profile';
+  exception when foreign_key_violation then null;
+  end;
+  update public.games set status = 'finished', ended_at = now(), finished_at = now(), ended_how = 'complete', ended_by = null, hands_played = 16 where id = g;
+  update public.games set status = 'abandoned', ended_at = now(), ended_how = 'abandoned', ended_by = null, hands_played = 3 where id = g;
+  assert (select status = 'abandoned' and ended_how = 'abandoned' and hands_played = 3 and ended_by is null from public.games where id = g), 'the finish writes the game''s row';
 
   -- A person deleted: their game rows stay as history, without them.
   update public.game_players set user_id = w, kind = 'human', name = 'Zara' where game_id = g and seat = 1;
@@ -211,6 +221,21 @@ begin
 
   delete from public.rooms where id = r;
   delete from auth.users where id = u;
+end
+$$;
+
+-- The sweep's first question (wake_at <= now) has its partial index. Its second (no wake_at) scans, which is fine at
+-- one row per game; the first never waits behind it (dueGames asks them in turn).
+do $$
+declare def text;
+begin
+  select indexdef into def from pg_indexes where schemaname = 'public' and tablename = 'live_state' and indexname = 'live_state_wake_at';
+  if def is null then
+    raise exception 'live_state has no wake_at index';
+  end if;
+  if def not like '%(wake_at) WHERE (wake_at IS NOT NULL)' then
+    raise exception 'live_state_wake_at is not the partial index on wake_at: %', def;
+  end if;
 end
 $$;
 

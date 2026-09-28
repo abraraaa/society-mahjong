@@ -14,9 +14,21 @@ import {
   type Ruleset,
   type Seat,
 } from '@society/engine';
-import { addHandScores } from './lifecycle';
+import { addHandScores, endOfGame, isLastHand } from './lifecycle';
 import { NEW_TABLE, sameTableState, type TableState } from './table-state';
-import { isBot, isClientActionType, isHuman, type ClientAction, type Deadlines, type LiveGame, type Move, type PlayerMove, type Seats, type TimerPolicy } from './types';
+import {
+  isBot,
+  isClientActionType,
+  isHuman,
+  type ClientAction,
+  type Deadlines,
+  type GameEnd,
+  type LiveGame,
+  type Move,
+  type PlayerMove,
+  type Seats,
+  type TimerPolicy,
+} from './types';
 
 /**
  * The authoritative table, as pure functions over the engine's HandState.
@@ -35,6 +47,14 @@ export class NotYourMove extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'NotYourMove';
+  }
+}
+
+/** The game has ended (table_state.over is set): the table takes no more moves and no second end. */
+export class GameIsOver extends Error {
+  constructor() {
+    super('game is over');
+    this.name = 'GameIsOver';
   }
 }
 
@@ -210,14 +230,16 @@ export interface StepInput {
   readonly seed?: string;
   /** how the bots in empty seats play (policy.ts emptySeatBots); sharp when omitted */
   readonly bots?: 'sharp' | 'gentle';
+  /** end the game here, before its last hand is scored: the host ending it, nobody playing it for hours, or the last person leaving; never with an action */
+  readonly end?: GameEnd;
 }
 
 export interface StepResult extends LiveGame {
-  /** the table's bookkeeping after this step: the input's, or a fresh table's, with a hand won in this step added to the running scores */
+  /** the table's bookkeeping after this step: the input's, or a fresh table's, with a hand won in this step added to the running scores, and how the game ended once it has */
   readonly tableState: TableState;
-  /** true when the state or the table's bookkeeping changed at all, or the game ended, so a sweep with nothing to do writes nothing */
+  /** true when the state or the table's bookkeeping changed at all, so a sweep with nothing to do writes nothing */
   readonly changed: boolean;
-  /** the hand ended and no next hand exists: the game is over */
+  /** the game ended in this step: `tableState.over` is newly set */
   readonly gameOver: boolean;
   /** every move this step made, in the order it made them, for the hand log (hand-log.ts stamps them). Every one belongs to `state`'s hand. */
   readonly moves: readonly Move[];
@@ -242,20 +264,48 @@ export interface StepResult extends LiveGame {
  *
  * The table's bookkeeping (`game.tableState`) comes back as `tableState`:
  * the same document, unless a hand finished here, when a win's points are
- * added to its running scores. A step finishes at most one hand, the one it
- * returns: a deal needs the hand before it over, and it plays on from there.
+ * added to its running scores, or the game ended here. A step finishes at
+ * most one hand, the one it returns: a deal needs the hand before it over,
+ * and it plays on from there.
+ *
+ * The game ends in the step that ends it (R12), with `tableState.over` set:
+ * when its last hand is scored, however that happened (a move, a clock, the
+ * bots), with no tap needed; or on `end` (the host, six idle hours, or the
+ * last person leaving). An end mid-hand leaves that hand unfinished: it
+ * doesn't count, no points move, and its log gets one note saying who ended
+ * it. From then on every action and end is refused with GameIsOver, a step
+ * with neither changes nothing, and no clock runs.
  */
 export function step(input: StepInput): StepResult {
   const { ruleset, seats, policy, now } = input;
   const setup: TableSetup = input.bots ? { bots: input.bots } : {};
   const tableBefore = input.game.tableState ?? NEW_TABLE;
+  const before = input.game.state;
+  if (input.action && input.end) throw new Error('a step takes an action or an end, not both');
+  if (tableBefore.over) {
+    if (input.action || input.end) throw new GameIsOver();
+    return { ...input.game, tableState: tableBefore, changed: false, gameOver: false, moves: [], dealt: false, finishedHand: false, standIns: [] };
+  }
   // A hand that ends inside this step, its clock run out, must be recorded as it closes, never dealt over. A finished
   // hand has no clock to resolve, so this refuses nothing the client offers.
-  if (input.action?.type === 'nextHand' && input.game.state.phase !== 'finished') throw new IllegalAction('hand not finished');
-  const before = input.game.state;
+  if (input.action?.type === 'nextHand' && before.phase !== 'finished') throw new IllegalAction('hand not finished');
   let s = before;
+  let table = tableBefore;
   let changed = false;
+  let finishedHand = false;
   const moves: Move[] = [];
+
+  // After every settle: a hand that has just finished puts a win's points on the running scores, and when it was the
+  // game's last, the game is over (the natural end), in the same step, before anything else in it can happen.
+  const noteFinish = () => {
+    if (finishedHand || s.phase !== 'finished') return;
+    // A dealt hand starts live, so a hand finished in the step that dealt it is newly finished too.
+    if (s.progress.handIndex === before.progress.handIndex && before.phase === 'finished') return;
+    finishedHand = true;
+    const scores = addHandScores(table.scores ?? [0, 0, 0, 0], s);
+    if (scores !== table.scores) table = { ...table, scores };
+    if (!table.over && isLastHand(s, ruleset)) table = { ...table, over: endOfGame('complete', s, table, seats, null, now) };
+  };
 
   const expired = resolveExpiredWith(input.game, ruleset, seats, now);
   if (expired) {
@@ -263,23 +313,37 @@ export function step(input: StepInput): StepResult {
     s = settled.state;
     moves.push(...expired.moves, ...settled.moves);
     changed = true;
+    noteFinish();
   }
 
-  let gameOver = false;
-  if (input.action) {
+  if (input.end) {
+    // A clock that ran out above may have scored the last hand already, and a game ends only once.
+    if (!table.over) {
+      const { by } = input.end;
+      // An end that finds the last hand scored (one saved before the natural end existed) records the game as played out;
+      // everyone leaving is still an abandon, with no final table.
+      const how = input.end.how === 'abandoned' ? 'abandoned' : isLastHand(s, ruleset) ? 'complete' : input.end.how;
+      table = { ...table, over: endOfGame(how, s, table, seats, by, now) };
+      // Logged only on a live hand, so its log says why nobody moved after this; a finished hand's log is complete.
+      if (s.phase !== 'finished') moves.push({ by: by ? 'host' : 'table', ...(by ? { userId: by.userId } : {}), a: { type: 'endGame', how } });
+    }
+  } else if (input.action) {
     // The route validates what a client sends, but the table does not rely on
     // it: a server-only move (resolveClaims closes everyone's claim window at
     // once) is never a player's to make, whichever seat it names.
     if (!isClientActionType((input.action as { readonly type: unknown }).type)) throw new NotYourMove('only the table makes that move');
     if (input.action.type === 'nextHand') {
       if (s.phase !== 'finished') throw new IllegalAction('hand not finished');
-      if (input.seed === undefined) throw new Error('nextHand needs the seed');
       const n = nextHand(s, ruleset);
-      if (n === null) gameOver = true;
-      else {
+      if (n === null) {
+        // A finished last hand the natural end never saw (saved before it existed): the tap ends the game.
+        table = { ...table, over: endOfGame('complete', s, table, seats, null, now) };
+      } else {
+        if (input.seed === undefined) throw new Error('nextHand needs the seed');
         const dealt = settleLogged(startHand(ruleset, { seed: input.seed, ...n }), ruleset, seats, setup);
         s = dealt.state;
         moves.push(...dealt.moves);
+        noteFinish();
       }
     } else {
       if (input.actor === undefined || input.action.seat !== input.actor) throw new NotYourMove('action is not for your seat');
@@ -288,6 +352,7 @@ export function step(input: StepInput): StepResult {
       const settled = settleLogged(reduce(s, input.action, ruleset), ruleset, seats, setup);
       s = settled.state;
       moves.push({ by: 'player', seat: input.actor, userId: entry.userId, a: input.action }, ...settled.moves);
+      noteFinish();
     }
     changed = true;
   } else if (!expired) {
@@ -297,19 +362,17 @@ export function step(input: StepInput): StepResult {
       s = settled.state;
       moves.push(...settled.moves);
       changed = true;
+      noteFinish();
     }
   }
 
   const dealt = s.progress.handIndex > before.progress.handIndex;
-  // A dealt hand starts live, so a hand finished in the step that dealt it is newly finished too.
-  const finishedHand = s.phase === 'finished' && (dealt || before.phase !== 'finished');
-  const scores = finishedHand ? addHandScores(tableBefore.scores ?? [0, 0, 0, 0], s) : tableBefore.scores;
-  const tableState = scores === tableBefore.scores ? tableBefore : { ...tableBefore, scores };
-  // Any action is already a change, as it always has been: a "next hand" on the finished last hand moves neither the hand
-  // nor the table, but it ends the game, and that end is saved. So is anything new in the table's bookkeeping.
-  if (!sameTableState(tableState, tableBefore)) changed = true;
-  const deadlines = changed || gameOver ? deadlinesFor(s, ruleset, seats, policy, now) : input.game.deadlines;
-  return { state: s, deadlines, tableState, changed, gameOver, moves, dealt, finishedHand, standIns: expired?.standIns ?? [] };
+  // Anything new in the table's bookkeeping is a change too: the running scores, or the game's end.
+  if (!sameTableState(table, tableBefore)) changed = true;
+  // A game that's over waits on nobody.
+  const deadlines = table.over ? { claim: null, turn: null } : changed ? deadlinesFor(s, ruleset, seats, policy, now) : input.game.deadlines;
+  const gameOver = table.over !== null;
+  return { state: s, deadlines, tableState: table, changed, gameOver, moves, dealt, finishedHand, standIns: expired?.standIns ?? [] };
 }
 
 /** A fresh hand for a game, with bots already played up to the first human decision, and the moves they made. */
@@ -328,6 +391,7 @@ export function actionIsForSeat(action: ClientAction, seat: Seat): boolean {
 export function rejectionStatus(err: unknown): number | null {
   if (err instanceof NotYourMove) return 403;
   if (err instanceof IllegalAction) return 400;
+  if (err instanceof GameIsOver) return 409;
   return null;
 }
 
