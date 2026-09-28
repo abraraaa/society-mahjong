@@ -71,6 +71,7 @@ import {
   roomByCode,
   roomById,
   saveSeats,
+  seatStages,
   stagesBySeat,
   startGame,
   type RoomRow,
@@ -262,6 +263,8 @@ describe('reads', () => {
   it('count a human with no profile row, or no tally on it, as new', async () => {
     answerAll(undefined, () => [{ id: 'u-hana', stats: null }]);
     expect(await stagesBySeat(seats)).toEqual(['new', 'new', null, null]);
+    // Read, and new: a newcomer, not a failed read.
+    expect(await seatStages(seats)).toEqual({ levels: ['new', 'new', null, null], read: true });
     answerAll(undefined, () => null);
     expect(await stagesBySeat(seats)).toEqual(['new', 'new', null, null]);
   });
@@ -275,6 +278,8 @@ describe('reads', () => {
     expect(log).toHaveBeenCalledTimes(1);
     const line = JSON.parse(log.mock.calls[0]![0] as string) as Record<string, unknown>;
     expect(line).toMatchObject({ level: 'error', event: 'stages_read_failed', name: 'SupabaseError', message: 'could not read the player levels: TypeError: fetch failed' });
+    // Asked, the store says those levels weren't read, so the funnel doesn't count them as a table of first-timers.
+    expect(await seatStages(seats)).toEqual({ levels: ['new', 'new', null, null], read: false });
   });
 
   it('skip the database when there is nobody to look up', async () => {
@@ -618,6 +623,42 @@ describe('finishing a game', () => {
     answerAll(undefined, () => []);
     await finishGame(GAME, room, OVER);
     expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'games:update']);
+  });
+
+  describe('someone leaving as the last hand is scored', () => {
+    /** The room as the close finds it: Hana's leave landed after the end was committed, and a bot has her seat. */
+    const CLOSED_AT = '2026-09-24T22:00:01.000Z';
+    const left: Seats = [seats[0], { kind: 'bot', name: 'Ayesha' }, seats[2], seats[3]];
+    const closing = (roomSeats: Seats) => (q: Query) => (is('rooms', 'update')(q) && q.steps.some(([m]) => m === 'select') ? [{ seats: roomSeats, updated_at: CLOSED_AT }] : null);
+
+    it('gives the seat back as it closes the room, on the time the close wrote, so the final table and the room agree', async () => {
+      answerAll(undefined, closing(left));
+      await finishGame(GAME, room, OVER);
+      expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:update', 'games:update']);
+      const [close, back] = supabase.log.filter(is('rooms', 'update'));
+      expect(close!.steps).toContainEqual(['select', ['seats, updated_at']]);
+      expect(back!.steps[0]).toEqual(['update', [{ seats, updated_at: expect.any(String) }]]);
+      expect(back!.steps).toContainEqual(['eq', ['id', 'r-1']]);
+      // Only if nobody has written the room since the close: a person who sat down first keeps the seat.
+      expect(back!.steps).toContainEqual(['eq', ['updated_at', CLOSED_AT]]);
+    });
+
+    it('writes nothing more when nobody left at the last moment, or the room wasn’t closed just now', async () => {
+      answerAll(undefined, closing(seats));
+      await finishGame(GAME, room, OVER);
+      expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'games:update']);
+      // A repeat finish: the room is closed already, so the close matches nothing and nothing is given back.
+      supabase.log.length = 0;
+      answerAll(undefined, (q) => (is('rooms', 'update')(q) ? [] : null));
+      await finishGame(GAME, room, OVER);
+      expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'games:update']);
+    });
+
+    it('throws naming the give-back when it fails, leaving the game active', async () => {
+      answerAll((q) => supabase.log.filter(is('rooms', 'update')).indexOf(q) === 1, closing(left));
+      expect(await thrown(finishGame(GAME, room, OVER))).toMatchObject({ what: 'give back the seats' });
+      expect(ran()).toEqual(['game_players:upsert', 'rooms:update', 'rooms:update']);
+    });
   });
 
   it('leaves the game active whichever write fails, so it can be run again from the start', async () => {

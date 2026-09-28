@@ -124,6 +124,11 @@ describe('gameDealt', () => {
     const e = gameDealt({ roomId: ROOM, gameId: GAME, userId: 'u-abrar', seats: alone, levels: [null, 'solid', null, null], again: false });
     expect(e.data).toEqual({ humans: 1, bots: 3, again: false, levels: { new: 1, first_hand: 0, learning: 0, solid: 0 } });
   });
+
+  it('says the levels are unknown when they couldn’t be read, still counting the people and the bots', () => {
+    const e = gameDealt({ roomId: ROOM, gameId: GAME, userId: 'u-abrar', seats, levels: null, again: true });
+    expect(e.data).toEqual({ humans: 3, bots: 1, again: true, levels: null });
+  });
 });
 
 describe('gameEnded', () => {

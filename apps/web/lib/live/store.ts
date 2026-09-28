@@ -6,6 +6,7 @@ import { createServiceClient } from '../supabase/service';
 import { HttpError, must, SupabaseError, type SupabaseFailure } from './errors';
 import { finalPlayers } from './final';
 import { commitArgs, type TableWrite } from './hand-log';
+import { seatsBack } from './seating';
 import { stageFromStats, tallyHand, type ProfileStats } from './stage';
 import { NEW_TABLE, parseTableState, tableStateJson, wakeAt, type GameOver, type TableState } from './table-state';
 import type { Deadlines, LiveGame, LoggedMove, RoomStatus, Seats } from './types';
@@ -326,7 +327,8 @@ export async function recordHand(seats: Seats, state: HandState): Promise<void> 
  *   1. who finished where (game_players: every seat's final score and place),
  *      one row per seat, overwriting the rows the deal wrote;
  *   2. the room, back to the lobby's "finished", only while it still holds
- *      this game and is playing it;
+ *      this game and is playing it, with the seat given back to anyone who
+ *      left as the last hand was scored (closeRoom);
  *   3. the game's own row: its status, when and how it ended, who ended it,
  *      and how many hands were played.
  * The game's status is last because it's what tells a later request the job
@@ -347,7 +349,7 @@ export async function finishGame(gameId: string, room: Pick<RoomRow, 'id'>, over
       must(await players(rows.map((r) => ({ ...r, user_id: null }))), 'record how everyone finished');
     } else must(res, 'record how everyone finished');
   }
-  await closeRoom(client, gameId, room.id, new Date().toISOString());
+  await closeRoom(client, gameId, room.id, over.seats, new Date().toISOString());
   const finished = over.how !== 'abandoned';
   const game = (endedBy: string | null) =>
     client
@@ -373,9 +375,26 @@ export async function finishGame(gameId: string, room: Pick<RoomRow, 'id'>, over
  * the room still holds this game and is still playing it: one the host has
  * dealt again keeps its new game, and a repeat finish writes nothing, so it
  * never moves `updated_at` under a host who is about to tap Start.
+ *
+ * Then anyone who left as the last hand was scored gets their seat back
+ * (seating.ts seatsBack, against `atEnd`, the game's final seats). A leave
+ * reads the table, then saves the seats on the room's `updated_at`, and the
+ * commit that ends the game doesn't touch the room, so a leave can land after
+ * the end and give the seat to a bot. Closing moves `updated_at`, so a leave
+ * that hasn't landed by then loses, reads again and finds the game over; one
+ * that has landed is in the seats the close hands back, and is undone here,
+ * on the `updated_at` the close wrote. A lost race there (someone sat down in
+ * the lobby first) or a room that wasn't closed just now writes nothing.
  */
-async function closeRoom(client: ReturnType<typeof db>, gameId: string, roomId: string, now: string): Promise<void> {
-  must(await client.from('rooms').update({ status: 'finished', updated_at: now }).eq('id', roomId).eq('current_game_id', gameId).eq('status', 'playing'), 'close the room');
+async function closeRoom(client: ReturnType<typeof db>, gameId: string, roomId: string, atEnd: Seats, now: string): Promise<void> {
+  const closed = must(
+    await client.from('rooms').update({ status: 'finished', updated_at: now }).eq('id', roomId).eq('current_game_id', gameId).eq('status', 'playing').select('seats, updated_at'),
+    'close the room',
+  );
+  const row = (closed as { seats: Seats; updated_at: string }[] | null)?.[0];
+  const seats = row ? seatsBack(row.seats, atEnd) : null;
+  if (!row || !seats) return;
+  must(await client.from('rooms').update({ seats, updated_at: new Date().toISOString() }).eq('id', roomId).eq('updated_at', row.updated_at), 'give back the seats');
 }
 
 /**
@@ -415,9 +434,20 @@ export async function dueGames(now: number, limit = 50): Promise<string[]> {
  * are matched to seats by id.
  */
 export async function stagesBySeat(seats: Seats): Promise<(CoachStage | null)[]> {
+  return (await seatStages(seats)).levels;
+}
+
+/**
+ * The levels as stagesBySeat gives them, and whether they were read: `read`
+ * is false only when the profiles couldn't be read and every person was taken
+ * as new, which a deal's count for the funnel mustn't pass off as a table of
+ * first-timers (events.ts gameDealt).
+ */
+export async function seatStages(seats: Seats): Promise<{ readonly levels: (CoachStage | null)[]; readonly read: boolean }> {
   const ids = seats.flatMap((s) => (s?.kind === 'human' ? [s.userId] : []));
-  if (ids.length === 0) return seats.map(() => null);
+  if (ids.length === 0) return { levels: seats.map(() => null), read: true };
   let byId: Map<string, CoachStage>;
+  let read = true;
   try {
     const data = must(await db().from('profiles').select('id, stats').in('id', ids), 'read the player levels');
     byId = new Map(
@@ -429,8 +459,9 @@ export async function stagesBySeat(seats: Seats): Promise<(CoachStage | null)[]>
   } catch (err) {
     logError('stages_read_failed', err);
     byId = new Map();
+    read = false;
   }
-  return seats.map((s) => (s?.kind === 'human' ? (byId.get(s.userId) ?? 'new') : null));
+  return { levels: seats.map((s) => (s?.kind === 'human' ? (byId.get(s.userId) ?? 'new') : null)), read };
 }
 
 export type { Seat };

@@ -299,8 +299,11 @@ order by 1 desc;
 -- sitting where now: each moment was written down when it happened.
 --   rooms_made:      rooms created ("Host a table").
 --   people_who_sat:  different people who took a seat by the room's link
---                    that week. A host sits down by making the room, so
---                    isn't counted here unless they sat in someone else's.
+--                    that week. Making a room seats its host without the
+--                    link, so a host is counted here only when they took a
+--                    seat by it: in someone else's room, or in their own
+--                    after standing up from it (in its lobby, or by leaving
+--                    a game and sitting back down between games).
 --   games_dealt:     games dealt, first games and games played again alike.
 --   finished:        games that reached the final table, split by how:
 --     complete:      the last hand was scored;

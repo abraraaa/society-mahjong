@@ -123,6 +123,13 @@ describe('POST /api/rooms/[code]/join, counted for the funnel', () => {
     expect(order[0]).toBeLessThan(order[1]!);
   });
 
+  it('counts a host who stood up in their own lobby and sat back down by the link, as funnel.sql query 9 says', async () => {
+    // Zara made this room, so her first seat counted as room_made; she stood up, and the link seats her again.
+    db.room = { ...room, host_id: 'u-zara', status: 'lobby', current_game_id: null, seats: [null, room.seats[0], null, null] };
+    expect((await join()).status).toBe(200);
+    expect(events.recordEvent).toHaveBeenCalledWith({ type: 'seat_taken', roomId: 'r-1', userId: 'u-zara', data: { how: 'join', status: 'lobby' } });
+  });
+
   it('counts nothing for someone coming back to the seat they already have', async () => {
     db.room = { ...room, status: 'lobby', current_game_id: null, seats: [room.seats[0], { kind: 'human', userId: 'u-zara', name: 'Zara' }, null, null] };
     const res = await join();

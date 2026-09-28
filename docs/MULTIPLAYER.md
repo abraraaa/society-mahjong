@@ -309,8 +309,10 @@ any other end (a hand cut short doesn't count), and the room goes back to
 `finished`; anyone still on the page sees "The table has closed". A Leave
 that lands just after the game's end is saved (the last hand scored, its
 finish not yet written) gives nothing up: the finish is written instead,
-and the seat stays theirs for the host's next deal. In the lobby, leaving
-simply empties the seat.
+and the seat stays theirs for the host's next deal. So does one that lands
+a moment after that end, before its finish closes the room: the final table
+has them seated, so closing the room hands the bot's seat back to them. In
+the lobby, leaving simply empties the seat.
 
 Turn limits nudge at 20 seconds remaining. After two expired turns the seat
 is handed to a bot stand-in and the human reclaims it on return. No
@@ -368,10 +370,12 @@ changing either are in `docs/DATA-MODEL.md`. What a live table keeps:
   how the game ended, for the funnel.
 - `app_events`, one row for each moment the funnel counts
   (`lib/live/events.ts`, read by `docs/ops/funnel.sql` query 9): a room
-  made, a seat taken by the room's link, a game dealt, and a game finished
-  (with how it ended) or abandoned. Each is written as it happens, and a
-  write that fails is logged, never a failed request. A game's end is
-  counted only by the request that ended it, so it's counted once.
+  made, a seat taken by the room's link, a game dealt (with how many people
+  were at each level, or `levels: null` when the levels couldn't be read),
+  and a game finished (with how it ended) or abandoned. Each is written as
+  it happens, and a write that fails is logged, never a failed request. A
+  game's end is counted only by the request that ended it, so it's counted
+  once.
 - Replaying a hand (`lib/live/hand-log.ts` `replayHand`): deal it from the
   game's seed with its progress, its dealer and its dealer streak (the run of
   hand rows just before it with the same dealer, which is why the streak

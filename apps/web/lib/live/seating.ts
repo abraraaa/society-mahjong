@@ -1,5 +1,5 @@
 import type { Seat } from '@society/engine';
-import type { RoomStatus, SeatEntry, Seats } from './types';
+import { seatOf, type RoomStatus, type SeatEntry, type Seats } from './types';
 
 /**
  * How many times a seat write is tried after someone else's lands first. A
@@ -23,6 +23,28 @@ export function seatJoiner(seats: Seats, status: RoomStatus, joiner: { readonly 
 /** The seats with one of them emptied. */
 export function vacate(seats: Seats, seat: Seat): Seats {
   return seats.map((s, i) => (i === seat ? null : s)) as unknown as Seats;
+}
+
+/**
+ * The room's seats as a game that has just ended leaves them: anyone the game
+ * ended with (`atEnd`, its final seats) whose seat has since gone to a bot
+ * gets it back. That happens only when someone leaves as the last hand is
+ * scored, their leave landing after the move that ended the game had read
+ * the seats: the final table has them seated, so the room keeps their seat
+ * for the next deal, as it does for anyone who leaves once the end is saved
+ * (service.ts leaveGame). Only a bot's seat is given back, and only to someone
+ * not sitting elsewhere, so a seat a person has taken since stays theirs.
+ * Null when there's nothing to give back.
+ */
+export function seatsBack(room: Seats, atEnd: Seats): Seats | null {
+  let given = false;
+  const seats = room.map((s, i) => {
+    const was = atEnd[i];
+    if (s?.kind !== 'bot' || was?.kind !== 'human' || seatOf(room, was.userId) !== null) return s;
+    given = true;
+    return was;
+  });
+  return given ? (seats as unknown as Seats) : null;
 }
 
 /** When a person sat down, for who has sat longest: a seat with no readable `since` counts as the longest held. */

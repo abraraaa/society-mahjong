@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Seat } from '@society/engine';
-import { hostOf, seatJoiner, vacate } from './seating';
+import { hostOf, seatJoiner, seatsBack, vacate } from './seating';
 import type { Seats } from './types';
 
 const host = { kind: 'human', userId: 'u-host', name: 'Abrar' } as const;
@@ -43,6 +43,38 @@ describe('vacate', () => {
     const seats: Seats = [host, bilal, bot, null];
     expect(vacate(seats, 1)).toEqual([host, null, bot, null]);
     expect(seats[1]).toBe(bilal);
+  });
+});
+
+describe('seatsBack', () => {
+  const omar = { kind: 'bot', name: 'Omar' } as const;
+
+  it('gives the seat back to someone the game ended with whose seat went to a bot at the last moment', () => {
+    // Bilal left as the last hand was scored: the final table has him in seat 1, the room a bot.
+    const atEnd: Seats = [host, bilal, bot, null];
+    const room: Seats = [host, omar, bot, null];
+    expect(seatsBack(room, atEnd)).toEqual([host, bilal, bot, null]);
+    expect(room[1]).toBe(omar);
+  });
+
+  it('gives nothing back when the room already matches the game’s end, or the leave came before the end read the seats', () => {
+    expect(seatsBack([host, bilal, bot, null], [host, bilal, bot, null])).toBeNull();
+    // The end already had a bot in seat 1: Bilal left before it, and the bot played the rest.
+    expect(seatsBack([host, omar, bot, null], [host, omar, bot, null])).toBeNull();
+  });
+
+  it('never takes a seat from a person, nor seats anyone twice', () => {
+    const zaraSeated = { kind: 'human', ...zara } as const;
+    // Zara has taken seat 1 in the lobby since: it's hers.
+    expect(seatsBack([host, zaraSeated, bot, null], [host, bilal, bot, null])).toBeNull();
+    // Bilal is sitting in seat 3 now: seat 1's bot stays.
+    expect(seatsBack([host, omar, bot, bilal], [host, bilal, bot, null])).toBeNull();
+    // An empty seat isn't a bot's: someone who stood up in the lobby stays standing.
+    expect(seatsBack([host, null, bot, null], [host, bilal, bot, null])).toBeNull();
+  });
+
+  it('reads an end with no seats (an old row) as nobody to give back', () => {
+    expect(seatsBack([host, omar, bot, null], [null, null, null, null])).toBeNull();
   });
 });
 

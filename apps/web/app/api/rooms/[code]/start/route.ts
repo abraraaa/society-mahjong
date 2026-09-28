@@ -10,7 +10,7 @@ import { emptySeatBots, humanLevels, policyFor } from '../../../../../lib/live/p
 import { requireRoom, withBots } from '../../../../../lib/live/rooms';
 import { HttpError, settleRoomGame } from '../../../../../lib/live/service';
 import { hostOf } from '../../../../../lib/live/seating';
-import { stagesBySeat, startGame } from '../../../../../lib/live/store';
+import { seatStages, startGame } from '../../../../../lib/live/store';
 import { dealFirstHand } from '../../../../../lib/live/table';
 import { seatOf } from '../../../../../lib/live/types';
 import { newGameSeed } from '../../../../../lib/seed';
@@ -36,14 +36,14 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ code: str
     const seats = withBots(room.seats);
     const ruleset = getRuleset(room.ruleset_id);
     const strict = room.options['strict'] === true;
-    const levels = await stagesBySeat(seats);
+    const { levels, read } = await seatStages(seats);
     const first = dealFirstHand(ruleset, seats, newGameSeed(), policyFor(humanLevels(levels), strict), now, { bots: emptySeatBots(levels, strict) });
     // The bots' opening moves go in the first hand's log, stamped with the live table's first version.
     const game = await startGame(room, first.state.seed, seats, { ...first, moves: stamp(first.moves, 1) });
     await broadcast([roomPoke(room.id, 'started', { gameId: game.id })]);
     // Counted once the room points at the game: a deal that lost to a seat change threw above, and counts nothing. "Again" is a
-    // room that had a game before this one.
-    await recordEvent(gameDealt({ roomId: room.id, gameId: game.id, userId: user.id, seats, levels, again: room.current_game_id !== null }));
+    // room that had a game before this one. Levels that couldn't be read are counted as unknown, not as everyone new.
+    await recordEvent(gameDealt({ roomId: room.id, gameId: game.id, userId: user.id, seats, levels: read ? levels : null, again: room.current_game_id !== null }));
     return json({ gameId: game.id }, 201);
   } catch (err) {
     return errorResponse(err, '/api/rooms/[code]/start');

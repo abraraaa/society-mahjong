@@ -424,6 +424,8 @@ export async function leaveGame(gameId: string, userId: string, now = Date.now()
     }
     const seats = withBots(vacated);
     // Optimistic on the room's updated_at: two people standing up at once means the second reads again and empties only their own seat.
+    // An end committed after the read above doesn't move updated_at, so this can still land after it; the finish then gives the seat
+    // back as it closes the room (store.ts closeRoom), and a close that lands first makes this lose, and the loop finds the game over.
     if (await saveSeats(room.id, seats, room.updated_at)) {
       await broadcast([roomPoke(room.id, 'seats', { seats: publicSeats(seats) })]);
       // The bot now in the seat may owe the table a move: settle it straight away. The seat is already given up, so a failure

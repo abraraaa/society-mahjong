@@ -255,6 +255,46 @@ test.describe('the end of a game', () => {
     expect(t.pageErrors).toEqual([]);
   });
 
+  test('(g) a phone on its side sees the host’s Leave and End questions whole, every button in reach and on top', async ({ page }) => {
+    const fx = fixtures();
+    const t = await openTable(page, { view: () => ok(fx.turn) });
+    const dialog = page.getByRole('dialog');
+    /** The question fits with nothing to scroll, its title and every button on the screen, and nothing drawn over a button. */
+    const whole = async (buttons: readonly string[]) => {
+      await expect(dialog.locator('h2')).toBeInViewport({ ratio: 1 });
+      expect(await dialog.evaluate((s) => s.scrollHeight <= s.clientHeight)).toBe(true);
+      for (const name of buttons) {
+        const button = dialog.getByRole('button', { name, exact: true });
+        await expect(button).toBeInViewport({ ratio: 1 });
+        const box = (await button.boundingBox())!;
+        const hit = await page.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.textContent ?? null, [box.x + box.width / 2, box.y + box.height / 2]);
+        expect(hit).toBe(name);
+      }
+    };
+    for (const [width, height] of [
+      [852, 393],
+      [740, 360],
+    ] as const) {
+      await page.setViewportSize({ width, height });
+      await t.stage().getByRole('button', { name: 'Leave' }).click();
+      await expect(dialog.getByRole('heading', { name: HOST_LEAVE.title })).toBeVisible();
+      await whole([HOST_LEAVE.leave, HOST_LEAVE.end, HOST_LEAVE.stay]);
+      await dialog.getByRole('button', { name: HOST_LEAVE.stay }).click();
+      await expect(dialog).toHaveCount(0);
+
+      await t.stage().getByRole('button', { name: 'Leave' }).click();
+      await dialog.getByRole('button', { name: HOST_LEAVE.end }).click();
+      const copy = endSheet(true, 1);
+      await expect(dialog.getByRole('heading', { name: copy.title })).toBeVisible();
+      await whole([copy.confirmLabel, copy.cancelLabel]);
+      await dialog.getByRole('button', { name: copy.cancelLabel }).click();
+      await expect(dialog).toHaveCount(0);
+    }
+    await flush(page);
+    expect(t.count('end')).toBe(0);
+    expect(t.pageErrors).toEqual([]);
+  });
+
   test('(g) a phone on its side still reaches the final table’s button, with no page errors', async ({ page }) => {
     const fx = fixtures();
     const t = await openTable(page, { view: () => ok(fx.lastHandOver) });

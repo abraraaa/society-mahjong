@@ -40,6 +40,7 @@ vi.mock('../../../../../lib/live/store', () => ({
   recordHand: vi.fn(async () => {}),
   finishGame: vi.fn(async () => {}),
   stagesBySeat: vi.fn(async (seats: readonly ({ kind: string } | null)[]) => seats.map((s) => (s?.kind === 'human' ? 'new' : null))),
+  seatStages: vi.fn(async (seats: readonly ({ kind: string } | null)[]) => ({ levels: seats.map((s) => (s?.kind === 'human' ? 'new' : null)), read: true })),
   startGame: vi.fn(async () => ({ id: NEXT, room_id: 'r-1', seed: 'seed', status: 'active', hands_played: 0 })),
 }));
 
@@ -243,7 +244,7 @@ describe('POST /api/rooms/[code]/start, counted for the funnel', () => {
   it('counts the deal once the room points at it: who dealt, who sat down to it, how new they are, and that the room had dealt before', async () => {
     db.room = { ...room, status: 'finished', seats: [room.seats[0], null, hana, null] };
     db.game = game('finished');
-    vi.mocked(store.stagesBySeat).mockResolvedValueOnce(['solid', null, 'learning', null]);
+    vi.mocked(store.seatStages).mockResolvedValueOnce({ levels: ['solid', null, 'learning', null], read: true });
     expect((await start()).status).toBe(201);
     expect(events.recordEvent).toHaveBeenCalledTimes(1);
     expect(events.recordEvent).toHaveBeenCalledWith({
@@ -255,6 +256,16 @@ describe('POST /api/rooms/[code]/start, counted for the funnel', () => {
     });
     const order = [store.startGame, events.recordEvent].map((fn) => vi.mocked(fn).mock.invocationCallOrder[0]!);
     expect(order[0]).toBeLessThan(order[1]!);
+  });
+
+  it('says the levels are unknown when they couldn’t be read, rather than counting everyone as new', async () => {
+    db.room = { ...room, status: 'finished', seats: [room.seats[0], null, hana, null] };
+    db.game = game('finished');
+    // The read failed: the table is dealt with everyone as new (the most patient clocks), but the count doesn't say they are.
+    vi.mocked(store.seatStages).mockResolvedValueOnce({ levels: ['new', null, 'new', null], read: false });
+    expect((await start()).status).toBe(201);
+    expect(vi.mocked(table.dealFirstHand).mock.calls[0]![3]).toEqual(policyFor(['new', 'new']));
+    expect(events.recordEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'game_dealt', data: { humans: 2, bots: 2, again: true, levels: null } }));
   });
 
   it('counts a room’s first deal as not again', async () => {

@@ -745,6 +745,27 @@ describe('standing up from a live table', () => {
     expect(broadcaster.gamePoke).toHaveBeenCalledWith(GAME, 30, { gameOver: true });
   });
 
+  it('gives up no seat when the game ends between the leave’s look and its seat write, and the finish closes the room first', async () => {
+    const live = setTable();
+    db.room = { ...(db.room as RoomRow), seats: two };
+    const over: GameOver = { how: 'complete', by: null, at: T0, hands: 16, scores: [2000, 14504, -8000, -8504], seats: two };
+    // The leave looks, and the table is in play. Before its seat write, the last hand's end is committed and its finish closes
+    // the room, moving updated_at, so the write matches nothing. (A write that lands before the close is undone by the close
+    // itself: store.test.ts, "someone leaving as the last hand is scored".) The reset drops a write an earlier test queued and never used.
+    vi.mocked(store.saveSeats).mockReset();
+    vi.mocked(store.saveSeats).mockImplementationOnce(async () => {
+      db.live = { ...live, version: 30, table: { v: 1, scores: over.scores, over, extra: {} } };
+      db.room = { ...(db.room as RoomRow), status: 'finished', updated_at: '2026-09-24T00:00:01Z' };
+      return null;
+    });
+    await expect(leaveGame(GAME, 'u-abrar', T0)).resolves.toEqual({ abandoned: false });
+    // One write, which lost; then the second look finds the game over, and the finish runs again rather than a bot sitting down.
+    expect(store.saveSeats).toHaveBeenCalledTimes(1);
+    expect(store.finishGame).toHaveBeenCalledTimes(1);
+    expect(store.finishGame).toHaveBeenCalledWith(GAME, db.room, over);
+    expect(store.commitTable).not.toHaveBeenCalled();
+  });
+
   it('gives up no seat when the host has already dealt a newer game than the one being left', async () => {
     setTable();
     db.room = { ...(db.room as RoomRow), seats: two, current_game_id: '0d3e5f7a-9b1c-4d2e-8f6a-1b3c5d7e9f02' };
