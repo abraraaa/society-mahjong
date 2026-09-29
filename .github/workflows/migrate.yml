@@ -42,7 +42,7 @@ jobs:
       - if: steps.setup.outputs.ready == 'yes'
         uses: actions/checkout@v5
       - if: steps.setup.outputs.ready == 'yes'
-        uses: supabase/setup-cli@v1
+        uses: supabase/setup-cli@v3
         with:
           version: 2.118.0
       - name: Adopt the migrations run by hand
