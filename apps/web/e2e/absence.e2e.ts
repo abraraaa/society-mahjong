@@ -311,6 +311,37 @@ test.describe('bots and people at the table', () => {
     expect(t.pageErrors).toEqual([]);
   });
 
+  test('(f) a break turned down because they’re not seated any more closes the sheet, and says why, even with the table unchanged', async ({ page }) => {
+    const fx = fixtures();
+    const unseated = { status: 403, message: 'not seated at this table' };
+    // The look that follows the refusal brings the same table back, so only the refusal can close the sheet.
+    const t = await openTable(page, { view: () => ok(fx.turn), away: () => ({ status: unseated.status, body: { error: unseated.message } }) });
+    await t.stage().getByRole('button', { name: 'Leave' }).click();
+    const dialog = page.getByRole('dialog', { name: HOST_LEAVE.title });
+    await dialog.getByRole('button', { name: TAKE_A_BREAK }).click();
+    await expect(page.getByText(plainError(unseated))).toBeVisible();
+    await expect.poll(() => t.count('view')).toBeGreaterThan(1);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(page.getByRole('region', { name: awayTitle('self') })).toHaveCount(0);
+    expect(t.count('away')).toBe(1);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(f) a break turned down because the game is over closes the sheet at once, before the table comes back to say so', async ({ page }) => {
+    const fx = fixtures();
+    const over = { status: 409, message: 'game is over' };
+    // The look that follows the refusal is still on its way, so the table can't be what closes the sheet.
+    const t = await openTable(page, { view: (n) => (n === 1 ? ok(fx.notHost) : 'hold'), away: () => ({ status: over.status, body: { error: over.message } }) });
+    await t.stage().getByRole('button', { name: 'Leave' }).click();
+    const dialog = page.getByRole('dialog', { name: LEAVE.title });
+    await dialog.getByRole('button', { name: TAKE_A_BREAK }).click();
+    await expect(page.getByText(plainError(over))).toBeVisible();
+    await expect.poll(() => t.count('view')).toBeGreaterThan(1);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    expect(t.count('away')).toBe(1);
+    expect(t.pageErrors).toEqual([]);
+  });
+
   test('(f) a break between hands shows its note in place of the result sheet, so Next hand can’t end it without a word; "I’m back" brings the sheet back', async ({ page }) => {
     const fx = fixtures();
     expect(fx.breakBetween.view.phase).toBe('finished');

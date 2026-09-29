@@ -17,7 +17,8 @@ import { cleanDisplayName } from '../../../../../lib/live/validate';
  * finds the room between games rather than "already started".
  *
  * `rejoin: true` is the lobby asking by itself for someone it found without a seat between games: they're sat down again only
- * if a newcomer was given their seat, never after they left (joinRoom's 'rejoin').
+ * if a newcomer was given their seat, and otherwise turned away with why as far as the seats tell: they left, a bot's keeping
+ * their seat, or no telling (joinRoom's 'rejoin').
  */
 export async function POST(req: NextRequest, ctx: { params: Promise<{ code: string }> }) {
   try {
