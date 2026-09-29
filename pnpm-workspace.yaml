@@ -1,3 +1,7 @@
 packages:
   - apps/*
   - packages/*
+
+# Nothing published in the last three days (in minutes) is installed: most hijacked releases are found and pulled
+# within that window. CLAUDE.md, "Dependencies".
+minimumReleaseAge: 4320
