@@ -3,7 +3,7 @@ import type { Seat } from '@society/engine';
 import { isClosedRoom } from '../front-door';
 import { recordEvent } from './events';
 import { lastGameFrom, lastGameFromOver, type LastGameRow } from './final';
-import { SEAT_ATTEMPTS, hostOf, isHere, seatJoiner, seatOffer, standUp, takeSeat, wasDisplaced, type Circle, type SeatOffer } from './seating';
+import { SEAT_ATTEMPTS, hostOf, isHere, seatJoiner, seatLoss, seatOffer, standUp, takeSeat, type Circle, type SeatOffer } from './seating';
 import { HttpError } from './errors';
 import { logError } from './log';
 import type { RoomSnapshot } from './snapshot';
@@ -189,12 +189,19 @@ async function playingScores(room: RoomRow): Promise<readonly number[] | null> {
  * `how` is 'rejoin' when it's the lobby asking by itself, having found the
  * caller without a seat between games, and not someone opening the link. It
  * sits them down again only if their seat went to a newcomer because they
- * weren't here (seating.ts wasDisplaced), never after they got up themselves,
- * on this phone or another (409 'you left this table'); and then only in a
- * free seat or a bot's (R18's steps 1 to 4), never someone else's, so two
- * lobbies can't take each other's seats back and forth by themselves. With
- * nowhere free it's 'this table is full', and opening the link again (the
- * lobby's "Check again") tries every step.
+ * weren't here (seating.ts seatLoss 'displaced'), and then only in a free
+ * seat or a bot's (R18's steps 1 to 4), never someone else's, so two lobbies
+ * can't take each other's seats back and forth by themselves. With nowhere
+ * free it's 'this table is full', and opening the link again (the lobby's
+ * "Check again") tries every step. Anyone else is turned away, with why as
+ * far as the seats tell, and nothing seats them by itself, so a Leave on
+ * another phone or tab sticks whether or not its note survived:
+ * - 409 'you left this table': a note says they got up from the lobby, or a
+ *   bot keeps the seat they got up from in a game in play;
+ * - 409 'a bot is keeping your seat': since a deal they weren't here for. It
+ *   stays kept until they tap to sit back down, rather than a lobby that
+ *   wakes up on a phone in a pocket checking them in for the next deal;
+ * - 409 'no seat to give back': nothing says why. Never told as a Leave.
  */
 export async function joinRoom(room: RoomRow, userId: string, name: string, now = Date.now(), how: 'open' | 'rejoin' = 'open'): Promise<Joined> {
   // The circle for the snapshot, read beside the touch when it isn't already in hand.
@@ -217,7 +224,13 @@ export async function joinRoom(room: RoomRow, userId: string, name: string, now 
       const lastSeen = Math.max(Number.NEGATIVE_INFINITY, ...members.map((m) => m.lastSeenAt));
       if (!members.some((m) => m.userId === userId) && isClosedRoom(current, now, Number.isFinite(lastSeen) ? lastSeen : null)) throw new HttpError(410, 'this table has closed');
     }
-    if (how === 'rejoin' && !wasDisplaced(current.seats, userId)) throw new HttpError(409, 'you left this table');
+    // The lobby's own ask: only a seat taken from them is given back, and why not is told only as far as the seats say.
+    if (how === 'rejoin') {
+      const loss = seatLoss(current.seats, userId);
+      if (loss === 'left') throw new HttpError(409, 'you left this table');
+      if (loss === 'kept') throw new HttpError(409, 'a bot is keeping your seat');
+      if (loss === 'unknown') throw new HttpError(409, 'no seat to give back');
+    }
     const joiner = { userId, name };
     let circle: RoomCircle | null = null;
     let seats = seatJoiner(current.seats, current.status, joiner, now, { hostId: current.host_id, circle });
@@ -315,6 +328,8 @@ export async function sitDown(room: RoomRow, userId: string, name: string, seat:
  * taken from them goes too (seating.ts standUp), even when it already has
  * been and they have no seat to leave: so a lobby open on another phone, or a
  * rejoin already on its way, can't sit them down again (joinRoom's rejoin).
+ * The other seats note that they got up, so that lobby says they left, until
+ * they sit down again or the game is dealt.
  */
 export async function leaveRoom(room: RoomRow, userId: string): Promise<RoomRow> {
   let current = room;

@@ -4,11 +4,14 @@ import { EVERYONE_HERE, isAway, markAway, markPresent } from './absence';
 import {
   BOT_NAMES,
   HERE_FOR_MS,
+  LEAVERS_KEPT,
   SEEN_REFRESH_MS,
   botsAtDeal,
+  hasLeft,
   hostOf,
   isHere,
   seatJoiner,
+  seatLoss,
   seatOffer,
   seatsBack,
   seatsForDeal,
@@ -321,21 +324,92 @@ describe('who got up, and whose seat was taken (the lobby’s rejoin)', () => {
     expect(forgetDisplaced([host, zaraForDua, null, null], 'u-bilal')).toBeNull();
   });
 
+  /** An entry noting that these people got up from the lobby. */
+  const noting = <E extends object>(entry: E, ...leavers: string[]) => ({ ...entry, leavers });
+
   it('standing up empties the seat and forgets any note of it; with no seat, forgets the note; with neither, changes nothing', () => {
-    expect(standUp([host, dua, bilal, null], 'u-d')).toEqual([host, null, bilal, null]);
-    expect(standUp([host, zaraForDua, bilal, null], 'u-d')).toEqual([host, { kind: 'human', ...zara, since: SINCE }, bilal, null]);
-    expect(standUp([host, zaraForDua, bilal, null], 'u-zara')).toEqual([host, null, bilal, null]);
+    expect(standUp([host, dua, bilal, null], 'u-d')).toEqual([noting(host, 'u-d'), null, noting(bilal, 'u-d'), null]);
+    expect(standUp([host, zaraForDua, bilal, null], 'u-d')).toEqual([noting(host, 'u-d'), noting({ kind: 'human', ...zara, since: SINCE }, 'u-d'), noting(bilal, 'u-d'), null]);
+    expect(standUp([host, zaraForDua, bilal, null], 'u-zara')).toEqual([noting(host, 'u-zara'), null, noting(bilal, 'u-zara'), null]);
     expect(standUp([host, bilal, null, null], 'u-d')).toBeNull();
+  });
+
+  it('knows someone got up while any entry notes it, a bot’s as much as a person’s', () => {
+    const up = standUp([host, dua, bot, null], 'u-d')!;
+    expect(up[2]).toEqual(noting(bot, 'u-d'));
+    expect(hasLeft(up, 'u-d')).toBe(true);
+    expect(hasLeft(up, 'u-bilal')).toBe(false);
+    // One entry is enough: the others may have gone.
+    expect(hasLeft([host, null, noting(bot, 'u-d'), null], 'u-d')).toBe(true);
+    // Read tolerantly: a note that isn't a list of ids notes nobody.
+    expect(hasLeft([{ ...host, leavers: 'u-d' } as unknown as Seats[0], null, null, null], 'u-d')).toBe(false);
+  });
+
+  it('notes each person once, the latest last, and only the latest few', () => {
+    let seats: Seats = [host, null, null, null];
+    for (let i = 0; i < LEAVERS_KEPT + 2; i++) seats = standUp([seats[0], { kind: 'human', userId: `u-${i}`, name: `P${i}` }, null, null], `u-${i}`)!;
+    const kept = Array.from({ length: LEAVERS_KEPT }, (_, i) => `u-${i + 2}`);
+    expect(seats[0]).toEqual(noting(host, ...kept));
+    // Getting up again moves them to the end rather than noting them twice.
+    expect(standUp([seats[0], { kind: 'human', userId: 'u-4', name: 'P4' }, null, null], 'u-4')![0]).toEqual(noting(host, ...kept.filter((id) => id !== 'u-4'), 'u-4'));
+  });
+
+  it('forgets that someone got up once they’re seated again, however they are', () => {
+    const up: Seats = [noting(host, 'u-d', 'u-c'), null, noting(bot, 'u-d', 'u-c'), noting(bilal, 'u-d')];
+    const back = seatJoiner(up, 'finished', { userId: 'u-d', name: 'Dua' }, NOW)!;
+    expect(back).toEqual([noting(host, 'u-c'), dua, noting(bot, 'u-c'), bilal]);
+    expect(hasLeft(back, 'u-d')).toBe(false);
+    const took = takeSeat(up, 2, { userId: 'u-d', name: 'Dua' }, NOW)!;
+    expect(hasLeft(took, 'u-d')).toBe(false);
+    // The seat's own notes go on with whoever sits in it, so the room keeps knowing who else got up.
+    expect(took[2]).toEqual(noting(dua, 'u-c'));
+    const given = seatsBack([noting(host, 'u-bilal'), { kind: 'bot', name: 'Omar', leavers: ['u-bilal'] }, null, null], [host, bilal, null, null])!;
+    expect(hasLeft(given, 'u-bilal')).toBe(false);
   });
 
   it('forgets every note at the deal: from then on, a bot’s seat is offered instead', () => {
     const dealt = seatsForDeal([host, zaraForDua, bilal, null], () => true);
     expect(dealt[1]).toEqual({ kind: 'human', ...zara, since: SINCE });
     expect(wasDisplaced(dealt, 'u-d')).toBe(false);
+    // Who got up goes too, from people and bots alike: the lobby asks nothing once the game is dealt.
+    const keptForBilal = { kind: 'bot', name: 'Omar', heldFor: 'u-bilal', keptName: 'Bilal', kept: 'left' } as const;
+    const up = seatsForDeal([noting(host, 'u-d'), noting(bot, 'u-d'), noting(keptForBilal, 'u-d'), null], () => true);
+    expect(up.slice(0, 3)).toEqual([host, bot, { ...keptForBilal, kept: 'late' }]);
+    expect(hasLeft(up, 'u-d')).toBe(false);
   });
 
   it('taking a bot’s seat over drops a note of the taker’s own', () => {
     expect(takeSeat([host, zaraForDua, bot, bilal], 2, { userId: 'u-d', name: 'Dua' }, NOW)).toEqual([host, { kind: 'human', ...zara, since: SINCE }, dua, bilal]);
+  });
+
+  describe('why someone found without a seat has none (seatLoss)', () => {
+    const keptFor = (kept?: 'left' | 'late') => ({ kind: 'bot', name: 'Omar', heldFor: 'u-d', keptName: 'Dua', ...(kept ? { kept } : {}) }) as const;
+
+    it('their seat went to a newcomer, while a note says so', () => {
+      expect(seatLoss([host, zaraForDua, null, null], 'u-d')).toBe('displaced');
+    });
+
+    it('they got up: from the lobby, as a note says, or from a game whose bot still keeps their seat', () => {
+      expect(seatLoss(standUp([host, dua, bilal, null], 'u-d')!, 'u-d')).toBe('left');
+      // A Leave that crossed the lobby's ask: they had no seat left to leave, only the note that it was taken.
+      expect(seatLoss(standUp([host, zaraForDua, null, null], 'u-d')!, 'u-d')).toBe('left');
+      expect(seatLoss([host, keptFor('left'), bilal, null], 'u-d')).toBe('left');
+    });
+
+    it('a bot has kept their seat since a deal they weren’t here for: not a Leave', () => {
+      expect(seatLoss([host, keptFor('late'), bilal, null], 'u-d')).toBe('kept');
+      // A kept seat that says nothing of why is never taken for a Leave.
+      expect(seatLoss([host, keptFor(), bilal, null], 'u-d')).toBe('kept');
+    });
+
+    it('with nothing to say, says nothing: never a Leave', () => {
+      // The note went with the person it was on: Zara, given Dua's seat, got up herself.
+      expect(seatLoss(standUp([host, zaraForDua, bilal, null], 'u-zara')!, 'u-d')).toBe('unknown');
+      // Or with the deal, or the seat a bot kept for them went to a newcomer between games.
+      const dealt = seatsForDeal([host, zaraForDua, bilal, null], () => true);
+      expect(seatLoss(dealt, 'u-d')).toBe('unknown');
+      expect(seatLoss(seatJoiner([host, keptFor('late'), bilal, bilal], 'finished', zara, NOW, { hostId: 'u-host', circle: null })!, 'u-d')).toBe('unknown');
+    });
   });
 });
 

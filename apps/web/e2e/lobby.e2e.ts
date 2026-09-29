@@ -138,35 +138,49 @@ test.describe('someone whose seat goes to a newcomer between games', () => {
     expect(lobby.pageErrors).toEqual([]);
   });
 
-  test('(c) someone who got up on another phone or tab stays up: the lobby’s ask is turned down, and it says so, with a way to sit back down', async ({ page }) => {
-    const { lobbyGuest } = fixtures();
-    const left = { status: 409, message: 'you left this table' };
-    const lobby = await openLobby(
-      page,
-      {
-        join: (n) => (n === 2 ? { status: 409, body: { error: left.message } } : room(lobbyGuest)),
-        room: (n) => (n === 1 ? { status: 403, body: { error: 'not at this table' } } : room(lobbyGuest)),
-      },
-      { clock: true },
-    );
-    await expect.poll(() => lobby.count('join'), { timeout: 10_000 }).toBe(2);
-    await expect(page.getByText(joinTroubleTitle(left)!)).toBeVisible();
-    await expect(page.getByText(plainError(left))).toBeVisible();
-    // Not seated again by itself, and not looking any more.
-    const looks = lobby.count('room');
-    await pauseClock(page);
-    await page.clock.runFor(12_000);
-    await flush(page);
-    expect(lobby.count('join')).toBe(2);
-    expect(lobby.count('room')).toBe(looks);
-    // Sitting back down is opening the link again, on purpose.
-    await page.clock.resume();
-    await page.getByRole('button', { name: 'Sit back down' }).click();
-    await expect.poll(() => lobby.count('join')).toBe(3);
-    expect(lobby.of('join')[2]!.route.request().postDataJSON()).toEqual({ name: USER_NAME });
-    await expect(page.getByText(waitingForHost(lobbyGuest), { exact: true })).toBeVisible();
-    expect(lobby.pageErrors).toEqual([]);
-  });
+  const left = { status: 409, message: 'you left this table' };
+  for (const { who, refusal, button } of [
+    { who: 'someone who got up on another phone or tab stays up', refusal: left, button: 'Sit back down' },
+    {
+      who: 'someone whose seat a bot is keeping is told it’s waiting, not that they left',
+      refusal: { status: 409, message: 'a bot is keeping your seat' },
+      button: 'Sit back down',
+    },
+    { who: 'someone the server can’t say about is never told they left', refusal: { status: 409, message: 'no seat to give back' }, button: 'Find a seat' },
+  ]) {
+    test(`(c) ${who}: the lobby’s ask is turned down, and it says so, with a way back to a seat`, async ({ page }) => {
+      const { lobbyGuest } = fixtures();
+      const lobby = await openLobby(
+        page,
+        {
+          join: (n) => (n === 2 ? { status: refusal.status, body: { error: refusal.message } } : room(lobbyGuest)),
+          room: (n) => (n === 1 ? { status: 403, body: { error: 'not at this table' } } : room(lobbyGuest)),
+        },
+        { clock: true },
+      );
+      await expect.poll(() => lobby.count('join'), { timeout: 10_000 }).toBe(2);
+      await expect(page.getByText(joinTroubleTitle(refusal)!)).toBeVisible();
+      await expect(page.getByText(plainError(refusal))).toBeVisible();
+      if (refusal !== left) {
+        await expect(page.getByText(joinTroubleTitle(left)!)).toHaveCount(0);
+        await expect(page.getByText(plainError(left))).toHaveCount(0);
+      }
+      // Not seated again by itself, and not looking any more.
+      const looks = lobby.count('room');
+      await pauseClock(page);
+      await page.clock.runFor(12_000);
+      await flush(page);
+      expect(lobby.count('join')).toBe(2);
+      expect(lobby.count('room')).toBe(looks);
+      // Back to a seat is opening the link again, on purpose.
+      await page.clock.resume();
+      await page.getByRole('button', { name: button }).click();
+      await expect.poll(() => lobby.count('join')).toBe(3);
+      expect(lobby.of('join')[2]!.route.request().postDataJSON()).toEqual({ name: USER_NAME });
+      await expect(page.getByText(waitingForHost(lobbyGuest), { exact: true })).toBeVisible();
+      expect(lobby.pageErrors).toEqual([]);
+    });
+  }
 });
 
 test.describe('the lobby at a game in play', () => {

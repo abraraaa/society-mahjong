@@ -209,6 +209,19 @@ describe('joinRetryLabel', () => {
     expect(joinTroubleTitle(new ApiError(409, 'this table is full'))).toBeUndefined();
   });
 
+  it('tells someone whose seat a bot is keeping that it’s waiting, and someone the server can’t say about only that they’re not sitting here', () => {
+    const kept = new ApiError(409, 'a bot is keeping your seat');
+    expect(joinTroubleTitle(kept)).toBe("Your seat's waiting.");
+    expect(plainError(kept)).toBe("A bot's been keeping it warm for you. Sit back down when you'd like to play.");
+    expect(joinRetryLabel(kept)).toBe('Sit back down');
+    const gone = new ApiError(409, 'no seat to give back');
+    expect(joinTroubleTitle(gone)).toBe("You're not sitting here any more.");
+    expect(plainError(gone)).toBe("Someone else may have been given your seat. Find one if you'd still like to play.");
+    expect(joinRetryLabel(gone)).toBe('Find a seat');
+    // Neither says they got up.
+    for (const err of [kept, gone]) expect(`${joinTroubleTitle(err)} ${plainError(err)}`).not.toMatch(/left|got up/i);
+  });
+
   it('keeps Try again for a seat lost in the same instant, where another go at once can work, and for everything else', () => {
     expect(joinRetryLabel(new ApiError(409, 'that seat was just taken; try again'))).toBe('Try again');
     expect(joinRetryLabel(new ApiError(500, 'something went wrong'))).toBe('Try again');
