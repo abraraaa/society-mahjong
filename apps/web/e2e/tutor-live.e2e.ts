@@ -512,6 +512,55 @@ test.describe('the tutor at a live table', () => {
     expect(t.pageErrors).toEqual([]);
   });
 
+  test('(l-exchange-turned) the phone turned while she waits: the heading and Pass button stay where they are when the next pass comes', async ({ page }) => {
+    const { westSent, westWaiting, westLanded } = tutorFixtures();
+    let table = westSent;
+    await page.setViewportSize({ width: 393, height: 852 });
+    const t = await openTable(
+      page,
+      {
+        view: () => ok(table),
+        act: () => {
+          table = westWaiting;
+          return ok(westWaiting);
+        },
+      },
+      { clock: true },
+    );
+    const sheet = page.locator('.sheet[data-sheet="exchange"]');
+    const tiles = sheet.locator('button.tile');
+    await expect(sheet).toBeVisible();
+    await pauseClock(page);
+    await page.clock.runFor(500);
+
+    // The first pass, upright: the tutor's three, passed.
+    const view = westSent.view as PrivatePlayerView;
+    const tip = liveCoach(westSent).action;
+    if (tip.kind !== 'exchange') throw new Error('the fixture is an exchange');
+    const lit = exchangeGlow(view.concealed, tip.tiles).flatMap((on, i) => (on ? [i] : []));
+    await tapUntilLifted(tiles.nth(lit[0]!));
+    await tiles.nth(lit[1]!).click();
+    await tiles.nth(lit[2]!).click();
+    await sheet.getByRole('button', { name: 'Pass tiles' }).click();
+    await expect.poll(() => t.count('act')).toBe(1);
+    await page.clock.runFor(700);
+    await expect(sheet).toHaveAttribute('data-waiting', 'true');
+
+    // She turns the phone on its side while the short wait line shows.
+    await page.setViewportSize({ width: 852, height: 393 });
+    const at = await placesOf(sheet);
+
+    // The next pass, whose line is longer than the wait's, finds the sheet already tall enough for it.
+    table = westLanded;
+    const looks = t.count('view');
+    await page.clock.runFor(POLL_MS);
+    await expect.poll(() => t.count('view')).toBeGreaterThan(looks);
+    await expect(sheet.locator('h2')).toContainText('2 of 3');
+    await expect(sheet).not.toHaveAttribute('data-waiting');
+    expect(await placesOf(sheet)).toEqual(at);
+    expect(t.pageErrors).toEqual([]);
+  });
+
   test('(l-exchange-swept) a pass the table made for her lifts the tiles it passed, and the next pass starts with nothing picked', async ({ page }) => {
     const { westSent, westWaiting, westLanded } = tutorFixtures();
     let table = westSent;

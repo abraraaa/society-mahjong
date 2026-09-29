@@ -981,7 +981,8 @@ describe('a plan that holds steady, and says when it switches', () => {
             }
             seen.switches++;
             expect(view.phase === 'turn' && view.turn === view.me, where).toBe(true);
-            expect(textOf(coach.say), where).toMatch(new RegExp(`^Discard [^.]+\\. Switching to ${coach.target!.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+            // Led by the discard, or by the kong when a switch that waited through a kong turn meets another.
+            expect(textOf(coach.say), where).toMatch(new RegExp(`^(Discard|Kong) [^.]+\\. Switching to ${coach.target!.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
             expect(visibleLength(textOf(coach.say)), where).toBeLessThanOrEqual(SAY_BUDGET);
             expect(coach.planSwitch.from.title, where).not.toBe(coach.target!.title);
             expect(
@@ -1131,7 +1132,7 @@ describe('kongs: advised when they cost the hand nothing, and warned off when th
     expect(tellsSwitch({ view, ruleset: karachi, analysis, stage: 'learning', firstLook: false })).toBe(false);
     // The hook's order: the mark after the view, then the tutor's words on it.
     const onKong = nextPlanMark(before, 'g', view, lead, tellsSwitch({ view, ruleset: karachi, analysis, stage: 'learning', firstLook: false }));
-    expect(onKong?.switched).toEqual({ fromId: other.id, fromTitle: titleOf(other), toldAt: null });
+    expect(onKong?.switched).toEqual({ fromId: other.id, fromTitle: titleOf(other), toldAt: null, heldAt: 5 });
     const kong = coachAt(view, { mark: onKong!, analysis });
     expect(kong.action.kind).toBe('kong');
     expect(kong.planSwitch).toBeNull();
@@ -1150,6 +1151,38 @@ describe('kongs: advised when they cost the hand nothing, and warned off when th
     const next = coachAt(drawn, { mark: told!, analysis: drawnAnalysis });
     expect(next.planSwitch?.from.title).toBe(titleOf(other));
     expect(textOf(next.say)).toMatch(/^Discard [^.]+\. Switching to /);
+  });
+
+  it("tells a switch held back by a kong tip on her next turn though the kong is still the tip: the switch line takes K1's place", () => {
+    // As above, but she turns the kong down and discards, and on her next turn the four 2 Bamboo still cost nothing.
+    const view = kongView('E', 1, free, ['s2']);
+    const analysis = analyseFor(view, karachi);
+    const lead = analysis.candidates[0]!;
+    const other = karachi.handSpec(view.progress).patterns.find((p) => titleOf(p) !== titleOf(lead))!;
+    const before: PlanMark = { game: 'g', hand: view.progress.handIndex, patternId: other.id, title: titleOf(other), switched: null };
+    const tells = (v: PrivatePlayerView, a: ReturnType<typeof analyseFor>) => tellsSwitch({ view: v, ruleset: karachi, analysis: a, stage: 'learning', firstLook: false });
+    const onKong = nextPlanMark(before, 'g', view, lead, tells(view, analysis));
+    expect(textOf(coachAt(view, { mark: onKong!, analysis }).say)).toMatch(/^Kong 2 Bamboo: with four of a kind/);
+    const later = { ...view, seq: 12 } as unknown as PrivatePlayerView;
+    const laterAnalysis = analyseFor(later, karachi, lead.patternId);
+    expect(tells(later, laterAnalysis)).toBe(false);
+    const told = nextPlanMark(onKong, 'g', later, laterAnalysis.candidates[0], tells(later, laterAnalysis));
+    expect(told?.switched?.toldAt).toBe(12);
+    const coach = coachAt(later, { mark: told!, analysis: laterAnalysis });
+    expect(coach.action).toMatchObject({ kind: 'kong', tile: 's2' });
+    expect(coach.highlight).toEqual(['s2']);
+    expect(coach.planSwitch?.from.title).toBe(titleOf(other));
+    expect(textOf(coach.say)).toMatch(new RegExp(`^Kong 2 Bamboo\\. Switching to ${titleOf(lead).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[:.]`));
+    expect(coach.say.filter((x) => x.hand).map((x) => x.hand)).toEqual([coach.target!.hand, coach.planSwitch!.from]);
+    expect(visibleLength(textOf(coach.say))).toBeLessThanOrEqual(SAY_BUDGET);
+    // And only there: her turn after that is K1 again, with nothing more about the switch.
+    const after = { ...view, seq: 18 } as unknown as PrivatePlayerView;
+    const afterAnalysis = analyseFor(after, karachi, lead.patternId);
+    const kept = nextPlanMark(told, 'g', after, afterAnalysis.candidates[0], tells(after, afterAnalysis));
+    expect(kept).toBe(told);
+    const k1 = coachAt(after, { mark: kept!, analysis: afterAnalysis });
+    expect(k1.planSwitch).toBeNull();
+    expect(textOf(k1.say)).toMatch(/^Kong 2 Bamboo: with four of a kind/);
   });
 
   it("keeps a first look's aim, and its tile to let go, with a free kong on offer: a lit Kong with nothing said would only puzzle", () => {

@@ -100,11 +100,31 @@ describe('the plan the tutor holds the player to', () => {
   it("leaves a switch untold on a turn view whose bubble can't say it (a kong tip), for the next turn view to tell", () => {
     const [before] = play([[view(3, { turn: true }), A]]);
     const onKong = nextPlanMark(before!, 'g1', view(7, { turn: true }), B, false);
-    expect(onKong!.switched).toEqual({ fromId: A.patternId, fromTitle: 'Apple Blossom', toldAt: null });
+    expect(onKong!.switched).toEqual({ fromId: A.patternId, fromTitle: 'Apple Blossom', toldAt: null, heldAt: 7 });
+    // The same view again (the hook's second render, a poll) is still the view it waits through.
+    expect(nextPlanMark(onKong!, 'g1', view(7, { turn: true }), B, false)).toBe(onKong);
     expect(nextPlanMark(onKong!, 'g1', view(8, { turn: true }), B, true)!.switched?.toldAt).toBe(8);
     // Told already, a turn that can't say it changes nothing.
     const told = nextPlanMark(before!, 'g1', view(7, { turn: true }), B);
     expect(nextPlanMark(told!, 'g1', view(8, { turn: true }), B, false)).toBe(told);
+  });
+
+  it("waits through one turn view that can't say a switch, no more: the next turn view tells it whatever its tip", () => {
+    const [before] = play([[view(3, { turn: true }), A]]);
+    const onKong = nextPlanMark(before!, 'g1', view(7, { turn: true }), B, false);
+    // Views off her turn in between don't count.
+    const between = nextPlanMark(onKong!, 'g1', view(9), B, false);
+    expect(between).toBe(onKong);
+    // Her next turn: the kong's still the tip, and the switch is told there all the same.
+    const again = nextPlanMark(between!, 'g1', view(12, { turn: true }), B, false);
+    expect(again!.switched).toEqual({ fromId: A.patternId, fromTitle: 'Apple Blossom', toldAt: 12, heldAt: 7 });
+    expect(nextPlanMark(again!, 'g1', view(15, { turn: true }), B, false)).toBe(again);
+    // A switch on to C while it waits is still told against A, the plan she saw before the kong turn, at her next turn.
+    const onToC = nextPlanMark(onKong!, 'g1', view(9), C, false);
+    expect(onToC!.switched).toEqual({ fromId: A.patternId, fromTitle: 'Apple Blossom', toldAt: null, heldAt: 7 });
+    expect(nextPlanMark(onToC!, 'g1', view(12, { turn: true }), C, false)!.switched?.toldAt).toBe(12);
+    // The mark with a switch held differs from the one before it, so the hook stores it.
+    expect(samePlanMark(onKong, { ...onKong!, switched: { fromId: A.patternId, fromTitle: 'Apple Blossom', toldAt: null } })).toBe(false);
   });
 
   it('says a switch from A to B to C before a turn as from A, and nothing when it comes back to A', () => {
