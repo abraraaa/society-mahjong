@@ -22,6 +22,7 @@ import {
   type Seat,
   type SuitTile,
   type TileKind,
+  type Wind,
 } from '@society/engine';
 import { exchangeStep } from './exchange';
 import { GLOSSARY } from './glossary';
@@ -247,22 +248,32 @@ function asMine(ref: CoachHandRef, whose: 'yours' | 'ifClaimed'): CoachHandRef {
 export interface Reason {
   readonly full: readonly Part[];
   readonly short: readonly Part[];
-  /** A footnote the reason leans on: the exact rule behind a line that has to say it in fewer words. */
-  readonly note?: CoachTeach;
 }
 
+const WIND_WORD: Readonly<Record<Wind, string>> = { E: 'East', S: 'South', W: 'West', N: 'North' };
+
 /**
- * The goulash's honour rule, exactly, for the first time a discard's reason
- * leans on it: each dragon pung counts once, a wind pung once for the round's
- * wind and once for the player's own, and a hand with any honour pung needs two
- * (the engine's karachi.goulashHonours guard).
+ * The goulash's honour rule for this seat, exactly (the engine's
+ * karachi.goulashHonours guard): a hand with any wind or dragon pung needs two
+ * points, one for each dragon pung, one for a pung of the round's wind and one
+ * for a pung of the player's own wind. So where the two winds are the same,
+ * that one pung is enough on its own.
  */
-export const HONOUR_GATE_NOTE: CoachTeach = {
-  key: 'rule:honourGate',
-  place: 'note',
-  label: 'winds and dragons',
-  text: "you need two pungs of dragons, the round's wind or your own wind",
-};
+export function honourGateReason(ctx: MatchCtx): Reason {
+  const round = WIND_WORD[ctx.roundWind];
+  if (ctx.seatWind === ctx.roundWind) {
+    const one = `${ctx.roundWind === 'E' ? 'an' : 'a'} ${round} pung`;
+    return {
+      full: [`winds and dragons only count with ${one} or two dragon pungs`],
+      short: [`honours need ${one} or two dragon pungs`],
+    };
+  }
+  const seat = WIND_WORD[ctx.seatWind];
+  return {
+    full: [`winds and dragons only count with two pungs among dragons, ${round} and ${seat}`],
+    short: [`honours need two pungs among dragons, ${round} and ${seat}`],
+  };
+}
 
 /**
  * Why this tile is the one to let go: the clause after the bold action, in a
@@ -270,17 +281,12 @@ export const HONOUR_GATE_NOTE: CoachTeach = {
  * bubble. The commonest reason rotates with the player's own discards, since
  * the same words every turn stop being read.
  */
-function discardReason(analysis: HandAnalysis, goal: CoachGoal, target: CoachTarget | null, concealed: readonly TileKind[], tile: TileKind, r: number): Reason {
+function discardReason(analysis: HandAnalysis, goal: CoachGoal, target: CoachTarget | null, concealed: readonly TileKind[], tile: TileKind, r: number, ctx: MatchCtx): Reason {
   const same = (full: string): Reason => ({ full: [full], short: [full] });
   if (goal.honours === 'forbidden' && isHonourTile(tile)) return { full: ['no wind or dragon fits a hand this round'], short: ['this round has no use for it'] };
   const rating = analysis.ratings.find((x) => x.kind === tile);
   const serves = rating?.serves ?? [];
-  if (goal.honours === 'gated' && isHonourTile(tile) && serves.length === 0)
-    return {
-      full: ['winds and dragons only count this hand if you pung two of them'],
-      short: ["a lone wind or dragon won't count here"],
-      note: HONOUR_GATE_NOTE,
-    };
+  if (goal.honours === 'gated' && isHonourTile(tile) && serves.length === 0) return honourGateReason(ctx);
   const title = target ? named(target.hand) : null;
   if (serves.length === 0 && isLoner(concealed, tile))
     return isHonourTile(tile) ? same("it's on its own") : { full: ["it's on its own, with no neighbours"], short: ["it's on its own"] };
@@ -708,16 +714,14 @@ function adviceFor(input: CoachInput): CoachState {
     return { ...base, moment, action, say: [], reason: null, highlight, teach: firstTurn };
   }
   // The round comes first, then a run tile that went past since the player last moved.
-  const teach: CoachTeach[] = [...firstTurn, ...missedRun(view, target, goal, names)];
+  const teach = [...firstTurn, ...missedRun(view, target, goal, names)];
   // Every kong on offer would set the hand back (a free one would be the tip), and its button is there all the same.
   const k2 = kongs.length > 0 ? [KONG_SETS_BACK] : [];
 
   if (action.kind !== 'discard') {
     return { ...base, moment, action, say: [seg("Every tile's pulling its weight. Pick the one you'd miss least.")], reason: null, highlight, teach };
   }
-  const reason = discardReason(analysis, goal, target, view.concealed, action.tile, myDiscardCount(view));
-  // The rule a short reason leans on, after the round's note and a missed run.
-  if (reason.note) teach.push(reason.note);
+  const reason = discardReason(analysis, goal, target, view.concealed, action.tile, myDiscardCount(view), ctxOf(view));
   const lead = act(`Discard ${tileName(action.tile)}`);
   const progress = progressAfter(input, spec, target, action.tile);
   const planSwitch = switchFor(input, spec, target);

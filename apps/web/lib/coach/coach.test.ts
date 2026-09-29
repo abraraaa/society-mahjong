@@ -25,7 +25,7 @@ import {
   claimLine,
   coachFor,
   discardLine,
-  HONOUR_GATE_NOTE,
+  honourGateReason,
   kongTip,
   runNoteApplies,
   runTileFor,
@@ -440,15 +440,15 @@ describe('hand names, wherever the tutor says them', () => {
                   coach.teach.map((x) => `${x.key}:${x.place}`),
                   where,
                 ).toContain('rule:runs:said');
-              // The goulash's honour rule: said plainly on the line, and exactly in a footnote the line leans on.
+              // The goulash's honour rule: said exactly, for this seat, and never as a word a newcomer can't act on.
               expect(textOf(coach.say), where).not.toMatch(/fussy/i);
-              const gate = coach.teach.filter((x) => x.key === 'rule:honourGate');
-              if (coach.reason === 'winds and dragons only count this hand if you pung two of them') {
+              if (coach.reason?.startsWith('winds and dragons only count with')) {
                 expect(coach.goal.honours, where).toBe('gated');
                 expect(coach.action.kind === 'discard' && isHonourTile(coach.action.tile), where).toBe(true);
-                expect(gate, where).toEqual([HONOUR_GATE_NOTE]);
+                const ctx = { seatWind: view.players[view.me].seatWind, roundWind: view.progress.roundWind };
+                expect(coach.reason, where).toBe(honourGateReason(ctx).full.join(''));
                 seen.gate++;
-              } else expect(gate, where).toEqual([]);
+              }
               const result = view.result;
               if (result?.type === 'win' && result.winner !== view.me) {
                 expect(named, where).toBe(coach.outcome?.hand?.ref);
@@ -475,10 +475,19 @@ describe('hand names, wherever the tutor says them', () => {
     expect(seen.washouts).toBeGreaterThan(0);
   });
 
-  it("words the goulash's honour rule exactly, in a footnote that fits beside another", () => {
-    expect(visibleLength(noteText(HONOUR_GATE_NOTE))).toBeLessThanOrEqual(NOTE_BUDGET);
-    // The engine's guard: two conditions, a dragon pung counting once and a wind pung once each for the round's wind and the player's own.
-    expect(HONOUR_GATE_NOTE.text).toBe("you need two pungs of dragons, the round's wind or your own wind");
+  it("words the goulash's honour rule for the seat, as the engine's guard counts it", () => {
+    // One point per dragon pung, one for a pung of the round's wind, one for a pung of your own: two are needed.
+    expect(honourGateReason({ seatWind: 'S', roundWind: 'E' }).full).toEqual(['winds and dragons only count with two pungs among dragons, East and South']);
+    // Where your wind is the round's, that one pung scores both points, so it's enough on its own.
+    expect(honourGateReason({ seatWind: 'E', roundWind: 'E' }).full).toEqual(['winds and dragons only count with an East pung or two dragon pungs']);
+    expect(honourGateReason({ seatWind: 'W', roundWind: 'W' }).full).toEqual(['winds and dragons only count with a West pung or two dragon pungs']);
+    for (const seatWind of ROUND_WINDS)
+      for (const roundWind of ROUND_WINDS) {
+        const r = honourGateReason({ seatWind, roundWind });
+        // The longest dragon name with the full reason fits the bubble, so the rule is said whole before any progress line.
+        const longest = `Discard Green Dragon: ${r.full.join('')}.`;
+        expect(visibleLength(longest), longest).toBeLessThanOrEqual(SAY_BUDGET);
+      }
   });
 
   it('shows the hand a pung would make, with the pung laid face up', () => {
