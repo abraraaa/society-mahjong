@@ -263,20 +263,23 @@ test.describe('the tutor at a live table', () => {
     await expect.poll(() => t.count('view')).toBe(2);
     const sheet = page.locator('[data-sheet="claim"]');
     await expect(sheet.getByRole('button', { name: 'Mahjong!' })).toBeVisible();
-    // The bar's drain, as the browser runs it: how long it lasts, how far in it started, and how far through it is.
+    // The bar's drain, as the browser runs it: how long it lasts, how far in it started, and how far through it is. A
+    // fresh table draws the bar again as a new element, so the one the locator found can be gone by the time it's read:
+    // that reads as no drain yet, and the polls look again.
     const drain = () =>
       sheet.locator('.timer > i').evaluate((e) => {
-        const timing = e.getAnimations()[0]!.effect!.getComputedTiming();
+        const timing = e.getAnimations()[0]?.effect?.getComputedTiming();
+        if (!timing) return null;
         return { duration: Number(timing.duration), delay: Number(timing.delay), through: (Number(timing.localTime) - Number(timing.delay)) / Number(timing.duration) };
       });
-    expect(await drain()).toMatchObject({ duration: 90_000, delay: 0 });
+    await expect.poll(drain).toMatchObject({ duration: 90_000, delay: 0 });
 
     // The slow poll brings a fresh table twelve seconds in. The bar is drawn again from where it stands, twelve seconds
     // through the ninety, with seventy-eight to run: it empties as the table's clock runs out, not early.
     await page.clock.runFor(POLL_MS);
     await expect.poll(() => t.count('view')).toBe(3);
-    await expect.poll(async () => (await drain()).delay).toBe(-POLL_MS);
-    const now = await drain();
+    await expect.poll(async () => (await drain())?.delay).toBe(-POLL_MS);
+    const now = (await drain())!;
     expect(now.duration + now.delay).toBe(90_000 - POLL_MS);
     expect(now.through).toBeGreaterThanOrEqual(POLL_MS / 90_000);
     expect(now.through).toBeLessThan((POLL_MS + 5_000) / 90_000);
