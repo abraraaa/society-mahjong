@@ -20,7 +20,7 @@ const COPY: Readonly<Record<string, GoalCopy>> = {
   goulash: {
     aim: 'Four pungs and a pair. A pung is three matching tiles.',
     // The gate is the goulash's one trap: docs/RULES-KARACHI.md, "Goulash".
-    watchOut: "Only keep winds and dragons if you've got lots.",
+    watchOut: 'Honour pungs need two: dragons, round or own wind.',
     honours: 'gated',
   },
   honour: {

@@ -442,7 +442,7 @@ describe('hand names, wherever the tutor says them', () => {
                 ).toContain('rule:runs:said');
               // The goulash's honour rule: said exactly, for this seat, and never as a word a newcomer can't act on.
               expect(textOf(coach.say), where).not.toMatch(/fussy/i);
-              if (coach.reason?.startsWith('winds and dragons only count with')) {
+              if (coach.reason?.startsWith('honour pungs only count with')) {
                 expect(coach.goal.honours, where).toBe('gated');
                 expect(coach.action.kind === 'discard' && isHonourTile(coach.action.tile), where).toBe(true);
                 const ctx = { seatWind: view.players[view.me].seatWind, roundWind: view.progress.roundWind };
@@ -477,10 +477,10 @@ describe('hand names, wherever the tutor says them', () => {
 
   it("words the goulash's honour rule for the seat, as the engine's guard counts it", () => {
     // One point per dragon pung, one for a pung of the round's wind, one for a pung of your own: two are needed.
-    expect(honourGateReason({ seatWind: 'S', roundWind: 'E' }).full).toEqual(['winds and dragons only count with two pungs among dragons, East and South']);
+    expect(honourGateReason({ seatWind: 'S', roundWind: 'E' }).full).toEqual(['honour pungs only count with two pungs among dragons, East and South']);
     // Where your wind is the round's, that one pung scores both points, so it's enough on its own.
-    expect(honourGateReason({ seatWind: 'E', roundWind: 'E' }).full).toEqual(['winds and dragons only count with an East pung or two dragon pungs']);
-    expect(honourGateReason({ seatWind: 'W', roundWind: 'W' }).full).toEqual(['winds and dragons only count with a West pung or two dragon pungs']);
+    expect(honourGateReason({ seatWind: 'E', roundWind: 'E' }).full).toEqual(['honour pungs only count with an East pung or two dragon pungs']);
+    expect(honourGateReason({ seatWind: 'W', roundWind: 'W' }).full).toEqual(['honour pungs only count with a West pung or two dragon pungs']);
     for (const seatWind of ROUND_WINDS)
       for (const roundWind of ROUND_WINDS) {
         const r = honourGateReason({ seatWind, roundWind });

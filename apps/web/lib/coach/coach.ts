@@ -264,14 +264,14 @@ export function honourGateReason(ctx: MatchCtx): Reason {
   if (ctx.seatWind === ctx.roundWind) {
     const one = `${ctx.roundWind === 'E' ? 'an' : 'a'} ${round} pung`;
     return {
-      full: [`winds and dragons only count with ${one} or two dragon pungs`],
-      short: [`honours need ${one} or two dragon pungs`],
+      full: [`honour pungs only count with ${one} or two dragon pungs`],
+      short: [`honour pungs need ${one} or two dragon pungs`],
     };
   }
   const seat = WIND_WORD[ctx.seatWind];
   return {
-    full: [`winds and dragons only count with two pungs among dragons, ${round} and ${seat}`],
-    short: [`honours need two pungs among dragons, ${round} and ${seat}`],
+    full: [`honour pungs only count with two pungs among dragons, ${round} and ${seat}`],
+    short: [`honour pungs need two among dragons, ${round} and ${seat}`],
   };
 }
 
