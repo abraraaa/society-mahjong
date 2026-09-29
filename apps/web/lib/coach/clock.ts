@@ -2,7 +2,7 @@
  * Clocks under a card. Reading a word or a hand's card mustn't cost the player
  * a claim. On the bots the claim sheet's own countdown holds while a card or a
  * word is open over it. At a live table nobody can hold the table's clock, so
- * the card shows it, and gets out of the way with a few seconds left.
+ * the card shows it, and gets out of the way once, with a few seconds left.
  */
 
 /** A countdown that can be held: what was left when it last started, resumed or stopped, and since when it has run (null while held). */
@@ -32,14 +32,65 @@ export function msLeft(c: Countdown, now: number): number {
 }
 
 /**
- * Whose clock the claim sheet runs on. A live table always passes `claimMs` in a
- * claim window, and 0 in its last moments, so it's told from solo by null, never
- * by truth: a window that arrives that late still passes on the table's clock,
- * after a second, rather than getting the bots' eight seconds. Solo passes
- * nothing, and the sheet keeps its own countdown.
+ * Whether the claim sheet shows a countdown, and whether it passes for the
+ * player when the countdown runs out. On the bots a winning tile is never
+ * taken away by the clock, so it has neither. At a live table the table's
+ * deadline applies to a win too (a long one, the turn clock), so the bar shows,
+ * because a clock you can't see is a trap. But the sheet never passes on a win:
+ * the table's clock runs out and its stand-in takes the win for the player
+ * (`resolveExpired`, lib/live/table.ts). Anything else passes when its bar runs out.
  */
-export function claimSheetClock(claimMs: number | null | undefined): { readonly claimMs: number; readonly clock: 'server' } | Record<string, never> {
-  return claimMs != null ? { claimMs: Math.max(1000, claimMs), clock: 'server' } : {};
+export function claimTimer(clock: 'solo' | 'server', win: boolean): { readonly bar: boolean; readonly passes: boolean } {
+  return { bar: clock === 'server' || !win, passes: !win };
+}
+
+/**
+ * Whose clock the claim sheet runs on, and how long its bar runs. A live table
+ * always passes `claimMs` in a claim window: the time until the sheet passes
+ * for the player, `passMarginMs` ahead of the table's deadline, and 0 in the
+ * window's last moments. So it's told from solo by null, never by truth: a
+ * window that arrives that late still passes on the table's clock, after a
+ * second, rather than getting the bots' eight seconds. A win on offer isn't
+ * passed for the player (`claimTimer`), so its bar runs to the table's own
+ * deadline. Solo passes nothing, and the sheet keeps its own countdown.
+ */
+export function claimSheetClock(
+  claimMs: number | null | undefined,
+  winOffered = false,
+  passMarginMs = 0,
+): { readonly claimMs: number; readonly clock: 'server' } | Record<string, never> {
+  return claimMs != null ? { claimMs: Math.max(1000, claimMs + (winOffered ? passMarginMs : 0)), clock: 'server' } : {};
+}
+
+/**
+ * The claim sheet's bar, as a CSS animation: it drains over the window's whole
+ * length, `fullMs`, the time it had when the sheet first showed it, and starts
+ * `fullMs - leftMs` in, so it's empty exactly when what's left runs out. A
+ * live table sends what's left with every fresh table (the slow poll, a poke
+ * from someone else's move, a reconnect), and the bar is drawn again from
+ * there, part-drained. Stretching what's left over the time already gone would
+ * empty it early: halfway through a win's ninety seconds, with forty left.
+ * Never more than full, if a fresh table brings more time than the first.
+ */
+export function claimBar(fullMs: number, leftMs: number): { readonly durationMs: number; readonly delayMs: number } {
+  const left = Math.max(0, leftMs);
+  const duration = Math.max(fullMs, left);
+  return { durationMs: duration, delayMs: left - duration };
+}
+
+/**
+ * The window's whole length for the claim sheet's bar, as the sheet stores it: what this discard's sheet first had,
+ * and longer whenever a fresh table for the same discard brings more time than that. The bar is then drawn full
+ * once (`claimBar`), and every later table measures against the longer length, so the bar never jumps back up.
+ * A new discard starts afresh. The same object when nothing changes, so a caller can compare it.
+ */
+export interface ClaimWindow {
+  readonly discardCount: number;
+  readonly ms: number;
+}
+export function nextClaimWindow(prev: ClaimWindow | null, discardCount: number, claimMs: number): ClaimWindow {
+  if (!prev || prev.discardCount !== discardCount) return { discardCount, ms: claimMs };
+  return claimMs > prev.ms ? { discardCount, ms: claimMs } : prev;
 }
 
 /**
@@ -56,12 +107,15 @@ export function cardClockFor(i: {
   readonly clock: { readonly kind: 'turn' | 'claim'; readonly ms: number } | null;
   readonly myTurn: boolean;
   readonly exchange: boolean;
+  /** the claim window offers the player a win, which the sheet never passes on (`claimTimer`) */
+  readonly winOffered: boolean;
   /** how early the claim sheet passes for the player, ahead of the table's deadline */
   readonly passMarginMs: number;
 }): CardClock {
   if (i.soloClaimTimed) return { kind: 'paused' };
-  // The time until the sheet passes for the player, which is the time they really have.
-  if (i.claimOpen && i.clock?.kind === 'claim') return { kind: 'running', what: 'claim', ms: Math.max(0, i.clock.ms - i.passMarginMs) };
+  // The time until the sheet passes for the player, which is the time they really have. A win isn't passed on: the
+  // player has until the table's clock runs out, and then its stand-in takes the win for them.
+  if (i.claimOpen && i.clock?.kind === 'claim') return { kind: 'running', what: 'claim', ms: Math.max(0, i.clock.ms - (i.winOffered ? 0 : i.passMarginMs)) };
   if (i.myTurn && i.clock?.kind === 'turn') return { kind: 'running', what: 'turn', ms: i.clock.ms };
   if (i.exchange && i.clock?.kind === 'turn') return { kind: 'running', what: 'exchange', ms: i.clock.ms };
   return null;
@@ -89,6 +143,12 @@ export function cardClockLine(c: CardClock): string | null {
 /** With this little left on a live clock, an open card or word closes, so the player can still act in time. */
 export const STEP_ASIDE_MS = 4000;
 
+/**
+ * Whether a live clock is in its last few seconds. Only while it's still
+ * counting: at nought it has stopped (the sheet has passed, or the table is
+ * settling it, or the phone can't reach the table to), and nothing's left to
+ * make way for.
+ */
 export function stepsAside(c: CardClock): boolean {
-  return c?.kind === 'running' && c.ms <= STEP_ASIDE_MS;
+  return c?.kind === 'running' && c.ms > 0 && c.ms <= STEP_ASIDE_MS;
 }

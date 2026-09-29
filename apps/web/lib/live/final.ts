@@ -1,5 +1,6 @@
 import type { Seat } from '@society/engine';
 import type { GameOver } from './table-state';
+import type { GameEndHow } from './types';
 
 /**
  * The final table: who finished where. Pure, and safe to load in the
@@ -62,4 +63,67 @@ export function finalPlayers(over: GameOver): readonly FinalPlayer[] {
           },
         ],
   );
+}
+
+/**
+ * A game and its game_players rows, as the store reads them for the lobby
+ * (store.ts lastGameOf, lastFinishedGame): when and how it ended, and who
+ * sat where at the end with their final score and place. Scores and places
+ * are null on rows a finish hasn't written yet.
+ */
+export interface LastGameRow {
+  readonly status: 'active' | 'finished' | 'abandoned';
+  readonly endedAt: number | null;
+  readonly how: GameEndHow | null;
+  readonly hands: number;
+  readonly players: readonly {
+    readonly seat: number;
+    readonly userId: string | null;
+    readonly kind: string;
+    readonly name: string;
+    readonly score: number | null;
+    readonly place: number | null;
+  }[];
+}
+
+/**
+ * A game whose end is saved on its live table (`over`) as the lobby would
+ * read it once the finish has written it all: finished (or abandoned), at
+ * the end's moment, with the rows the finish writes (finalPlayers). For the
+ * moments between the room's close and the game's own row, and for as long as
+ * a finish that failed part way leaves the row reading active: the lobby then
+ * still judges who's here by this game's end and shows this game as the last.
+ */
+export function lastGameFromOver(over: GameOver): LastGameRow {
+  return {
+    status: over.how === 'abandoned' ? 'abandoned' : 'finished',
+    endedAt: over.at,
+    how: over.how,
+    hands: over.hands,
+    players: finalPlayers(over).map((p) => ({ seat: p.seat, userId: p.user_id, kind: p.kind, name: p.name, score: p.score, place: p.place })),
+  };
+}
+
+/** The lobby's "Last game": how the room's latest finished game ended, each seat's final score, and the reader's seat in it. Never an id. */
+export interface LastGame {
+  readonly how: GameEndHow;
+  readonly hands: number;
+  readonly rows: readonly { readonly seat: Seat; readonly name: string; readonly bot: boolean; readonly score: number }[];
+  /** the reader's seat in that game, or null if they didn't finish it */
+  readonly me: Seat | null;
+}
+
+/**
+ * The lobby's "Last game" from the game the store read: null unless it
+ * finished (an abandoned game has no result to speak of) and every seat has
+ * its final score written. `me` is the reader's seat in it, matched by
+ * game_players' user id, which goes no further than this.
+ */
+export function lastGameFrom(row: LastGameRow | null, userId: string): LastGame | null {
+  if (row?.status !== 'finished') return null;
+  const players = row.players.filter((p) => Number.isInteger(p.seat) && p.seat >= 0 && p.seat <= 3);
+  if (players.length === 0 || players.some((p) => typeof p.score !== 'number')) return null;
+  const rows = players.map((p) => ({ seat: p.seat as Seat, name: p.name, bot: p.kind === 'bot', score: p.score as number })).sort((a, b) => a.seat - b.seat);
+  const mine = players.find((p) => p.userId !== null && p.userId === userId);
+  return { how: row.how ?? 'complete', hands: row.hands, rows, me: mine ? (mine.seat as Seat) : null };
 }

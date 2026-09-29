@@ -1,12 +1,16 @@
 import { readdirSync, readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('server-only', () => ({}));
+
+import { EVENT_TYPES } from './events';
 
 /*
  * docs/ops/funnel.sql is pasted into the Supabase SQL editor by hand, where a
  * typo in a column name only shows up as an error on the night someone wants
  * the numbers. These tests read it next to the migrations: it must only
- * ever read, and every column it names on rooms, games, hands and profiles
- * must exist there.
+ * ever read, and every column it names on rooms, games, hands, profiles and
+ * app_events must exist there. Query 9's moments must be ones the app writes.
  */
 
 const ROOT = new URL('../../../../', import.meta.url);
@@ -15,7 +19,7 @@ const withoutComments = (sql: string) => sql.replace(/--[^\n]*/g, '');
 
 const FUNNEL = withoutComments(read('docs/ops/funnel.sql'));
 /** The alias each query in funnel.sql gives each table. */
-const ALIASES: Record<string, string> = { r: 'rooms', g: 'games', hd: 'hands', p: 'profiles' };
+const ALIASES: Record<string, string> = { r: 'rooms', g: 'games', hd: 'hands', p: 'profiles', e: 'app_events' };
 
 /** Columns per public table, replaying the schema's create table, add column, rename column and drop table statements in order. */
 function schemaColumns(sql: string): Map<string, Set<string>> {
@@ -64,7 +68,7 @@ describe('docs/ops/funnel.sql', () => {
   it('names only columns the migrations give those tables', () => {
     const migrations = readdirSync(new URL('supabase/migrations/', ROOT)).filter((f) => f.endsWith('.sql')).sort();
     const tables = schemaColumns(migrations.map((f) => read(`supabase/migrations/${f}`)).join('\n'));
-    const used = [...FUNNEL.matchAll(/\b(hd|[rgp])\.(\w+)\b/g)].map(([, alias, col]) => [ALIASES[alias!]!, col!] as const);
+    const used = [...FUNNEL.matchAll(/\b(hd|[rgpe])\.(\w+)\b/g)].map(([, alias, col]) => [ALIASES[alias!]!, col!] as const);
     expect(used.length).toBeGreaterThan(20);
     const missing = used.filter(([table, col]) => !tables.get(table)?.has(col)).map(([table, col]) => `${table}.${col}`);
     expect(missing).toEqual([]);
@@ -74,6 +78,16 @@ describe('docs/ops/funnel.sql', () => {
     const q4 = FUNNEL.split(';')[3]!;
     expect(q4).toMatch(/\bg\.ended_how\b/);
     for (const how of ['complete', 'host', 'idle']) expect(q4).toContain(`status = 'finished' and ended_how = '${how}'`);
+  });
+
+  it('counts the moments the app writes, by week, in query 9, splitting the finished games by how they ended', () => {
+    const q9 = FUNNEL.split(';')[8]!;
+    expect(q9).toMatch(/\bfrom public\.app_events e\b/);
+    expect(q9).toMatch(/date_trunc\('week', e\.at\)/);
+    const named = new Set([...q9.matchAll(/\be\.type = '(\w+)'/g)].map((m) => m[1]));
+    expect(named).toEqual(new Set(EVENT_TYPES));
+    expect(q9).toContain(`count(distinct e.user_id) filter (where e.type = 'seat_taken')`);
+    for (const how of ['complete', 'host', 'idle']) expect(q9).toContain(`e.type = 'game_finished' and e.data ->> 'how' = '${how}'`);
   });
 
   it('reads the tables under the aliases the checks above expect', () => {

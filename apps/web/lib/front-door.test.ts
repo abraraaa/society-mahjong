@@ -7,16 +7,24 @@ const NOW = Date.parse('2026-09-24T12:00:00Z');
 const DAY = 24 * 60 * 60 * 1000;
 const SEATS: Seats = [{ kind: 'human', userId: 'host', name: 'Abrar' }, { kind: 'human', userId: 'sana', name: 'Sana' }, { kind: 'bot', name: 'Bilal' }, null];
 
+const ROOM_ID = 'r-1';
+
 function room(status: DoorRoom['status'], ageMs: number): DoorRoom {
-  return { status, updated_at: new Date(NOW - ageMs).toISOString(), seats: SEATS };
+  return { id: ROOM_ID, status, updated_at: new Date(NOW - ageMs).toISOString(), seats: SEATS };
 }
 
-function lookup(found: DoorRoom | null | Error, userId: string | null | Error = null, configured = true) {
+type Member = { readonly userId: string; readonly lastSeenAt: number };
+
+function lookup(found: DoorRoom | null | Error, userId: string | null | Error = null, configured = true, members: readonly Member[] | Error = []) {
   const look = {
     configured,
     room: vi.fn(async () => {
       if (found instanceof Error) throw found;
       return found;
+    }),
+    members: vi.fn(async (_roomId: string) => {
+      if (members instanceof Error) throw members;
+      return members;
     }),
     userId: vi.fn(async () => {
       if (userId instanceof Error) throw userId;
@@ -53,42 +61,71 @@ describe('frontDoor', () => {
 
   it('opens the lobby when the lookup throws, and the join has the final say', async () => {
     expect(await frontDoor('KHI-4287Q', lookup(new Error('connection refused')), NOW)).toBe('lobby');
+    expect(await frontDoor('KHI-4287Q', lookup(room('finished', 50 * DAY), 'stranger', true, new Error('connection refused')), NOW)).toBe('lobby');
   });
 
-  it('opens the lobby for a room waiting, playing, or finished within the week, without asking who is visiting', async () => {
-    for (const r of [room('lobby', 30 * DAY), room('playing', 30 * DAY), room('finished', 6 * DAY), room('finished', ROOM_OPEN_MS)]) {
+  it('opens the lobby for a room playing, or written to within six weeks, without asking who is visiting or who has sat there', async () => {
+    for (const r of [room('lobby', 30 * DAY), room('playing', 300 * DAY), room('finished', 41 * DAY), room('finished', ROOM_OPEN_MS)]) {
       const look = lookup(r, 'stranger');
       expect(await frontDoor('KHI-4287Q', look, NOW), `${r.status} ${r.updated_at}`).toBe('lobby');
+      expect(look.members).not.toHaveBeenCalled();
       expect(look.userId).not.toHaveBeenCalled();
     }
   });
 
-  it('closes a room a week past its last game to a newcomer', async () => {
-    expect(await frontDoor('KHI-4287Q', lookup(room('finished', ROOM_OPEN_MS + 1), 'stranger'), NOW)).toBe('closed');
-    expect(await frontDoor('KHI-4287Q', lookup(room('finished', 30 * DAY), null), NOW)).toBe('closed');
+  it('closes a room quiet for six weeks to a newcomer, before its first game as well as after its last', async () => {
+    for (const status of ['lobby', 'finished'] as const) {
+      expect(await frontDoor('KHI-4287Q', lookup(room(status, ROOM_OPEN_MS + 1), 'stranger'), NOW), status).toBe('closed');
+      expect(await frontDoor('KHI-4287Q', lookup(room(status, 50 * DAY), null), NOW), status).toBe('closed');
+    }
   });
 
-  it("still lets a closed room's own people back in, as the join does", async () => {
-    expect(await frontDoor('KHI-4287Q', lookup(room('finished', 30 * DAY), 'sana'), NOW)).toBe('lobby');
-    expect(await frontDoor('KHI-4287Q', lookup(room('finished', 30 * DAY), 'host'), NOW)).toBe('lobby');
+  it('asks who has sat there by the room’s id, only once its writes say it’s quiet, and keeps it open for someone seen lately', async () => {
+    const look = lookup(room('finished', 50 * DAY), 'stranger', true, [
+      { userId: 'sana', lastSeenAt: NOW - 45 * DAY },
+      { userId: 'zara', lastSeenAt: NOW - 3 * DAY },
+    ]);
+    expect(await frontDoor('KHI-4287Q', look, NOW)).toBe('lobby');
+    expect(look.members).toHaveBeenCalledWith(ROOM_ID);
+    expect(look.userId).not.toHaveBeenCalled();
+    // Everyone seen more than six weeks ago: still closed to a stranger.
+    expect(await frontDoor('KHI-4287Q', lookup(room('finished', 50 * DAY), 'stranger', true, [{ userId: 'sana', lastSeenAt: NOW - 45 * DAY }]), NOW)).toBe('closed');
+  });
+
+  it("still lets a closed room's own people back in, as the join does: anyone seated, or who has ever sat there", async () => {
+    const long = [{ userId: 'omar', lastSeenAt: NOW - 90 * DAY }];
+    expect(await frontDoor('KHI-4287Q', lookup(room('finished', 50 * DAY), 'sana', true, long), NOW)).toBe('lobby');
+    expect(await frontDoor('KHI-4287Q', lookup(room('finished', 50 * DAY), 'host', true, long), NOW)).toBe('lobby');
+    expect(await frontDoor('KHI-4287Q', lookup(room('lobby', 50 * DAY), 'omar', true, long), NOW)).toBe('lobby');
   });
 
   it('opens the lobby when the session check throws on a closed room', async () => {
-    expect(await frontDoor('KHI-4287Q', lookup(room('finished', 30 * DAY), new Error('auth down')), NOW)).toBe('lobby');
+    expect(await frontDoor('KHI-4287Q', lookup(room('finished', 50 * DAY), new Error('auth down')), NOW)).toBe('lobby');
   });
 });
 
 describe('isClosedRoom', () => {
-  it('only a finished room closes, and only after the week', () => {
-    expect(isClosedRoom(room('finished', ROOM_OPEN_MS + 1), NOW)).toBe(true);
-    expect(isClosedRoom(room('finished', ROOM_OPEN_MS), NOW)).toBe(false);
-    expect(isClosedRoom(room('lobby', 30 * DAY), NOW)).toBe(false);
-    expect(isClosedRoom(room('playing', 30 * DAY), NOW)).toBe(false);
+  it('closes any room not playing, once six weeks have passed with no write to it', () => {
+    for (const status of ['finished', 'lobby'] as const) {
+      expect(isClosedRoom(room(status, ROOM_OPEN_MS + 1), NOW), status).toBe(true);
+      expect(isClosedRoom(room(status, ROOM_OPEN_MS), NOW), status).toBe(false);
+    }
+    expect(ROOM_OPEN_MS).toBe(42 * DAY);
+    expect(isClosedRoom(room('playing', 300 * DAY), NOW)).toBe(false);
+  });
+
+  it('counts a member seen there as the room not being quiet', () => {
+    expect(isClosedRoom(room('finished', 50 * DAY), NOW, NOW - DAY)).toBe(false);
+    expect(isClosedRoom(room('finished', 50 * DAY), NOW, NOW - ROOM_OPEN_MS)).toBe(false);
+    expect(isClosedRoom(room('finished', 50 * DAY), NOW, NOW - ROOM_OPEN_MS - 1)).toBe(true);
+    expect(isClosedRoom(room('finished', 50 * DAY), NOW, null)).toBe(true);
+    // An older member doesn't make a recent write look older.
+    expect(isClosedRoom(room('finished', DAY), NOW, NOW - 90 * DAY)).toBe(false);
   });
 
   it('reads the timestamp the way the database writes it', () => {
-    expect(isClosedRoom({ status: 'finished', updated_at: '2026-09-01T10:00:00.123456+00:00' }, NOW)).toBe(true);
-    expect(isClosedRoom({ status: 'finished', updated_at: '2026-09-20T10:00:00.123456+00:00' }, NOW)).toBe(false);
+    expect(isClosedRoom({ status: 'finished', updated_at: '2026-08-01T10:00:00.123456+00:00' }, NOW)).toBe(true);
+    expect(isClosedRoom({ status: 'finished', updated_at: '2026-09-01T10:00:00.123456+00:00' }, NOW)).toBe(false);
   });
 });
 

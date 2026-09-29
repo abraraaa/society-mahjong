@@ -395,8 +395,10 @@ h3 {
 }
 /* Discard names the tile, from "Discard 1 Dot" (about 140px) to "Discard Green
    Dragon" (209px). Sized for the longest, so flipping through the hand
-   changes the words on the button and never moves its edges. */
-.action-row > .btn-primary {
+   changes the words on the button and never moves its edges, whether it's
+   the lit button or stepping back for a kong the tutor advises (which
+   doesn't grow to its width when it's lit). */
+.action-row > .btn-discard {
   min-width: 13.25rem;
 }
 
@@ -632,6 +634,31 @@ h3 {
 .seat .held {
   font-variant-numeric: tabular-nums;
   color: rgb(243 236 219 / 0.55);
+}
+/* A row pill gives the name its whole first line, so "Sana · bot" still reads
+   beside a four-digit score on a phone: sharing the line left the name 30px
+   at 393 wide, and the marker took all of it. The score drops to the second
+   line, level with the tile count, and the count (with the turn clock) spans
+   the badge's column and the name's, so the clock never narrows the name.
+   Where the clock, the count and a long score can't share the line (a 320px
+   phone), the count wraps out of sight rather than running under the score.
+   The landscape phone keeps its one-line pill, laid out above. */
+@media (orientation: portrait), (height >= 32rem) {
+  .seat:not(.is-column) .name {
+    grid-column: 2 / -1;
+  }
+  .seat:not(.is-column) .held {
+    grid-row: 2;
+    grid-column: 1 / 3;
+    display: flex;
+    flex-wrap: wrap;
+    height: 1lh;
+    overflow: hidden;
+  }
+  .seat:not(.is-column) .score {
+    grid-row: 2;
+    grid-column: 3;
+  }
 }
 .seat .pips {
   display: flex;
@@ -959,7 +986,7 @@ b .term {
   }
 }
 
-/* A definition opens above whatever sheet is already up. */
+/* A definition, or a question such as Leave or End, opens above whatever sheet is already up. */
 .scrim.scrim-top {
   z-index: 40;
 }
@@ -967,6 +994,53 @@ b .term {
   z-index: 50;
   max-height: 80dvh;
   overflow-y: auto;
+}
+/* A question (ConfirmSheet) shows whole, answers and all: where a definition stops at 80% of the screen, a question may
+   take all of it bar a sliver, and on a phone lying down its spacing tightens. Should it ever run longer still, its answers
+   stay pinned to its foot, their row carrying the sheet's bottom padding, and the words scroll above them. */
+.sheet.sheet-top.sheet-ask {
+  max-height: calc(100dvh - var(--safe-top) - 8px);
+  padding-bottom: 0;
+  overscroll-behavior: contain;
+}
+.sheet-ask .answers {
+  position: sticky;
+  bottom: 0;
+  padding-bottom: calc(20px + var(--safe-bottom));
+  background: var(--color-felt-900);
+}
+@media (orientation: landscape) and (height < 32rem) {
+  .sheet.sheet-top.sheet-ask {
+    padding-top: 12px;
+  }
+  .sheet-ask .grabber {
+    margin-bottom: 10px;
+  }
+  .sheet-ask .ask-body {
+    margin-bottom: 12px;
+  }
+  .sheet-ask .answers {
+    padding-bottom: calc(12px + var(--safe-bottom));
+  }
+}
+/* The exchange sheet stays up from the first pass to the last. Its scrim keeps the tint without the blur, which cost
+   frames as its tiles lifted. */
+.scrim.scrim-plain {
+  backdrop-filter: none;
+}
+/* Once a wait after the player's pass has lasted, the scrim clears and lets taps through, so Tutor, ? and Leave work
+   above the sheet, and the sheet drops below every other sheet and scrim: a Leave confirmation, a card or the ? sheet
+   opened during the wait draws over it. */
+.scrim[data-waiting='true'] {
+  background: transparent;
+  pointer-events: none;
+}
+.sheet[data-sheet='exchange'][data-waiting='true'] {
+  z-index: 15;
+}
+.sheet[data-sheet='exchange'] .step {
+  font-weight: 400;
+  color: rgb(243 236 219 / 0.6);
 }
 .glossary {
   display: flex;
@@ -984,11 +1058,16 @@ b .term {
   gap: 6px;
   margin: 4px 0 18px;
 }
-/* The first line of a card or a word opened over a clock: the claim held, or a live clock still running. */
+/* The first line of a card or a word opened over a clock: the claim held, or a live clock still running. It takes the
+   grabber's place at the grabber's height (4px and its 16px margin), so the line coming or going moves nothing under it. */
 .sheet.sheet-top > .clock {
-  font: 500 12px/1.3 var(--font-sans);
+  height: 20px;
+  margin: 0;
+  overflow: hidden;
+  font: 500 12px/16px var(--font-sans);
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--color-brass-400);
-  margin: 0 0 6px;
 }
 
 /* Running score on a seat pill, and the standings on the result sheet. */
@@ -1321,6 +1400,15 @@ button.link-quiet {
   display: flex;
   gap: 1px;
   flex: none;
+}
+/* A new plan's tiles fade in: opacity only, so nothing on the table moves. */
+.plan-strip[data-new-plan] .strip-row {
+  animation: strip-in 180ms ease-out;
+}
+@keyframes strip-in {
+  from {
+    opacity: 0;
+  }
 }
 .strip-row .tile {
   /* 22px, or narrower when the row holds more tiles than fit (four kongs, a small phone). */

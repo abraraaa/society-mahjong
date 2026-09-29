@@ -26,10 +26,15 @@ export function HandGroups({ layout, className, size = '2xs' }: { layout: readon
   );
 }
 
-/** The first line of a tutor sheet opened over a clock: the claim held, or how long a live clock has left. */
+/**
+ * The top of a tutor sheet: the grabber, or over a clock, in its place, the line
+ * that says the claim's held or how long a live clock has left. The two are the
+ * same height, so a clock that starts or stops under an open sheet moves nothing
+ * the player is reading: the ? sheet is as tall as it can be, and scrolls.
+ */
 export function ClockLine({ clock }: { clock: CardClock }) {
   const line = cardClockLine(clock);
-  return line ? <p className="clock">{line}</p> : null;
+  return line ? <p className="clock">{line}</p> : <div className="grabber" />;
 }
 
 /** For a screen reader, which can't see which tiles are lit. */
@@ -51,7 +56,6 @@ export function HandCard({ card, clock, onClose }: { card: CoachHandRef; clock: 
     <>
       <div className="scrim scrim-top" onClick={onClose} />
       <div className="sheet sheet-top hand-card" role="dialog" aria-label={card.title} data-sheet="card" data-whose={card.whose}>
-        <div className="grabber" />
         <ClockLine clock={clock} />
         <h2 className="font-display text-xl">{card.title}</h2>
         {card.shape && <p className="text-ivory-100/80 mt-1 text-sm">{capitalise(card.shape)}.</p>}

@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   ALL_TILE_KINDS,
+  SEATS,
   analyseHand,
+  analysisBot,
+  createRng,
+  reduce,
+  startHand,
+  viewFor,
   isBonusTile,
   coverPattern,
   countOf,
@@ -15,6 +21,7 @@ import {
   type MatchCtx,
   type Pattern,
   type PatternCandidate,
+  type Seat,
   type TileKind,
 } from '../src/index';
 
@@ -423,5 +430,98 @@ describe('which tile the analysis lets go', () => {
     const tiles = T('m1 m2 m2 m3 m5 m6 m9 p4 p5 p8 s4 s5 WW WN');
     const d = run(tiles, 'E', 1).bestDiscard!;
     expect(awayAfter(tiles, d, 'E', 1, 'karachi.east.chows.each.news')).toBe(5);
+  });
+});
+
+/*
+ * `prefer`: the tutor's plan, kept in front while another hand is only as close, so the
+ * plan doesn't take turns with it from one draw to the next. The owner's rule comes
+ * first: while a hand is being built, the round's general hand leads a named one that's
+ * only as close, whatever the player was on.
+ */
+describe('the plan the player is already on', () => {
+  const T = (s: string) => s.split(' ') as TileKind[];
+  const E2 = karachi.handSpec({ roundWind: 'E', roundIndex: 0, handInRound: 1, handIndex: 1 });
+  const SOUTH = karachi.handSpec({ roundWind: 'S', roundIndex: 1, handInRound: 0, handIndex: 4 });
+  const leader = (spec: typeof E2, tiles: TileKind[], ctx: MatchCtx, prefer?: string) => {
+    const top = analyseHand(hand(tiles), spec.patterns, ctx, karachi.guards, { claims: karachi.claims, ...(prefer ? { prefer } : {}) }).candidates[0];
+    return { id: top?.patternId, away: top?.away };
+  };
+
+  it("never beats the owner's rule: the round's general hand still leads a named one that's only as close", () => {
+    const ctx: MatchCtx = { seatWind: 'S', roundWind: 'E' };
+    const tiles = T('s1 s2 s3 p1 p2 p3 m1 m2 DW DW DW DG WE WS');
+    expect(leader(E2, tiles, ctx)).toEqual({ id: 'karachi.east.chows.each.pungPair', away: 2 });
+    expect(leader(E2, tiles, ctx, 'karachi.east.appleBlossom')).toEqual({ id: 'karachi.east.chows.each.pungPair', away: 2 });
+    const north: MatchCtx = { seatWind: 'N', roundWind: 'E' };
+    const more = T('m1 m2 m3 p1 p2 p3 p4 p5 p6 s4 s6 WE WS WW');
+    expect(leader(E2, more, north)).toEqual({ id: 'karachi.east.chows.each.news', away: 3 });
+    expect(leader(E2, more, north, 'karachi.east.windyChows')).toEqual({ id: 'karachi.east.chows.each.news', away: 3 });
+  });
+
+  it('settles a tie between two named hands in favour of the plan', () => {
+    const ctx: MatchCtx = { seatWind: 'W', roundWind: 'S' };
+    const tiles = T('m2 m3 m4 m6 p3 p6 p9 s3 s5 s6 WE WS WN WN');
+    expect(leader(SOUTH, tiles, ctx)).toEqual({ id: 'karachi.south.crochet', away: 5 });
+    expect(leader(SOUTH, tiles, ctx, 'karachi.south.crazyChows')).toEqual({ id: 'karachi.south.crazyChows', away: 5 });
+  });
+
+  it('never lifts a hand that is further off', () => {
+    const ctx: MatchCtx = { seatWind: 'S', roundWind: 'E' };
+    const tiles = T('DR DG DW s3 s3 s3 p5 p5 p5 m7 m7 s4 WE WN');
+    expect(leader(E2, tiles, ctx, 'karachi.east.pungs.each.news')).toEqual({ id: 'karachi.east.dragonfly', away: 2 });
+  });
+
+  it('never moves a complete hand off the name it will be announced under', () => {
+    const ctx: MatchCtx = { seatWind: 'S', roundWind: 'E' };
+    const tiles = T('s4 s5 s6 p2 p3 p4 m1 m2 m3 WN WN WN DR DR');
+    expect(leader(E2, tiles, ctx)).toEqual({ id: 'karachi.east.hoveringAngel', away: 0 });
+    expect(leader(E2, tiles, ctx, 'karachi.east.chows.each.pungPair')).toEqual({ id: 'karachi.east.hoveringAngel', away: 0 });
+  });
+
+  it('never lets go of a tile the plan it keeps is counting on, over seeded play', { timeout: 120_000 }, () => {
+    const rounds = [
+      { roundWind: 'E', roundIndex: 0, handInRound: 0, handIndex: 0 },
+      { roundWind: 'E', roundIndex: 0, handInRound: 1, handIndex: 1 },
+      { roundWind: 'S', roundIndex: 1, handInRound: 0, handIndex: 4 },
+      { roundWind: 'W', roundIndex: 2, handInRound: 0, handIndex: 8 },
+      { roundWind: 'N', roundIndex: 3, handInRound: 0, handIndex: 12 },
+    ] as const;
+    let moved = 0;
+    for (const progress of rounds) {
+      const spec = karachi.handSpec(progress);
+      for (let h = 0; h < 5; h++) {
+        const seed = `prefer-${progress.handIndex}-${h}`;
+        const random = createRng(`${seed}-bots`).next;
+        let s = startHand(karachi, { seed, progress, dealer: (h % 4) as Seat });
+        for (let step = 0; step < 800 && s.phase !== 'finished'; step++) {
+          const seat = SEATS.find((x) => {
+            const l = viewFor(s, karachi, x).legal;
+            return !!(l.discard || l.claims || l.exchange || l.win);
+          });
+          if (seat === undefined) break;
+          const view = viewFor(s, karachi, seat);
+          if (seat === 0 && view.phase === 'turn' && view.legal.discard && !view.legal.win) {
+            const h0 = { concealed: view.concealed, melds: view.players[0].melds };
+            const ctx: MatchCtx = { seatWind: view.players[0].seatWind, roundWind: progress.roundWind };
+            const plain = analyseHand(h0, spec.patterns, ctx, karachi.guards, { claims: karachi.claims });
+            const top = plain.candidates[0];
+            // Every hand as close as the leader, taken in turn as the plan the player is on.
+            for (const c of plain.candidates.filter((x) => top && x.away === top.away && x.patternId !== top.patternId)) {
+              const kept = analyseHand(h0, spec.patterns, ctx, karachi.guards, { claims: karachi.claims, prefer: c.patternId });
+              const lead = kept.candidates[0]!;
+              expect(lead.away).toBe(top!.away);
+              if (lead.patternId !== top!.patternId) moved++;
+              if (kept.bestDiscard) expect(countOf(view.concealed, kept.bestDiscard), `${seed} ${lead.patternId}`).toBeGreaterThan(countOf(lead.usingConcealed, kept.bestDiscard));
+            }
+          }
+          const action = analysisBot(view, karachi, { strength: 'gentle', random }) ?? (view.legal.claims ? ({ type: 'pass', seat } as const) : null);
+          if (!action) break;
+          s = reduce(s, action, karachi);
+        }
+      }
+    }
+    // The corpus has to reach hands where the plan kept isn't the one that would lead without it.
+    expect(moved).toBeGreaterThan(0);
   });
 });

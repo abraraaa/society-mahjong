@@ -2,6 +2,7 @@ import {
   analyseHand,
   countOf,
   handAfterClaim,
+  handAfterKong,
   isHonourTile,
   isSuitTile,
   matchPatterns,
@@ -22,10 +23,12 @@ import {
   type SuitTile,
   type TileKind,
 } from '@society/engine';
+import { exchangeStep } from './exchange';
 import { GLOSSARY } from './glossary';
 import { goalFor, roundNote } from './goal';
-import { handsThisRound, winnerRef, yoursRef } from './hand-card';
-import { shapeOf, titleOf } from './shape';
+import { exampleRef, handsThisRound, winnerRef, yoursRef } from './hand-card';
+import { isTurnView, type PlanMark } from './plan-mark';
+import { noteShapeOf, shapeOf, titleOf } from './shape';
 import {
   SAY_BUDGET,
   countWord,
@@ -68,6 +71,16 @@ export interface CoachInput {
   readonly stage: CoachStage;
   /** table-local display names, since the engine knows seats and not people */
   readonly names: Readonly<Record<Seat, string>>;
+  /**
+   * Someone who has just taken this seat over in a hand under way, and hasn't moved since (`firstLookFor`,
+   * first-look.ts). Until they do, the tutor gives them what the start of a hand gives: the round's aim, and the plan.
+   */
+  readonly firstLook?: boolean;
+  /**
+   * The plan the tutor is holding the player to (plan-mark.ts), after this view. On the turn view that tells a
+   * switch (`switched.toldAt` is its seq), the bubble says what the tutor switched from, and why.
+   */
+  readonly mark?: PlanMark | null;
 }
 
 export function handOf(view: PrivatePlayerView): HandInput {
@@ -78,10 +91,23 @@ function ctxOf(view: PrivatePlayerView): MatchCtx {
   return { seatWind: view.players[view.me].seatWind, roundWind: view.progress.roundWind };
 }
 
-/** The analysis the coach runs on. Separate so a component can memoise it by `seq`. */
-export function analyseFor(view: PrivatePlayerView, ruleset: Ruleset): HandAnalysis {
+/**
+ * The analysis the coach runs on. Separate so a component can memoise it by `seq`. `prefer` is the plan the
+ * player is already on (`preferFor`, plan-mark.ts), kept in front of hands only as close, so the strip, the
+ * tutor's words and its discards all stay with it.
+ */
+export function analyseFor(view: PrivatePlayerView, ruleset: Ruleset, prefer?: string): HandAnalysis {
   const spec = ruleset.handSpec(view.progress);
-  return analyseHand(handOf(view), spec.patterns, ctxOf(view), ruleset.guards, { claims: ruleset.claims });
+  return analyseHand(handOf(view), spec.patterns, ctxOf(view), ruleset.guards, { claims: ruleset.claims, ...(prefer ? { prefer } : {}) });
+}
+
+/**
+ * Whether a hand of this pattern can hold a run: a set that may be a run (Any Damn Hand's "any set" included), or
+ * a run of its own. Once a pung is laid face up, a hand that needs its runs may be out of reach, and only the
+ * analysis of the hand after the claim knows.
+ */
+export function admitsRun(p: Pattern): boolean {
+  return p.components.some((c) => (c.c === 'set' && (c.of === 'chow' || c.of === 'any')) || c.c === 'seq' || c.c === 'run' || c.c === 'mixedSeq' || c.c === 'mixedRun');
 }
 
 function targetOf(candidate: PatternCandidate | undefined, patterns: readonly Pattern[], ruleset: Ruleset, ctx: MatchCtx): CoachTarget | null {
@@ -161,13 +187,18 @@ export function runNoteApplies(
  * on the plan as it stands now, but only with tiles the player held when the
  * tile went by: every discard since their last move came before their draw,
  * and a run that the drawn tile has only just begun wasn't one the discard
- * would have finished. Whether the visit's been taught it already is for
- * `lessonFor` to decide.
+ * would have finished. Copies of a tile can't be told apart, so a run's tile
+ * counts as held then only if every copy of it the lay-out holds was: when the
+ * draw brought a second copy, the one held then may have been sitting in
+ * another set. Whether the visit's been taught it already is for `lessonFor`
+ * to decide.
  */
 function missedRun(view: PrivatePlayerView, target: CoachTarget, goal: CoachGoal, names: Readonly<Record<Seat, string>>): CoachTeach[] {
+  // The concealed copies the lay-out holds, kind by kind: a set laid face up isn't in the hand.
+  const inLayout = (target.layout ?? []).flatMap((g) => (g.exposed ? [] : g.tiles.filter((t) => t.held).map((t) => t.kind)));
   for (const passed of passedSince(view)) {
     const drawn = drawnSince(view, passed.seq);
-    const heldThen = (kind: TileKind) => countOf(view.concealed, kind) - countOf(drawn, kind) > 0;
+    const heldThen = (kind: TileKind) => countOf(inLayout, kind) <= countOf(view.concealed, kind) - countOf(drawn, kind);
     const group = runGroupsFor(target, goal, passed.tile).find((g) => g.tiles.every((t) => !t.held || heldThen(t.kind)));
     if (group) return [{ key: 'rule:runs', place: 'note', text: missedRunNote(names[passed.seat], passed.tile, group) }];
   }
@@ -178,6 +209,8 @@ function missedRun(view: PrivatePlayerView, target: CoachTarget, goal: CoachGoal
 const RUNS_SAID: CoachTeach = { key: 'rule:runs', place: 'said', text: 'runs only come from the wall' };
 
 const CLAIM_VERB: Readonly<Record<ClaimOption['type'], string>> = { pung: 'Pung', kong: 'Kong', chow: 'Chow', win: 'Mahjong!' };
+/** A claim as a noun, for the lines that say why not to make it. */
+const CLAIM_NOUN: Readonly<Record<ClaimOption['type'], string>> = { pung: 'pung', kong: 'kong', chow: 'chow', win: 'claim' };
 
 function seg(text: string): CoachSegment {
   return { text };
@@ -191,7 +224,7 @@ function named(ref: CoachHandRef): CoachSegment {
 }
 
 /** A piece of a sentence: plain words, or a segment (the bold action, a hand's name). */
-type Part = CoachSegment | string;
+export type Part = CoachSegment | string;
 
 /** A sentence from its parts, neighbouring plain words joined into one segment so a glossary phrase is never split across two. */
 function line(...parts: readonly Part[]): CoachSegment[] {
@@ -211,7 +244,7 @@ function asMine(ref: CoachHandRef, whose: 'yours' | 'ifClaimed'): CoachHandRef {
   return { patternId: ref.patternId, title: ref.title, shape: ref.shape, whose, away: 0, layout: ref.layout, note: ref.note };
 }
 
-interface Reason {
+export interface Reason {
   readonly full: readonly Part[];
   readonly short: readonly Part[];
 }
@@ -316,6 +349,18 @@ function outcomeOf(input: CoachInput, target: CoachTarget | null, patterns: read
   };
 }
 
+/**
+ * C2, the claim sheet's line for a claim worth making: how close it leaves the hand, and which hand (`hand`,
+ * when there is one). With `endsRuns` (C2x), it also says the claim rules out every run hand, while that fits.
+ * A kong's replacement tile is the first thing to go when the line runs long, and C2x never keeps it: with it,
+ * the line is over the bubble's budget for almost every hand's name.
+ */
+export function claimLine(type: ClaimOption['type'], away: number, hand: Part | null, endsRuns: boolean): CoachSegment[] {
+  const claim = (tail: string) => line(act(CLAIM_VERB[type]), ` it: you'll be ${tilesWord(Math.max(1, away))}`, ...(hand ? [' from ', hand] : []), tail);
+  const plain = type === 'kong' ? [claim(', with a replacement tile to come.'), claim('.')] : [claim('.')];
+  return fitting(endsRuns ? [claim(', but it rules out every run hand.'), ...plain] : plain);
+}
+
 /** E2 and E3: who won, with what, and how the last tile came. `hand` is the hand's name, or words when there's no pattern to name. */
 export function winnerLine(who: string, hand: Part, how: string): CoachSegment[] {
   return line(`${isolate(who)} wins with `, hand, `, ${how}.`);
@@ -342,6 +387,50 @@ export function washoutLine(brief = false): CoachSegment[] {
   return line(`Washed out: the wall's run dry and nobody won.${brief ? '' : ' No points change hands.'}`);
 }
 
+/** The tile the Discard button offers when the player hasn't picked one: a discard tip's tile, or a kong tip's fallback. */
+export function suggestedDiscard(action: CoachAction): TileKind | null {
+  if (action.kind === 'discard') return action.tile;
+  if (action.kind === 'kong') return action.discard;
+  return null;
+}
+
+/**
+ * The first kong on offer that leaves the hand no further from its nearest hand than it is now, or null: the
+ * bots' own rule (bots/analysis.ts). Such a kong costs nothing and draws an extra tile. With no hand in reach,
+ * nothing a kong does can cost it one.
+ */
+function freeKong(input: Pick<CoachInput, 'view' | 'ruleset' | 'analysis'>): TileKind | null {
+  const { view, ruleset, analysis } = input;
+  const spec = ruleset.handSpec(view.progress);
+  const before = analysis.candidates[0]?.away ?? Number.POSITIVE_INFINITY;
+  const awayAfter = (k: TileKind) =>
+    analyseHand(handAfterKong(handOf(view), k), spec.patterns, ctxOf(view), ruleset.guards, { claims: ruleset.claims }).candidates[0]?.away ?? Number.POSITIVE_INFINITY;
+  return view.legal.kong?.find((k) => awayAfter(k) <= before) ?? null;
+}
+
+/**
+ * The kong the tutor advises on this view (K1), or null: the player's own turn, with no win, a kong on offer that
+ * costs nothing, and not a first look, whose bubble is the round's aim (except for a regular, who has no aim bubble).
+ */
+export function kongTip(input: Pick<CoachInput, 'view' | 'ruleset' | 'analysis' | 'stage' | 'firstLook'>): TileKind | null {
+  const { view } = input;
+  if (view.phase !== 'turn' || view.turn !== view.me || view.legal.win || !view.legal.kong?.length) return null;
+  if (input.firstLook && input.stage !== 'solid') return null;
+  return freeKong(input);
+}
+
+/**
+ * Whether the tutor's bubble on this view can tell a plan switch (plan-mark.ts): a turn view (`isTurnView`) whose
+ * tip is a discard. A turn whose tip is a kong says K1 and nothing else, so a switch due then waits for the next
+ * turn view, the replacement draw's if the player takes the kong. The hook passes this to `nextPlanMark`.
+ */
+export function tellsSwitch(input: Pick<CoachInput, 'view' | 'ruleset' | 'analysis' | 'stage' | 'firstLook'>): boolean {
+  return isTurnView(input.view) && kongTip(input) === null;
+}
+
+/** K2, after a discard's reason on a turn whose only kongs would set the hand back: the Kong button is there, so say why not. */
+const KONG_SETS_BACK = " Don't press Kong: it would set your hand back.";
+
 /** The first of `attempts` that fits the bubble, or the last one: the action is never cut, only the words after it. */
 function fitting(attempts: readonly CoachSegment[][]): CoachSegment[] {
   return attempts.find((say) => visibleLength(textOf(say)) <= SAY_BUDGET) ?? attempts[attempts.length - 1]!;
@@ -354,15 +443,39 @@ function fitting(attempts: readonly CoachSegment[][]): CoachSegment[] {
  */
 const FLOWERS_NOTE: CoachTeach = { key: 'rule:flowers', place: 'note', label: 'flowers', text: GLOSSARY.bonus.short, also: ['term:bonus'] };
 
+/**
+ * The footnote for someone who has just taken a seat over: the tiles aren't
+ * ones they chose, and the plan strip, which sits between the bubble and the
+ * tiles, is where to look. The person has just tapped to take over from the
+ * bot, so "the bot's" needs no name.
+ */
+export const FIRST_LOOK_NOTE: CoachTeach = {
+  key: 'firstLook',
+  place: 'note',
+  label: 'taking over',
+  text: "these were the bot's tiles; the row above them is the hand to aim for",
+};
+
 export function coachFor(input: CoachInput): CoachState {
   const state = adviceFor(input);
+  // Through a first look, every view offers the take-over footnote first, for the first bubble to show: while there's
+  // a plan, which is what the strip it points at shows. Not under a Mahjong: that row is a hand already complete, not
+  // one to aim for.
+  const first = input.firstLook && state.action.kind !== 'win' && state.target?.layout ? [FIRST_LOOK_NOTE] : [];
   // Wherever the tutor has something to say, a flower drawn since the player's last move can be explained under it.
-  if (state.say.length === 0 || !flowerSinceMyLastMove(input.view)) return state;
-  return { ...state, teach: [...state.teach, FLOWERS_NOTE] };
+  const flowers = state.say.length > 0 && flowerSinceMyLastMove(input.view) ? [FLOWERS_NOTE] : [];
+  if (first.length === 0 && flowers.length === 0) return state;
+  return { ...state, teach: [...first, ...state.teach, ...flowers] };
+}
+
+/** The round's aim, with the one thing beginners get wrong in it when there's room: the bubble at the start of a hand. */
+function aimLine(goal: CoachGoal): CoachSegment[] {
+  return fitting([goal.watchOut ? [seg(goal.aim), seg(` ${goal.watchOut}`)] : [seg(goal.aim)], [seg(goal.aim)]]);
 }
 
 function adviceFor(input: CoachInput): CoachState {
   const { view, ruleset, analysis, stage, names } = input;
+  const firstLook = input.firstLook === true;
   const spec = ruleset.handSpec(view.progress);
   const ctx = ctxOf(view);
   const goal: CoachGoal = { ...goalFor(spec, view.progress.roundWind, ruleset), hands: handsThisRound(spec, analysis, ruleset, ctx) };
@@ -385,6 +498,7 @@ function adviceFor(input: CoachInput): CoachState {
     outcome: null,
     teach: [] as readonly CoachTeach[],
     at: { hand: view.progress.handIndex, seq: view.seq },
+    planSwitch: null,
   } as const;
 
   // --- hand end: the debrief, where a beginner learns most -------------------
@@ -423,7 +537,7 @@ function adviceFor(input: CoachInput): CoachState {
     const count = view.legal.exchange.count;
     const spare = analysis.spare.length >= count;
     const loose = spare ? analysis.spare.slice(0, count) : analysis.ratings.slice(0, count).map((r) => r.kind);
-    const action: CoachAction = { kind: 'exchange', tiles: loose };
+    const action: CoachAction = { kind: 'exchange', tiles: loose, step: exchangeStep(spec, view.preplayStep) };
     const n = countWord(count);
     const say = !target
       ? [seg(`I've lit up ${n} you can spare.`)]
@@ -431,6 +545,11 @@ function adviceFor(input: CoachInput): CoachState {
         ? line(`I've lit up ${n} you can spare: none of them helps `, named(target.hand), '.')
         : line(`I've lit up the ${n} doing the least for `, named(target.hand), '.');
     return { ...base, moment: 'exchange', action, say, reason: 'the exchange is a chance to shed dead tiles', highlight: loose };
+  }
+  // Passed, and waiting for the others: still the exchange, whose sheet stays up, so there's nothing to say under it.
+  // The round's aim comes on the first bubble of play, as it does after any deal.
+  if (view.phase === 'preplay') {
+    return { ...base, moment: 'exchange', action: { kind: 'wait' }, say: [], reason: null, highlight: [] };
   }
 
   // --- a claim window --------------------------------------------------------
@@ -451,36 +570,55 @@ function adviceFor(input: CoachInput): CoachState {
     }
     // The only honest answer to "does this help" is to re-analyse the hand as it
     // would stand after the claim: an exposed pung can shut this hand out of every
-    // run pattern the round allows, and only the analysis knows that.
+    // run pattern the round allows, and only the analysis knows that. Every hand
+    // still reachable after it counts, not only the nearest few, so "no run hand
+    // is left" is true when it's said.
     const baseAway = target?.away ?? Number.POSITIVE_INFINITY;
+    const patternOf = (id: string) => spec.patterns.find((p) => p.id === id);
+    const takesRuns = (c: PatternCandidate) => {
+      const p = patternOf(c.patternId);
+      return p ? admitsRun(p) : false;
+    };
     let best: { option: ClaimOption; away: number; after: HandAnalysis } | null = null;
     for (const option of options) {
       const hand = handAfterClaim(handOf(view), option, discard.kind, discard.from);
       if (!hand) continue;
-      const after = analyseHand(hand, spec.patterns, ctx, ruleset.guards, { claims: ruleset.claims });
+      const after = analyseHand(hand, spec.patterns, ctx, ruleset.guards, { claims: ruleset.claims, limit: Number.POSITIVE_INFINITY });
       const away = after.candidates[0]?.away ?? Number.POSITIVE_INFINITY;
       if (!best || away < best.away) best = { option, away, after };
     }
+    // The player was building towards a hand with runs, among their nearest few, and after the claim no hand that
+    // takes runs is left. In South, Any Damn Hand takes runs and takes a pung too, so a pung there never ends them.
+    const endsRuns = !!best && analysis.candidates.slice(0, 3).some(takesRuns) && !best.after.candidates.some(takesRuns);
     if (best && best.away < baseAway) {
       // The hand as it would stand after the claim, with the claimed set laid face up.
       const leader = best.after.candidates[0];
-      const from: Part[] = leader ? [' from ', named(yoursRef(leader, spec.patterns, ruleset, ctx, 'ifClaimed'))] : [];
-      const tail = best.option.type === 'kong' ? ', with a replacement tile to come.' : '.';
+      const hand = leader ? named(yoursRef(leader, spec.patterns, ruleset, ctx, 'ifClaimed')) : null;
       return {
         ...base,
         moment: 'claim',
         action: { kind: 'claim', option: best.option, tile: discard.kind },
-        say: line(act(CLAIM_VERB[best.option.type]), ` it: you'll be ${tilesWord(Math.max(1, best.away))}`, ...from, tail),
+        say: claimLine(best.option.type, best.away, hand, endsRuns),
         reason: 'the claim moves the hand closer than leaving it',
         highlight: [],
       };
     }
-    const runs = runNoteApplies(target, goal, spec.patterns, view.concealed, discard.kind);
+    // Why not, most telling first: a claim that leaves no hand at all, one that ends every run hand, then the run
+    // this tile would have made, which can't be claimed.
+    const noun = best ? CLAIM_NOUN[best.option.type] : 'claim';
+    const noHand = !!best && best.after.candidates.length === 0;
+    const runs = !noHand && !endsRuns && runNoteApplies(target, goal, spec.patterns, view.concealed, discard.kind);
     const say: CoachSegment[] = !target
       ? [seg("Nothing here's worth breaking your hand for. "), act('Pass'), seg('.')]
-      : runs
-        ? line(named(target.hand), " wants that tile in a run, and you can't claim for a run here. ", act('Pass'), '.')
-        : line('That does nothing for ', named(target.hand), '. ', act('Pass'), '.');
+      : noHand
+        ? line(`A ${noun} here would leave no winning hand you could still make. `, act('Pass'), '.')
+        : endsRuns
+          ? best!.away > baseAway
+            ? line(`A ${noun} here would set you back and rule out every run hand. `, act('Pass'), '.')
+            : line(`A ${noun} here gets you no closer and rules out every run hand. `, act('Pass'), '.')
+          : runs
+            ? line(named(target.hand), " wants that tile in a run, and you can't claim for a run here. ", act('Pass'), '.')
+            : line('That does nothing for ', named(target.hand), '. ', act('Pass'), '.');
     const teach = runs ? [RUNS_SAID] : [];
     return { ...base, moment: 'claim', action: { kind: 'pass', tile: discard.kind }, say, reason: 'no claim on this tile shortens the hand', highlight: [], teach };
   }
@@ -489,12 +627,17 @@ function adviceFor(input: CoachInput): CoachState {
   const myTurn = view.phase === 'turn' && view.turn === view.me;
   // The round's aim is for a hand nobody has played yet: until the player has
   // discarded once, not until anyone has, or three hands in four it flashed up
-  // for as long as the dealer took to throw.
-  const beforeMyFirst = myDiscardCount(view) === 0 && view.players[view.me].melds.length === 0;
+  // for as long as the dealer took to throw. Someone who has just taken the
+  // seat over hasn't played this hand either, whatever the bot did with it.
+  const beforeMyFirst = firstLook || (myDiscardCount(view) === 0 && view.players[view.me].melds.length === 0);
   const firstTurn = myTurn && beforeMyFirst ? roundTeach('note') : [];
 
   if (myTurn && view.legal.win) {
     const ref = myWinRef(input, handOf(view), 'yours');
+    // Someone who has just taken the seat over and can call Mahjong at once hears about the win, and nothing else: the
+    // round's footnote would come under a line that doesn't give the aim, and marking it said would claim a line that
+    // was never said, so it's left for a later hand.
+    const teach = firstLook ? [] : firstTurn;
     return {
       ...base,
       moment: 'turn',
@@ -502,29 +645,52 @@ function adviceFor(input: CoachInput): CoachState {
       say: ref ? line("That's ", named(ref), ', complete. Call ', act('Mahjong!')) : [seg("That's a complete hand. Call "), act('Mahjong!')],
       reason: 'the hand is complete',
       highlight: [],
-      teach: firstTurn,
+      teach,
     };
   }
 
   const discardTile = analysis.bestDiscard;
-  const action: CoachAction = myTurn && discardTile ? { kind: 'discard', tile: discardTile } : { kind: 'wait' };
-  const highlight = action.kind === 'discard' ? [action.tile] : [];
+  // A first look's bubble is the round's aim, and a lit Kong button with nothing said about it would only puzzle; the
+  // tile to let go is the tip there, as on any first look.
+  const aimFirst = firstLook && !quiet;
+  const kongs = myTurn && !aimFirst ? (view.legal.kong ?? []) : [];
+  const kong = kongs.length > 0 ? kongTip(input) : null;
+  const action: CoachAction = kong ? { kind: 'kong', tile: kong, discard: discardTile } : myTurn && discardTile ? { kind: 'discard', tile: discardTile } : { kind: 'wait' };
+  const highlight = action.kind === 'discard' || action.kind === 'kong' ? [action.tile] : [];
 
   if (!myTurn) {
     if (beforeMyFirst && !quiet) {
-      // Someone else is dealing: the goal gets the bubble, and a plan for a hand not yet played would say nothing.
-      const withWatch = goal.watchOut ? [seg(goal.aim), seg(` ${goal.watchOut}`)] : [seg(goal.aim)];
-      return { ...base, moment: 'handStart', plan: null, action, say: fitting([withWatch, [seg(goal.aim)]]), reason: goal.watchOut, highlight, teach: roundTeach('said') };
+      // Someone else is dealing: the goal gets the bubble, and a plan for a hand not yet played would say nothing. A
+      // hand taken over is under way, so its plan stays.
+      return { ...base, moment: 'handStart', plan: firstLook ? plan : null, action, say: aimLine(goal), reason: goal.watchOut, highlight, teach: roundTeach('said') };
     }
     return { ...base, moment: 'waiting', action, say: [], reason: null, highlight: [] };
   }
 
   const moment = beforeMyFirst ? 'handStart' : 'turn';
-  if (quiet || !target) {
+  if (aimFirst) {
+    // Taken over on their own turn: the bubble is the round's aim, as it is on whichever view they see first, and the
+    // tile to let go is still lit and offered on the Discard button. After that discard, the tutor says why as usual.
+    const teach = [...roundTeach('said'), ...(target ? missedRun(view, target, goal, names) : [])];
+    return { ...base, moment, action, say: aimLine(goal), reason: goal.watchOut, highlight, teach };
+  }
+  if (quiet) {
+    return { ...base, moment, action, say: [], reason: null, highlight, teach: firstTurn };
+  }
+  if (action.kind === 'kong') {
+    // K1: a kong that costs the hand nothing. Its button is lit, and the Discard button still offers a tile for
+    // someone who'd rather not. The round, then a run tile gone past, as on any turn.
+    const say = line(act(`Kong ${tileName(action.tile)}`), ': with four of a kind you draw an extra tile, and it costs your hand nothing.');
+    const teach = [...firstTurn, ...(target ? missedRun(view, target, goal, names) : [])];
+    return { ...base, moment, action, say, reason: 'a kong that costs the hand nothing draws an extra tile', highlight, teach };
+  }
+  if (!target) {
     return { ...base, moment, action, say: [], reason: null, highlight, teach: firstTurn };
   }
   // The round comes first, then a run tile that went past since the player last moved.
   const teach = [...firstTurn, ...missedRun(view, target, goal, names)];
+  // Every kong on offer would set the hand back (a free one would be the tip), and its button is there all the same.
+  const k2 = kongs.length > 0 ? [KONG_SETS_BACK] : [];
 
   if (action.kind !== 'discard') {
     return { ...base, moment, action, say: [seg("Every tile's pulling its weight. Pick the one you'd miss least.")], reason: null, highlight, teach };
@@ -532,8 +698,86 @@ function adviceFor(input: CoachInput): CoachState {
   const reason = discardReason(analysis, goal, target, view.concealed, action.tile, myDiscardCount(view));
   const lead = act(`Discard ${tileName(action.tile)}`);
   const progress = progressAfter(input, spec, target, action.tile);
-  const say = fitting([line(lead, ': ', ...reason.full, `.${progress}`), line(lead, ': ', ...reason.short, `.${progress}`), line(lead, ': ', ...reason.short, '.')]);
+  const planSwitch = switchFor(input, spec, target);
+  if (planSwitch) {
+    // The turn that tells a switch: which hand the tutor moved to, and why, in place of the discard's reason.
+    const to = named(target.hand);
+    const from = named(planSwitch.from);
+    const approximate = target.approximate || planSwitch.approximate;
+    const why: Part[] | null =
+      planSwitch.closerBy === null
+        ? [': ', from, " can't be made now"]
+        : approximate
+          ? null
+          : planSwitch.closerBy > 0
+            ? [`: it's ${planSwitch.closerBy === 1 ? 'a tile' : tilesWord(planSwitch.closerBy)} closer than `, from]
+            : planSwitch.closerBy === 0 && goal.generalTitles.includes(target.title)
+              ? [": it's as close as ", from, ', and easier']
+              : null;
+    const said = (...rest: Part[]) => line(lead, '. Switching to ', to, ...rest);
+    const attempts = [...(why ? [said(...why, `.${progress}`), said(...why, '.')] : []), said(`.${progress}`), said('.')];
+    // K2 goes before anything else is dropped, as it does after a discard's reason.
+    const say = fitting(k2.length > 0 ? [...attempts.map((a) => line(...a, ...k2)), ...attempts] : attempts);
+    return {
+      ...base,
+      moment,
+      action,
+      say,
+      reason: textOf(line(...reason.full)),
+      highlight,
+      teach,
+      planSwitch: { from: planSwitch.from, closerBy: planSwitch.closerBy },
+    };
+  }
+  const say = discardLine(action.tile, reason, progress, k2.length > 0);
   return { ...base, moment, action, say, reason: textOf(line(...reason.full)), highlight, teach };
+}
+
+/**
+ * The discard tip's line, the first that fits of: the full reason with `progress` (the one-tile-to-go clause), then
+ * the short reason with it, then the short reason alone. With `warnKong`, K2 goes after the first two of those, and
+ * both are tried with it before K2 itself is dropped.
+ */
+export function discardLine(tile: TileKind, reason: Reason, progress: string, warnKong: boolean): CoachSegment[] {
+  const lead = act(`Discard ${tileName(tile)}`);
+  return fitting([
+    ...(warnKong ? [line(lead, ': ', ...reason.full, `.${progress}`, KONG_SETS_BACK), line(lead, ': ', ...reason.short, `.${progress}`, KONG_SETS_BACK)] : []),
+    line(lead, ': ', ...reason.full, `.${progress}`),
+    line(lead, ': ', ...reason.short, `.${progress}`),
+    line(lead, ': ', ...reason.short, '.'),
+  ]);
+}
+
+/**
+ * On the turn view that tells a plan switch (plan-mark.ts), the hand the tutor switched from and how much
+ * closer the new plan is: its nearest candidate of that title, from this view's analysis, or from one over
+ * every hand when the analysis's short list has none. None at all means it can't be made now (`closerBy`
+ * null), and its card shows the example. Null on any other view.
+ */
+function switchFor(
+  input: CoachInput,
+  spec: ReturnType<Ruleset['handSpec']>,
+  target: CoachTarget,
+): { readonly from: CoachHandRef; readonly closerBy: number | null; readonly approximate: boolean } | null {
+  const { view, ruleset, analysis, mark } = input;
+  const switched = mark?.switched;
+  if (!switched || switched.toldAt !== view.seq || mark.hand !== view.progress.handIndex || switched.fromTitle === target.title || !isTurnView(view)) return null;
+  const ctx = ctxOf(view);
+  const nearest = (candidates: readonly PatternCandidate[]) =>
+    candidates.filter((c) => titleOf(c) === switched.fromTitle).reduce<PatternCandidate | undefined>((a, c) => (a && a.away <= c.away ? a : c), undefined);
+  const old =
+    nearest(analysis.candidates) ?? nearest(analyseHand(handOf(view), spec.patterns, ctx, ruleset.guards, { claims: ruleset.claims, limit: Number.POSITIVE_INFINITY }).candidates);
+  if (old) return { from: yoursRef(old, spec.patterns, ruleset, ctx), closerBy: old.away - target.away, approximate: old.approximate };
+  const pattern = spec.patterns.find((p) => p.id === switched.fromId) ?? spec.patterns.find((p) => titleOf(p) === switched.fromTitle);
+  const from: CoachHandRef = (pattern && exampleRef(pattern, ruleset, ctx)) ?? {
+    patternId: pattern?.id ?? switched.fromId,
+    title: switched.fromTitle,
+    shape: pattern ? shapeOf(pattern.id, spec.patterns) : '',
+    whose: 'example',
+    layout: [],
+    note: noteShapeOf(switched.fromTitle, spec.patterns),
+  };
+  return { from, closerBy: null, approximate: false };
 }
 
 /** The tile that was just thrown, from the river, for the debrief. */

@@ -7,13 +7,28 @@ import { ClaimSheet } from '@/components/claim-sheet';
 import { Coach, CoachLine, CoachNotes, TermProvider, TutorSheet, useLesson, useOpenTerm, useSheetActions } from '@/components/coach';
 import { PlanStrip } from '@/components/plan-strip';
 import { River } from '@/components/river';
+import { useHeldHeight } from '@/components/use-held-height';
 import { riverOrder } from '@/lib/river';
 import { NO_SCORES, handDeltas, signed, standings, type Scores } from '@/lib/ledger';
 import { LIFT_SETTLE_MS, discardOffer, handBoundary, heldSelection, selectTile, settling, type Selection } from '@/lib/table-flow';
-import type { CoachState } from '@/lib/coach';
+import { suggestedDiscard, type CoachState } from '@/lib/coach';
 import { finalStandings } from '@/lib/live/final';
 import { endLine as endLineFor } from '@/lib/live/lifecycle-copy';
 import { cardClockFor, claimSheetClock } from '@/lib/coach/clock';
+import {
+  WAIT_SHOW_MS,
+  exchangeGlow,
+  exchangeHeading,
+  exchangeProgress,
+  goesToLine,
+  passedKeys,
+  passedLine,
+  receiverOf,
+  tileKeys,
+  viewExchangeStep,
+  waitingFor,
+  type ExchangeStep,
+} from '@/lib/coach/exchange';
 import { CLAIM_PASS_MARGIN_MS } from '@/lib/live/timing';
 import type { Lesson } from '@/lib/coach/teach';
 
@@ -67,12 +82,18 @@ export interface TableProps {
   readonly clock?: { readonly kind: 'turn' | 'claim'; readonly ms: number } | null;
   /** a move is on its way to the table: the action buttons are disabled, and a second tap does nothing until it lands */
   readonly busy?: boolean;
-  /** what plays each seat that a person doesn't: the final table marks a bot's row */
+  /** what plays each seat that a person doesn't: a bot's seat is marked on its pill, in the result sheet's rows and on the final table; an away person's on its pill */
   readonly marks?: Readonly<Partial<Record<Seat, 'bot' | 'away'>>>;
+  /** seats whose name is a button (the host handing a seat to a bot): what a screen reader hears, and what a tap does */
+  readonly seatActions?: Readonly<Partial<Record<Seat, { readonly label: string; readonly onTap: () => void }>>>;
+  /** the note a player comes back to while a bot plays their tiles: drawn in place of the claim and pass sheets, and the result sheet, while it's set */
+  readonly awayNote?: React.ReactNode;
   /** the line under the final scores, when the page knows how the game ended; "That's the game." and who finished top otherwise */
   readonly endLine?: string;
   /** the host ends the game here, from the result sheet: shown only between hands of a game still in play; the page asks first */
   readonly onEndGame?: () => void;
+  /** the wait for the next hand at a live table: what Next hand says, the line under it, and whether the reader has tapped it already (then it can't be again) */
+  readonly wait?: { readonly button: string; readonly line: string | null; readonly ready: boolean } | null;
 }
 
 /** Under this much time left, the clock turns brass and pulses. */
@@ -116,8 +137,11 @@ function TableInner({
   nextLabel,
   busy = false,
   marks,
+  seatActions,
+  awayNote,
   endLine,
   onEndGame,
+  wait,
 }: TableProps) {
   const ME = view.me;
   const openTerm = useOpenTerm();
@@ -159,7 +183,9 @@ function TableInner({
   const advice = tutorOn ? coach : null;
   // This view's first-sight footnotes, for the bubble and the sheets alike.
   const lesson = useLesson(coach, tutorOn);
-  const suggested = advice && advice.action.kind === 'discard' ? advice.action.tile : null;
+  const suggested = advice ? suggestedDiscard(advice.action) : null;
+  // The kong the tutor advises, when it costs the hand nothing: its button is the lit one.
+  const kongTip = advice?.action.kind === 'kong' ? advice.action.tile : null;
   // The player's own pick wins over the tutor's, but only a tile they hold is ever offered.
   const offer = discardOffer(view, selected, suggested);
   const hasActions = !!legal.win || !!legal.kong?.length || offer !== null || myTurn;
@@ -218,12 +244,13 @@ function TableInner({
         </button>
       )}
       {legal.kong?.map((k) => (
-        <button key={k} className="btn btn-ghost" disabled={busy} onClick={() => act({ type: 'declareKong', seat: ME, tile: k })}>
+        <button key={k} className={`btn ${kongTip === k ? 'btn-primary' : 'btn-ghost'}`} disabled={busy} onClick={() => act({ type: 'declareKong', seat: ME, tile: k })}>
           Kong {tileName(k)}
         </button>
       ))}
       {offer ? (
-        <button className="btn btn-primary" disabled={busy} onClick={() => act({ type: 'discard', seat: ME, tile: offer })}>
+        // While a kong is the tip and nothing's picked, Discard steps back and offers the tile to let go instead.
+        <button className={`btn ${kongTip && !selected ? 'btn-ghost' : 'btn-primary'} btn-discard`} disabled={busy} onClick={() => act({ type: 'discard', seat: ME, tile: offer })}>
           Discard {tileName(offer)}
         </button>
       ) : (
@@ -231,7 +258,7 @@ function TableInner({
         // the button waits, disabled, where it will be, so a pick doesn't
         // squeeze the felt and move the river.
         myTurn && (
-          <button className="btn btn-primary" disabled>
+          <button className="btn btn-primary btn-discard" disabled>
             Discard
           </button>
         )
@@ -317,22 +344,31 @@ function TableInner({
       score={signed(scores[p.seat])}
       clock={clock && clock.kind === 'turn' && view.phase === 'turn' && view.turn === p.seat ? mmss(clock.ms) : undefined}
       urgent={urgent}
+      mark={marks?.[p.seat]}
+      onTap={seatActions?.[p.seat]?.onTap}
+      tapLabel={seatActions?.[p.seat]?.label}
       {...(orientation ? { orientation } : {})}
     />
   );
 
   const claimOpen = view.phase === 'claim' && !!legal.claims && legal.claims.length > 0 && !!view.lastDiscard;
+  // Which pass of the West exchange this is, and which way it goes; null outside the exchange.
+  const exchange = viewExchangeStep(view);
   // In a claim window the live table always passes claimMs (0 in the window's
   // last moments, so never test it for truth), and solo never does. What a card
   // or a word opened now says about the clock under it: the bots' claim held,
   // or a live clock still running.
   const live = claimMs != null;
+  // A win on offer is never passed for the player: on the bots it isn't timed, and at a live table the table's clock
+  // runs out and its stand-in takes it, so the sheet's bar and a card both count to the table's deadline.
+  const offersWin = claimOpen && !!legal.claims?.some((c) => c.type === 'win');
   const cardClock = cardClockFor({
     claimOpen,
-    soloClaimTimed: claimOpen && !live && !legal.claims?.some((c) => c.type === 'win'),
+    soloClaimTimed: claimOpen && !live && !offersWin,
     clock: clock ?? null,
     myTurn,
     exchange: !!legal.exchange,
+    winOffered: offersWin,
     passMarginMs: CLAIM_PASS_MARGIN_MS,
   });
 
@@ -418,7 +454,7 @@ function TableInner({
         </div>
       </div>
 
-      {claimOpen && view.lastDiscard && !gameOver && (
+      {claimOpen && view.lastDiscard && !gameOver && !awayNote && (
         <ClaimSheet
           discardKind={view.lastDiscard.kind}
           discarderName={names[view.lastDiscard.from]}
@@ -429,18 +465,21 @@ function TableInner({
           onClaim={(claim) => act({ type: 'claim', seat: ME, claim })}
           onPass={() => act({ type: 'pass', seat: ME })}
           busy={busy}
-          {...claimSheetClock(claimMs)}
+          {...claimSheetClock(claimMs, offersWin, CLAIM_PASS_MARGIN_MS)}
         />
       )}
 
-      {view.phase === 'preplay' && legal.exchange && !gameOver && (
-        // Keyed on the event sequence: each of the three passes (right, across,
-        // left) gets a fresh sheet, so picks from the last pass cannot linger and
-        // swallow the taps of the next.
+      {view.phase === 'preplay' && !gameOver && !awayNote && (
+        // One sheet from the first pass to the last, waits included, so it never slides away and back between passes.
+        // The sheet lets go of the last pass's picks itself when the next one starts. Not while a bot plays the seat.
         <ExchangeSheet
-          key={view.seq}
           hand={view.concealed}
-          count={legal.exchange.count}
+          count={legal.exchange?.count ?? exchange?.count ?? 3}
+          step={exchange}
+          to={exchange ? isolate(names[receiverOf(ME, exchange.direction)]) : null}
+          waiting={!legal.exchange}
+          passed={view.myExchange}
+          waitingLine={waitingFor(view, names)}
           coach={coach}
           lesson={lesson}
           busy={busy}
@@ -449,7 +488,7 @@ function TableInner({
         />
       )}
 
-      {(view.phase === 'finished' || gameOver) && (
+      {(view.phase === 'finished' || gameOver) && !awayNote && (
         <ResultSheet
           coach={coach}
           lesson={lesson}
@@ -464,8 +503,12 @@ function TableInner({
           marks={marks}
           endLine={endLine}
           onEndGame={gameOver ? undefined : onEndGame}
+          wait={gameOver ? null : wait}
         />
       )}
+
+      {/* In place of the result sheet, never beside it: set on a finished hand only for someone on a break, whose Next hand waits for "I'm back". */}
+      {awayNote}
 
       <TutorSheet coach={coach} clock={cardClock} />
     </>
@@ -475,6 +518,11 @@ function TableInner({
 function ExchangeSheet({
   hand,
   count,
+  step,
+  to,
+  waiting,
+  passed,
+  waitingLine,
   coach,
   lesson,
   busy,
@@ -483,6 +531,16 @@ function ExchangeSheet({
 }: {
   hand: readonly TileKind[];
   count: number;
+  /** which pass this is, and which way it goes */
+  step: ExchangeStep | null;
+  /** who gets the tiles, isolated */
+  to: string | null;
+  /** the player has passed and the others haven't */
+  waiting: boolean;
+  /** what the table recorded as passed for her while she waits (`myExchange`), whoever passed it */
+  passed: readonly TileKind[] | undefined;
+  /** who hasn't passed yet, or null when nobody's left */
+  waitingLine: string | null;
   coach: CoachState;
   lesson: Lesson | null;
   busy: boolean;
@@ -490,47 +548,89 @@ function ExchangeSheet({
   tooSoon: () => boolean;
   onDone: (tiles: TileKind[]) => void;
 }) {
-  const [picked, setPicked] = useState<number[]>([]);
-  // The coach has already worked out which tiles no candidate hand is using; the
-  // player can overrule it, but the sheet opens on its answer rather than empty.
+  // Picks by kind and copy, not place, so the next pass's hand can't move a pick onto another tile.
+  const keys = useMemo(() => tileKeys(hand), [hand]);
+  const [picked, setPicked] = useState<string[]>([]);
+  // A new pass lets go of the last one's picks. A table that comes back on the same pass (another player's exchange
+  // landing first) keeps them.
+  const [at, setAt] = useState(step?.step);
+  if (at !== step?.step) {
+    setAt(step?.step);
+    setPicked([]);
+  }
+  // A short wait looks like no wait: the sheet keeps the line and footnotes of the player's pass until a wait has
+  // lasted, and only then says who it's waiting for, clears its tint and lets taps through to the table above it.
+  const [line, setLine] = useState({ coach, lesson });
+  if (!waiting && (line.coach !== coach || line.lesson !== lesson)) setLine({ coach, lesson });
+  const shown = waiting ? line : { coach, lesson };
+  const [waited, setWaited] = useState(false);
+  useEffect(() => {
+    if (!waiting) return;
+    const t = setTimeout(() => setWaited(true), WAIT_SHOW_MS);
+    return () => clearTimeout(t);
+  }, [waiting]);
+  if (!waiting && waited) setWaited(false);
+  const waitingShown = waiting && waited;
+  // While she waits, the tiles lifted are the ones the table has going, which aren't hers if the clock or her other
+  // phone passed first. Her own picks, when they're those, stay as they were.
+  const lifted = waiting ? passedKeys(hand, picked, passed) : picked;
+  // The line under the heading keeps the height of its longest words, so the sheet's top and heading stay put as its
+  // line changes to the wait and on to the next pass.
+  const lineBox = useHeldHeight<HTMLDivElement>();
+
+  // The coach has already worked out which tiles no candidate hand is using; the player can overrule it, but the
+  // sheet opens on its answer rather than empty. Exactly the copies it suggests are lit: one of two held, if one.
   const suggested = coach.action.kind === 'exchange' ? coach.action.tiles : [];
+  const glow = exchangeGlow(hand, suggested);
+  const chosen = picked.filter((k) => keys.includes(k));
   // A pick past the count lets go of the oldest rather than doing nothing.
   const taps = useMemo(
     () =>
-      hand.map((_, i) => () => {
+      keys.map((key) => () => {
         if (tooSoon()) return;
-        setPicked((p) => (p.includes(i) ? p.filter((x) => x !== i) : [...p, i].slice(-count)));
+        setPicked((p) => (p.includes(key) ? p.filter((x) => x !== key) : [...p, key].slice(-count)));
       }),
-    [hand, count, tooSoon],
+    [keys, count, tooSoon],
   );
   return (
     <>
-      <div className="scrim" />
-      <div className="sheet">
+      <div className="scrim scrim-plain" data-waiting={waitingShown || undefined} />
+      <div className="sheet" data-sheet="exchange" data-waiting={waitingShown || undefined}>
         <div className="grabber" />
-        <h2 className="font-display mb-1 text-xl">Goulash exchange</h2>
-        <div className="mb-3">
-          <p className="text-ivory-200/70 text-sm">
-            Choose {count} tiles to pass. <CoachLine say={coach.say} origin="exchange" />
-          </p>
-          <CoachNotes coach={coach} lesson={lesson} where="sheet" />
+        <h2 className="font-display mb-1 text-xl">
+          {exchangeHeading(step, count)}
+          {step && <span className="step"> · {exchangeProgress(step)}</span>}
+        </h2>
+        <div ref={lineBox} className="mb-3">
+          {waitingShown ? (
+            <p className="text-ivory-200/70 text-sm">{passedLine(waitingLine)}</p>
+          ) : (
+            <>
+              <p className="text-ivory-200/70 text-sm">
+                {to && `${goesToLine(to)} `}
+                <CoachLine say={shown.coach.say} origin="exchange" />
+              </p>
+              <CoachNotes coach={shown.coach} lesson={shown.lesson} where="sheet" />
+            </>
+          )}
         </div>
         {/* Room above each row for a lifted tile and its ring (10px + 3px): the caption's margin and a pixel, and the row gap. */}
         <div className="flex flex-wrap justify-center gap-x-1 gap-y-[13px] pt-px">
           {hand.map((k, i) => (
             <Tile
-              key={i}
+              key={keys[i]}
               kind={k}
               size="md"
-              selectable
-              selected={picked.includes(i)}
+              selectable={!waiting}
+              selected={lifted.includes(keys[i]!)}
               // The tips stay lit after the first pick; a picked tile's fades under its ring.
-              coached={suggested.includes(k)}
+              coached={!waiting && glow[i]}
               onClick={taps[i]}
             />
           ))}
         </div>
-        <button className="btn btn-primary btn-block mt-3" disabled={busy || picked.length !== count} onClick={() => onDone(picked.map((i) => hand[i]!))}>
+        {/* The same words throughout, so the button never changes width. */}
+        <button className="btn btn-primary btn-block mt-3" disabled={busy || waiting || chosen.length !== count} onClick={() => onDone(chosen.map((k) => hand[keys.indexOf(k)]!))}>
           Pass tiles
         </button>
       </div>
@@ -558,6 +658,7 @@ function ResultSheet({
   marks,
   endLine,
   onEndGame,
+  wait,
 }: {
   coach: CoachState;
   lesson: Lesson | null;
@@ -571,6 +672,7 @@ function ResultSheet({
   marks?: Readonly<Partial<Record<Seat, 'bot' | 'away'>>> | undefined;
   endLine?: string | undefined;
   onEndGame?: (() => void) | undefined;
+  wait?: TableProps['wait'];
 }) {
   const outcome = coach.outcome;
   const deltas = handDeltas(view.result);
@@ -585,7 +687,9 @@ function ResultSheet({
   return (
     <>
       <div className="scrim" />
-      <div className="sheet">
+      {/* Never taller than the screen: on a phone lying down a won hand's tiles and the scores don't fit, so the sheet scrolls
+          from its title, and its buttons stay pinned to its foot (their row carries the sheet's bottom padding). */}
+      <div className="sheet max-h-[calc(100dvh_-_var(--safe-top)_-_8px)] overflow-y-auto overscroll-contain pb-0!">
         <div className="grabber" />
         {view.phase === 'finished' && (
           <>
@@ -631,19 +735,25 @@ function ResultSheet({
             </div>
             {order.map((seat) => (
               <div key={seat} className={`row${seat === view.me ? ' is-me' : ''}`}>
-                <span className="who">{names[seat]}</span>
+                <span className="who">
+                  {names[seat]}
+                  {marks?.[seat] === 'bot' && ' · bot'}
+                </span>
                 <span className="delta">{paid ? signed(deltas[seat]) : ''}</span>
                 <span className="total">{signed(scores[seat])}</span>
               </div>
             ))}
           </div>
         )}
-        {/* A phone lying down has no height to spare (the sheet already reaches its top), so there the host's End shares a row
-            with Next hand rather than pushing the hand's title off the screen. */}
-        <div className="mt-4 flex flex-col gap-2 [@media(orientation:landscape)_and_(height<32rem)]:flex-row">
-          <button className="btn btn-primary btn-block" disabled={busy} onClick={onNext}>
-            {gameOver ? (nextLabel ?? 'Play again') : 'Next hand'}
-          </button>
+        {/* A phone lying down has no height to spare, so there the host's End shares a row with Next hand rather than taking
+            more of the room the hand and the scores need. The wait's line goes under Next hand, in its own column. */}
+        <div className="bg-felt-900 sticky bottom-0 mt-2 flex flex-col gap-2 pt-2 pb-[calc(20px_+_var(--safe-bottom))] [@media(orientation:landscape)_and_(height<32rem)]:flex-row [@media(orientation:landscape)_and_(height<32rem)]:items-start">
+          <div className="w-full">
+            <button className="btn btn-primary btn-block" disabled={busy || !!wait?.ready} onClick={onNext}>
+              {gameOver ? (nextLabel ?? 'Play again') : (wait?.button ?? 'Next hand')}
+            </button>
+            {wait?.line && <p className="text-ivory-200/70 mt-2 text-center text-sm">{wait.line}</p>}
+          </div>
           {onEndGame && (
             <button className="btn btn-quiet btn-block" disabled={busy} onClick={onEndGame}>
               End the game here

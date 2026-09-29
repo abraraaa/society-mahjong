@@ -1,8 +1,8 @@
 'use client';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { tileName, type ClaimOption, type TileKind } from '@society/engine';
 import type { CoachState } from '@/lib/coach';
-import { msLeft, pauseCountdown, resumeCountdown, startCountdown, type Countdown } from '@/lib/coach/clock';
+import { claimBar, claimTimer, msLeft, nextClaimWindow, pauseCountdown, resumeCountdown, startCountdown, type ClaimWindow, type Countdown } from '@/lib/coach/clock';
 import type { Lesson } from '@/lib/coach/teach';
 import { CoachLine, CoachNotes, useSheetOpen } from './coach';
 import { Tile } from './tile';
@@ -20,8 +20,10 @@ const LABEL: Record<ClaimType, string> = { pung: 'Pung', chow: 'Chow', kong: 'Ko
  * vocabulary is learned (Design Guide, rules of the table §4). A type the
  * ruleset never allows (Chow in Karachi) is left out rather than dimmed: a button
  * that can never light up teaches that the move exists. The window auto-passes
- * if nobody taps a button in time. On the bots, the countdown holds while a
- * word or a hand's card is open over the sheet: reading mustn't cost the claim.
+ * if nobody taps a button in time, except on a winning tile: on the bots that
+ * isn't timed, and at a live table the table's own stand-in takes it when the
+ * clock runs out. On the bots, the countdown holds while a word or a hand's
+ * card is open over the sheet: reading mustn't cost the claim.
  *
  * The caption and the highlighted button both come from the coach, which has
  * re-analysed the hand as it would stand after each claim. That is the only
@@ -56,6 +58,7 @@ export function ClaimSheet({
   options: readonly ClaimOption[];
   onClaim: (option: ClaimOption) => void;
   onPass: () => void;
+  /** how long the countdown runs, from now: until the sheet passes for the player, or on a win at a live table, until the table's clock runs out. A live table sends it afresh with each table it gets */
   claimMs?: number;
   /** whose clock: the sheet's own eight seconds, or a server deadline that applies to a win too */
   clock?: 'solo' | 'server';
@@ -70,19 +73,29 @@ export function ClaimSheet({
   const win = options.find((o) => o.type === 'win');
   // On a solo table a winning tile is never taken away by the clock. On a live
   // table the server's deadline applies to a win too (a long one, the turn
-  // clock), so the bar has to show: a clock you cannot see is a trap.
-  const timed = clock === 'server' || !win;
+  // clock), so the bar has to show: a clock you cannot see is a trap. But the
+  // sheet never passes on a win: when the table's clock runs out, its stand-in
+  // takes the win for the player.
+  const { bar: timed, passes } = claimTimer(clock, !!win);
   // A card or a word open over the sheet holds the bots' countdown. The table's
   // clock can't be held, so a live sheet runs on, and the card shows that clock.
   const sheetOpen = useSheetOpen();
   const paused = clock === 'solo' && timed && sheetOpen;
+  // The window's whole length, for the bar: what it had when this discard's sheet first showed, or more if a fresh
+  // table brought more (`nextClaimWindow`). A fresh table from a live table only says what's left, and the bar is
+  // drawn again from there, part-drained (`claimBar`), so it's empty when the table's clock runs out. Stored as seen,
+  // React's "store what you saw" pattern.
+  const [full, setFull] = useState<ClaimWindow>({ discardCount, ms: claimMs });
+  const whole = nextClaimWindow(full, discardCount, claimMs);
+  if (whole !== full) setFull(whole);
+  const bar = claimBar(whole.ms, claimMs);
   // Kept on Date.now(), which is the clock Playwright drives.
   const countdown = useRef<Countdown | null>(null);
   // One countdown per discard, started again when the server sends a fresh
   // deadline. A sheet that opens under a card starts held (the effect below).
   useEffect(() => {
-    countdown.current = timed ? startCountdown(claimMs, Date.now()) : null;
-  }, [discardCount, claimMs, timed]);
+    countdown.current = passes ? startCountdown(claimMs, Date.now()) : null;
+  }, [discardCount, claimMs, passes]);
   // Held, or running with the pass set for whatever is left.
   useEffect(() => {
     const c = countdown.current;
@@ -96,7 +109,7 @@ export function ClaimSheet({
     countdown.current = running;
     const t = setTimeout(() => onPassRef.current(), msLeft(running, now));
     return () => clearTimeout(t);
-  }, [paused, discardCount, claimMs, timed]);
+  }, [paused, discardCount, claimMs, passes]);
   const byType = (t: ClaimType) => options.find((o) => o.type === t);
   const advised = coach.action.kind === 'claim' ? coach.action.option : null;
   const grid = GRID.filter((type) => type !== 'chow' || coach.goal.chowsClaimable);
@@ -107,8 +120,13 @@ export function ClaimSheet({
       <div className="sheet" data-sheet="claim">
         <div className="grabber" />
         {timed && (
-          <div key={discardCount} className="timer mb-4" data-paused={paused || undefined} style={{ '--claim-seconds': `${Math.round(claimMs / 1000)}s` } as React.CSSProperties}>
-            <i />
+          <div
+            key={`${discardCount}:${claimMs}`}
+            className="timer mb-4"
+            data-paused={paused || undefined}
+            style={{ '--claim-seconds': `${bar.durationMs / 1000}s` } as React.CSSProperties}
+          >
+            <i style={bar.delayMs < 0 ? { animationDelay: `${bar.delayMs}ms` } : undefined} />
           </div>
         )}
         <div className="mb-4 flex items-center gap-4">

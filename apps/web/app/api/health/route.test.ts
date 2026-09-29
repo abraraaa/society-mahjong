@@ -4,15 +4,16 @@ import { NextRequest } from 'next/server';
 /**
  * The owner's health report, against a fake Supabase client that records
  * every query as its table (or rpc) and its builder calls, and answers each
- * with `db.answer`, so a test can take away one table, column or function
- * and see what the report says.
+ * with `db.answer`, so a test can take away one table, column or function,
+ * or have the key turned away, and see what the report says.
  */
 type Step = readonly [method: string, args: readonly unknown[]];
 interface Query {
   readonly target: string;
   readonly steps: Step[];
 }
-type Failure = { message: string; code?: string };
+/** An error as supabase-js gives it, and the HTTP status it came with (400 when a test doesn't say). */
+type Failure = { message: string; code?: string; status?: number };
 
 const db = vi.hoisted(() => ({
   log: [] as Query[],
@@ -32,8 +33,10 @@ vi.mock('../../../lib/supabase/service', () => {
             return (ok: (r: unknown) => unknown, fail: (e: unknown) => unknown) =>
               Promise.resolve()
                 .then(() => {
-                  const error = db.answer(q);
-                  return { data: error ? null : target.startsWith('rpc:') ? null : [], error };
+                  const failure = db.answer(q);
+                  if (!failure) return { data: target.startsWith('rpc:') ? null : [], error: null, status: 200 };
+                  const { status = 400, ...error } = failure;
+                  return { data: null, error, status };
                 })
                 .then(ok, fail);
           }
@@ -59,6 +62,11 @@ import { GET } from './route';
 const HEALTH_KEY = 'health-key-for-tests';
 const CRON_SECRET = 'cron-secret-for-tests';
 const BEHIND = 'The database is behind the code: the Migrate and deploy workflow applies migration 0005 (docs/DATA-MODEL.md, "Setting up the pipeline").';
+const KEY =
+  "The database turned the server's key away: check that SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_SECRET_KEY) in Vercel is this project's service_role or secret key, not the anon or publishable one, and that it hasn't been rotated since, then redeploy.";
+const GRANT =
+  "The server's key reads the tables but may not run commit_table, so the function has lost its grant to the service role: run the grant line that follows commit_table in supabase/migrations/0005_settled_model.sql in Supabase's SQL editor, then reload this report.";
+const PROBED = ['live_state.table_state', 'live_state.wake_at', 'live_state.acted_at', 'games.ended_how', 'games.ended_by', 'commit_table'];
 const TABLES = ['profiles', 'rooms', 'games', 'live_state', 'hands', 'hand_results', 'game_players', 'room_members', 'app_events'];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -207,6 +215,72 @@ describe('GET /api/health', () => {
     expect(body.schema).toMatch(/^could not check: live_state\.table_state \(TypeError: fetch failed\), /);
     expect(body.schema).toContain('commit_table (TypeError: fetch failed)');
     expect(body.schema).not.toContain('behind');
+  });
+
+  it('says the key was turned away, not that the database is down, when Supabase refuses a wrong or rotated key', async () => {
+    // Supabase's gateway answers a key it doesn't know before PostgREST sees the request: a 401, and no code.
+    db.answer = () => ({ message: 'Invalid API key', status: 401 });
+    const { status, body } = await report();
+    expect(status).toBe(503);
+    expect(body.ok).toBe(false);
+    expect(body.tables).toEqual(Object.fromEntries(TABLES.map((t) => [t, 'no access: Invalid API key'])));
+    expect(body.schema).toBe(`no access: ${PROBED.map((p) => `${p} (Invalid API key)`).join(', ')}. ${KEY}`);
+    expect(body.schema).not.toContain('could not check');
+    expect(body.schema).not.toContain('behind');
+  });
+
+  it('says the same for a key PostgREST itself turns away, by its code', async () => {
+    db.answer = () => ({ code: 'PGRST301', message: 'No suitable key or wrong key type' });
+    const { body } = await report();
+    expect(body.tables).toMatchObject({ rooms: 'no access: No suitable key or wrong key type' });
+    expect(body.schema).toMatch(/^no access: live_state\.table_state \(No suitable key or wrong key type\), /);
+    expect(body.schema).toContain(KEY);
+  });
+
+  it('says the key is wrong when the anon key sits where the service key should: the server’s tables refuse it', async () => {
+    // Row security shows the anon role no rows of the tables it may read, which is no error; the rest, and commit_table, refuse it.
+    const closed = ['games', 'live_state', 'game_players', 'room_members', 'app_events'];
+    db.answer = (q) =>
+      rpc(q)
+        ? { code: '42501', message: 'permission denied for function commit_table', status: 401 }
+        : closed.includes(q.target)
+          ? { code: '42501', message: `permission denied for table ${q.target}`, status: 401 }
+          : null;
+    const { status, body } = await report();
+    expect(status).toBe(503);
+    expect(body.tables).toMatchObject({
+      profiles: 'ok',
+      rooms: 'ok',
+      games: 'no access: permission denied for table games',
+      live_state: 'no access: permission denied for table live_state',
+    });
+    expect(body.schema).toMatch(/^no access: live_state\.table_state \(permission denied for table live_state\), /);
+    expect(body.schema).toContain('commit_table (permission denied for function commit_table)');
+    expect(String(body.schema).endsWith(`. ${KEY}`)).toBe(true);
+  });
+
+  it('says commit_table has lost its grant, not that the key is wrong, when the key reads every table and only the function refuses it', async () => {
+    db.answer = (q) => (rpc(q) ? { code: '42501', message: 'permission denied for function commit_table', status: 403 } : null);
+    const { status, body } = await report();
+    expect(status).toBe(503);
+    expect(body.ok).toBe(false);
+    expect(body.tables).toEqual(Object.fromEntries(TABLES.map((t) => [t, 'ok'])));
+    expect(body.schema).toBe(`no access: commit_table (permission denied for function commit_table). ${GRANT}`);
+  });
+
+  it('says each thing that went wrong, by kind, when more than one did', async () => {
+    db.answer = (q) =>
+      reads('games', 'ended_by')(q)
+        ? { code: '42703', message: 'column games.ended_by does not exist' }
+        : reads('live_state', 'wake_at')(q) || rpc(q)
+          ? { message: 'Invalid API key', status: 401 }
+          : reads('live_state', 'acted_at')(q)
+            ? { message: 'TypeError: fetch failed', code: '', status: 0 }
+            : null;
+    const { body } = await report();
+    expect(body.schema).toBe(
+      `missing: games.ended_by. ${BEHIND} no access: live_state.wake_at (Invalid API key), commit_table (Invalid API key). ${KEY} could not check: live_state.acted_at (TypeError: fetch failed)`,
+    );
   });
 
   it('checks no table without the database settings, and says so', async () => {

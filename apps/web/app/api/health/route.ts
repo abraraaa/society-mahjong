@@ -21,11 +21,32 @@ const COLUMNS: readonly (readonly [table: string, column: string])[] = [
 ];
 /** Postgres's and PostgREST's words for "there's no such column, table or function". */
 const NOT_THERE = new Set(['42703', '42P01', '42883', 'PGRST202', 'PGRST204', 'PGRST205']);
+/** PostgREST's and Postgres's words for "not with this key": one it can't read or that has expired, none at all, or a role with no right to this. */
+const REFUSED = new Set(['PGRST301', 'PGRST302', 'PGRST303', '42501']);
 /** What the commit_table probe sends besides its unknown game and version -1: nothing to save. */
 const PROBE: TableWrite = { state: {} as HandState, table: NEW_TABLE, deadlines: { claim: null, turn: null }, wakeAt: null, acted: false, hands: [] };
 const BEHIND = 'The database is behind the code: the Migrate and deploy workflow applies migration 0005 (docs/DATA-MODEL.md, "Setting up the pipeline").';
+const KEY =
+  "The database turned the server's key away: check that SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_SECRET_KEY) in Vercel is this project's service_role or secret key, not the anon or publishable one, and that it hasn't been rotated since, then redeploy.";
+const GRANT =
+  "The server's key reads the tables but may not run commit_table, so the function has lost its grant to the service role: run the grant line that follows commit_table in supabase/migrations/0005_settled_model.sql in Supabase's SQL editor, then reload this report.";
 
 type Failure = { readonly message: string; readonly code?: string } | null;
+/** What the database said to one check: its error, if any, and the HTTP status it came with (0 when nothing answered). */
+interface Answer {
+  readonly error: Failure;
+  readonly status: number;
+}
+
+/**
+ * Refused, rather than the thing asked about being missing or the database
+ * not answering: a code that says so, or a 401 or 403 with any words at all,
+ * since Supabase's gateway turning a wrong or rotated key away says only
+ * "Invalid API key".
+ */
+function refused({ error, status }: Answer): boolean {
+  return error !== null && (REFUSED.has(error.code ?? '') || status === 401 || status === 403);
+}
 
 /**
  * One URL that says whether the server can play: which settings are present
@@ -56,13 +77,17 @@ export async function GET(req: NextRequest) {
   if (settings.supabaseUrl && settings.serviceKey) {
     const db = createServiceClient();
     for (const t of TABLES) {
-      const { error } = await db.from(t).select('*').limit(0);
-      tables[t] = error ? `missing or unreadable: ${error.message}` : 'ok';
+      const { error, status } = await db.from(t).select('*').limit(0);
+      tables[t] = !error ? 'ok' : refused({ error, status }) ? `no access: ${error.message}` : `missing or unreadable: ${error.message}`;
     }
-    const probes: [what: string, error: Failure][] = [];
-    for (const [t, c] of COLUMNS) probes.push([`${t}.${c}`, (await db.from(t).select(c).limit(0)).error]);
+    const probes: [what: string, answer: Answer][] = [];
+    for (const [t, c] of COLUMNS) {
+      const { error, status } = await db.from(t).select(c).limit(0);
+      probes.push([`${t}.${c}`, { error, status }]);
+    }
     // An unknown game is a lost race to commit_table, which writes nothing and answers null (supabase/tests/checks.sql).
-    probes.push(['commit_table', (await db.rpc('commit_table', commitArgs(randomUUID(), -1, PROBE))).error]);
+    const { error, status } = await db.rpc('commit_table', commitArgs(randomUUID(), -1, PROBE));
+    probes.push(['commit_table', { error, status }]);
     schema = schemaLine(probes);
   }
   const ok = settings.supabaseUrl && settings.anonKey && settings.serviceKey && Object.values(tables).every((v) => v === 'ok') && Object.keys(tables).length > 0 && schema === 'ok';
@@ -79,15 +104,35 @@ export async function GET(req: NextRequest) {
 }
 
 /**
- * `ok`; or `missing: <what>` and what to do, when the database says a column
- * or the function isn't there; or, when it couldn't be asked at all, what it
- * said instead, since a database that's down isn't one that's behind.
+ * `ok`, or what went wrong, by kind, each with what to do: `missing: <what>`
+ * when the database says a column or the function isn't there (it's behind
+ * the code); `no access: <what> (<its words>)` when it refused (a wrong key,
+ * or, when only commit_table is refused, the function's lost grant); and
+ * `could not check: <what> (<its words>)` for anything else, such as no
+ * answer at all, since a database that's down is neither behind nor locked.
+ *
+ * A key the server's tables refuse is the wrong key: the anon or publishable
+ * one reads none of live_state, games or 0005's tables. One that reads them
+ * all but may not run commit_table is the service role's, so the grant is
+ * what's gone.
  */
-function schemaLine(probes: readonly (readonly [what: string, error: Failure])[]): string {
-  const missing = probes.filter(([, e]) => e && NOT_THERE.has(e.code ?? '')).map(([what]) => what);
-  if (missing.length > 0) return `missing: ${missing.join(', ')}. ${BEHIND}`;
-  const unchecked = probes.flatMap(([what, e]) => (e ? [`${what} (${e.message})`] : []));
-  return unchecked.length > 0 ? `could not check: ${unchecked.join(', ')}` : 'ok';
+function schemaLine(probes: readonly (readonly [what: string, answer: Answer])[]): string {
+  const missing: string[] = [];
+  const locked: string[] = [];
+  const unchecked: string[] = [];
+  for (const [what, answer] of probes) {
+    const e = answer.error;
+    if (!e) continue;
+    if (NOT_THERE.has(e.code ?? '')) missing.push(what);
+    else (refused(answer) ? locked : unchecked).push(`${what} (${e.message})`);
+  }
+  const grantLost = locked.length === 1 && locked[0]!.startsWith('commit_table (');
+  const lines = [
+    ...(missing.length > 0 ? [`missing: ${missing.join(', ')}. ${BEHIND}`] : []),
+    ...(locked.length > 0 ? [`no access: ${locked.join(', ')}. ${grantLost ? GRANT : KEY}`] : []),
+    ...(unchecked.length > 0 ? [`could not check: ${unchecked.join(', ')}`] : []),
+  ];
+  return lines.length > 0 ? lines.join(' ') : 'ok';
 }
 
 /** `Authorization: Bearer <CRON_SECRET>` from a script, or `?key=<HEALTH_KEY>` from a browser. */

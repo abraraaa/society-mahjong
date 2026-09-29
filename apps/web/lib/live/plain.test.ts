@@ -3,7 +3,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { ApiError } from './client';
-import { joinRetryLabel, plainError } from './plain';
+import { joinRetryLabel, joinTroubleTitle, plainError } from './plain';
 import { parseRoomRequest } from './validate';
 
 const FALLBACK = 'Something went wrong at our end. Give it another go.';
@@ -16,16 +16,16 @@ describe('plainError: the lines the copy calls for', () => {
     expect(api(409, 'lost the race')).toBe(line);
   });
 
-  it('a game already under way says to come back with the link once it is over', () => {
-    expect(api(409, 'this table has already started')).toBe("This game's already under way. When it's over, open this link again and you can take a seat before the next deal.");
+  it('a game already under way with no bot to take over from says every seat is taken, and to come back with the link once it is over', () => {
+    expect(api(409, 'this table has already started')).toBe("All four seats are taken in this game. When it's over, open the invite link again and you can play the next one.");
   });
 
   it('a code with no room behind it says to check it', () => {
     expect(api(404, 'no room with that code')).toBe("There's no table with that code. Check it with whoever sent you the link.");
   });
 
-  it('someone not playing is told when the invite link will seat them', () => {
-    const line = "You're not playing in this game. When it's over, open the invite link again to take a seat for the next one.";
+  it('someone not playing is told the invite link can seat them, in place of a bot', () => {
+    const line = "You're not in this game. Open the invite link again: if a bot's playing a seat, you can take over from it.";
     expect(api(403, 'not at this table')).toBe(line);
     expect(api(403, 'not seated at this table')).toBe(line);
   });
@@ -36,10 +36,19 @@ describe('plainError: the lines the copy calls for', () => {
 
   it('a seat taken in the same instant says to try again for another', () => {
     expect(api(409, 'that seat was just taken; try again')).toBe('Someone took that seat just as you did. Try again for another.');
+    expect(api(409, 'that seat is taken')).toBe('Someone took that seat just as you did. Try again for another.');
   });
 
-  it('any 410 is a closed table, whatever the words', () => {
-    const line = 'This table has closed. Ask the host for a new link.';
+  it('a seat on offer that has gone to someone else, or was never free, says to open the link again for another', () => {
+    const line = "That seat isn't free. Open the invite link again to see where you can sit.";
+    expect(api(409, 'that seat is kept for someone')).toBe(line);
+    expect(api(400, 'that is not a seat to sit in')).toBe(line);
+    expect(joinRetryLabel(new ApiError(409, 'that seat is kept for someone'))).toBe('Check again');
+    expect(joinRetryLabel(new ApiError(409, 'that seat is taken'))).toBe('Try again');
+  });
+
+  it('any 410 is a closed table, whatever the words, and says who can open it again', () => {
+    const line = "This table's been quiet for a while, so it's closed to new players. Ask someone who plays at this table to open the link, then try again.";
     expect(api(410, 'this table has closed')).toBe(line);
     expect(api(410, 'gone')).toBe(line);
     expect(api(410, '')).toBe(line);
@@ -111,12 +120,12 @@ describe('plainError: the rest of what the server can say', () => {
       expect(api(m === 'action is not for your seat' ? 403 : 400, m), m).toBe(line);
   });
 
-  it('a seat a bot has taken says how to sit back in', () => {
-    expect(api(403, 'that seat is a bot')).toBe("A bot's playing your seat for the rest of this game. When it's over, open the invite link again to sit back in.");
+  it('a seat a bot has taken says how to sit back down', () => {
+    expect(api(403, 'that seat is a bot')).toBe("A bot's playing your seat now. Open the invite link again to sit back down.");
   });
 
   it('the host-only and in-progress refusals at the start', () => {
-    expect(api(403, 'only the host can start')).toBe('Only the host can start the game.');
+    expect(api(403, 'only the host can start')).toBe('Only the host can start the game. Give them a nudge.');
     expect(api(409, 'a game is in progress')).toBe("There's already a game going at this table.");
     expect(api(409, 'the seats changed; start again')).toBe('Someone sat down or got up just then. Check the seats and start again.');
     expect(api(409, 'the table has started; leave it from the game')).toBe("The game's started, so leave from the table instead.");
@@ -132,6 +141,14 @@ describe('plainError: the rest of what the server can say', () => {
 
   it('an end the caller has no powers for says who can, and what to do', () => {
     expect(api(403, 'only the host can end the game')).toBe("Only the host can end the game. Ask them if everyone's had enough.");
+  });
+
+  it('a hand-over to a bot the caller can’t make says who can, or where to tap, and one that’s too late says why', () => {
+    expect(api(403, 'only the host can hand a seat to a bot')).toBe("Only the host can let a bot play for someone. Ask them if a friend's stepped away.");
+    expect(api(400, 'that is your own seat')).toBe('You can only let a bot play for someone else. Tap their name at the top of the table.');
+    expect(api(400, 'that is not a seat')).toBe('You can only let a bot play for someone else. Tap their name at the top of the table.');
+    expect(api(409, 'a bot already plays that seat')).toBe("A bot's already playing that seat, so there's nothing to do.");
+    expect(api(409, 'that player has just played')).toBe("They've just played, so they're still at the table.");
   });
 
   it('a lapsed session says to try again or come back through the link, by message or by any 401', () => {
@@ -182,6 +199,14 @@ describe('joinRetryLabel', () => {
   it('asks the visitor to check again when the table is under way or full, since an instant retry would meet the same answer', () => {
     expect(joinRetryLabel(new ApiError(409, 'this table has already started'))).toBe('Check again');
     expect(joinRetryLabel(new ApiError(409, 'this table is full'))).toBe('Check again');
+  });
+
+  it('offers to sit back down, under its own heading, someone the lobby found had got up on another phone or tab', () => {
+    const left = new ApiError(409, 'you left this table');
+    expect(plainError(left)).toBe("You got up from it on another phone or tab. Sit back down if you'd still like to play.");
+    expect(joinRetryLabel(left)).toBe('Sit back down');
+    expect(joinTroubleTitle(left)).toBe("You've left this table.");
+    expect(joinTroubleTitle(new ApiError(409, 'this table is full'))).toBeUndefined();
   });
 
   it('keeps Try again for a seat lost in the same instant, where another go at once can work, and for everything else', () => {

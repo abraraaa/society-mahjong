@@ -435,6 +435,8 @@ test('(t-claim) on the bots, a card or a word opened over a claim holds its coun
   const claim = page.locator('[data-sheet="claim"]');
   const pass = claim.getByRole('button', { name: 'Pass', exact: true });
   const next = page.locator('.sheet').getByRole('button', { name: 'Next hand' });
+  /** Whether the countdown bar's drain is running or held, as the page draws it. */
+  const barPlay = () => claim.locator('.timer > i').evaluate((e) => getComputedStyle(e).animationPlayState);
   // First a hand's name, then a word, each opened over a claim of its own.
   const todo = [
     { has: 'hand' as const, tap: claim.locator('.term.hand'), opened: page.locator('[data-sheet="card"]') },
@@ -465,6 +467,8 @@ test('(t-claim) on the bots, a card or a word opened over a claim holds its coun
           await want.tap.first().click();
           await expect(want.opened).toBeVisible();
           await expect(claim.locator('.timer')).toHaveAttribute('data-paused', 'true');
+          // The bar stops with it: the stylesheet holds its animation, not just the attribute.
+          await expect.poll(barPlay).toBe('paused');
           await expect(want.opened.locator('.clock')).toHaveText(cardClockLine({ kind: 'paused' })!);
           // Reading costs nothing: the bots wait, and the claim with them.
           await page.clock.runFor(20_000);
@@ -476,6 +480,7 @@ test('(t-claim) on the bots, a card or a word opened over a claim holds its coun
           await want.opened.getByRole('button', { name: 'Got it' }).click();
           await expect(want.opened).toBeHidden();
           await expect(claim.locator('.timer')).not.toHaveAttribute('data-paused', 'true');
+          await expect.poll(barPlay).toBe('running');
           await page.clock.runFor(4_000);
           expect(await up(), 'the claim still up 4 s after closing').toBe(true);
           await page.clock.runFor(2_000);

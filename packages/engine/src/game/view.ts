@@ -54,6 +54,12 @@ export interface PrivatePlayerView extends PublicGameView {
   readonly concealed: readonly TileKind[];
   readonly drawn: TileKind | null;
   readonly legal: LegalActions;
+  /**
+   * The tiles this seat has passed on the exchange step under way, while the others haven't all passed: they stay
+   * in `concealed` until everyone has. Whoever passed them (the player, their other phone, or the table when the
+   * clock ran out), so the sheet can show the very tiles that are going. Absent otherwise.
+   */
+  readonly myExchange?: readonly TileKind[];
 }
 
 /** Secret events keep their shape and sequence but lose the tile, unless `seat` is the one that drew it. */
@@ -106,6 +112,7 @@ export function publicView(state: HandState): PublicGameView {
 /** The view for one seat: public state plus that seat's tiles and legal actions. */
 export function viewFor(state: HandState, ruleset: Ruleset, seat: Seat): PrivatePlayerView {
   const p = state.players[seat];
+  const passed = state.exchanges[seat];
   return {
     ...publicView(state),
     events: redactEvents(state.events, seat),
@@ -113,5 +120,6 @@ export function viewFor(state: HandState, ruleset: Ruleset, seat: Seat): Private
     concealed: p.concealed,
     drawn: state.turn === seat ? state.drawn : null,
     legal: legalActions(state, ruleset, seat),
+    ...(passed ? { myExchange: passed } : {}),
   };
 }

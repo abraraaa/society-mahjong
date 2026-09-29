@@ -4,12 +4,16 @@ import { isRoomCode } from '@/lib/room-code';
 
 const COPY = {
   'no-table': { heading: "There's no table with that code.", line: 'Check it with whoever sent you the link.' },
-  closed: { heading: 'This table has closed.', line: 'Ask the host for a new link.' },
+  closed: {
+    heading: "This table's been quiet for a while.",
+    line: "It's closed to new players for now. Ask someone who plays at this table to open the link, then try again.",
+  },
 } as const;
 
 /**
  * An invite link that leads nowhere, said before it asks for a name: no table
- * has that code, or the table has closed to newcomers. A box to try another
+ * has that code, or the table has been quiet for six weeks and is closed to
+ * newcomers until one of its own people opens the link. A box to try another
  * code, and a way home.
  */
 export function NoTable({ code, reason }: { code: string; reason: keyof typeof COPY }) {

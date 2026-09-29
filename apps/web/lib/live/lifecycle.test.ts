@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { karachi, type GameProgress, type HandState } from '@society/engine';
-import { STALE_GAME_MS, addHandScores, endOfGame, handsPlayed, isLastHand, isStale, presentAtEnd, publicGameOver } from './lifecycle';
+import { karachi, type GameProgress, type HandState, type Seat } from '@society/engine';
+import { EVERYONE_HERE, markAway } from './absence';
+import {
+  NEXT_HAND_WAIT_MS,
+  STALE_GAME_MS,
+  VOTE_ATTEMPTS,
+  addHandScores,
+  endOfGame,
+  everyoneReady,
+  handsPlayed,
+  isLastHand,
+  isStale,
+  nextHandWait,
+  presentAtEnd,
+  publicGameOver,
+  voteNextHand,
+} from './lifecycle';
 import { dealFirstHand } from './table';
 import { NEW_TABLE, type GameOver, type Scores4 } from './table-state';
 import type { GameEndHow, Seats } from './types';
@@ -116,13 +131,20 @@ describe('presentAtEnd', () => {
   const over = (how: GameEndHow): GameOver => ({ how, by: null, at: 0, hands: 16, scores: [0, 0, 0, 0], seats: SEATS });
 
   it('is the people seated at the end, never a bot or an empty seat', () => {
-    expect(presentAtEnd(over('complete'))).toEqual(['u-amna', 'u-bilal']);
-    expect(presentAtEnd(over('host'))).toEqual(['u-amna', 'u-bilal']);
+    expect(presentAtEnd(over('complete'), undefined)).toEqual(['u-amna', 'u-bilal']);
+    expect(presentAtEnd(over('host'), EVERYONE_HERE)).toEqual(['u-amna', 'u-bilal']);
+  });
+
+  it('leaves out anyone a bot was playing for when it ended', () => {
+    const bilal = SEATS.findIndex((s) => s?.kind === 'human' && s.userId === 'u-bilal') as Seat;
+    const away = markAway(EVERYONE_HERE, SEATS, bilal, 'clock');
+    expect(presentAtEnd(over('complete'), away)).toEqual(['u-amna']);
+    expect(presentAtEnd(over('host'), away)).toEqual(['u-amna']);
   });
 
   it('is nobody for a game that ended because nobody was playing, or because everyone left', () => {
-    expect(presentAtEnd(over('idle'))).toEqual([]);
-    expect(presentAtEnd(over('abandoned'))).toEqual([]);
+    expect(presentAtEnd(over('idle'), undefined)).toEqual([]);
+    expect(presentAtEnd(over('abandoned'), undefined)).toEqual([]);
   });
 });
 
@@ -138,5 +160,67 @@ describe('publicGameOver', () => {
   it('carries no id, and nobody for an end nobody made', () => {
     expect(JSON.stringify(publicGameOver(over, 'u-bilal'))).not.toContain('u-amna');
     expect(publicGameOver({ ...over, how: 'complete', by: null }, 'u-amna')).toEqual({ how: 'complete', hands: 7, byName: null, byMe: false });
+  });
+});
+
+describe('the wait for the next hand', () => {
+  const T0 = 1_700_000_000_000;
+  const seats: Seats = [
+    { kind: 'human', userId: 'u-amna', name: 'Amna' },
+    { kind: 'human', userId: 'u-bilal', name: 'Bilal' },
+    { kind: 'bot', name: 'Sana' },
+    { kind: 'human', userId: 'u-zara', name: 'Zara' },
+  ];
+  const finished = { phase: 'finished', progress: { roundWind: 'E', roundIndex: 0, handInRound: 3, handIndex: 3 } } as const;
+
+  it('waits twenty seconds from the first tap, and tries a vote five times', () => {
+    expect(NEXT_HAND_WAIT_MS).toBe(20_000);
+    expect(VOTE_ATTEMPTS).toBe(5);
+  });
+
+  it('sets the start time with the first vote, and never moves it', () => {
+    const one = voteNextHand(NEW_TABLE, 3, 'u-amna', T0);
+    expect(one.ready).toEqual({ hand: 3, userIds: ['u-amna'], dealAt: T0 + NEXT_HAND_WAIT_MS });
+    const two = voteNextHand(one, 3, 'u-bilal', T0 + 9_000);
+    expect(two.ready).toEqual({ hand: 3, userIds: ['u-amna', 'u-bilal'], dealAt: T0 + NEXT_HAND_WAIT_MS });
+    // Everything else on the table is left as it was.
+    expect({ ...two, ready: null }).toEqual(NEW_TABLE);
+  });
+
+  it('counts each person once, however many phones or taps: a second vote gives the table back as it was', () => {
+    const one = voteNextHand(NEW_TABLE, 3, 'u-amna', T0);
+    expect(voteNextHand(one, 3, 'u-amna', T0 + 5_000)).toBe(one);
+  });
+
+  it('starts afresh for another hand: votes left from one never count for the next', () => {
+    const old = voteNextHand(voteNextHand(NEW_TABLE, 2, 'u-amna', T0), 2, 'u-bilal', T0);
+    expect(voteNextHand(old, 3, 'u-bilal', T0 + 60_000).ready).toEqual({ hand: 3, userIds: ['u-bilal'], dealAt: T0 + 60_000 + NEXT_HAND_WAIT_MS });
+  });
+
+  it('is everyone ready only when every person here has voted on this hand, and never with nobody here', () => {
+    const votes = { hand: 3, userIds: ['u-amna', 'u-bilal'], dealAt: T0 };
+    expect(everyoneReady(votes, 3, ['u-amna', 'u-bilal'])).toBe(true);
+    expect(everyoneReady(votes, 3, ['u-bilal'])).toBe(true);
+    expect(everyoneReady(votes, 3, ['u-amna', 'u-bilal', 'u-zara'])).toBe(false);
+    expect(everyoneReady(votes, 4, ['u-amna'])).toBe(false);
+    expect(everyoneReady(votes, 3, [])).toBe(false);
+    expect(everyoneReady(null, 3, ['u-amna'])).toBe(false);
+  });
+
+  it('lists who’s ready and who’s still to tap among the people here only, in seat order, with the start time', () => {
+    const t = { ...NEW_TABLE, ready: { hand: 3, userIds: ['u-zara', 'u-amna'], dealAt: T0 + 20_000 } };
+    expect(nextHandWait(finished, seats, [0, 1, 3], t)).toEqual({ ready: [0, 3], waiting: [1], startsAt: T0 + 20_000 });
+    // Bilal's away: nobody waits on him. A bot is never listed, whatever it's told is present.
+    expect(nextHandWait(finished, seats, [0, 2, 3], t)).toEqual({ ready: [0, 3], waiting: [], startsAt: T0 + 20_000 });
+    // Nobody has tapped: everyone here is still to, and nothing has set a start.
+    expect(nextHandWait(finished, seats, [0, 1, 3], NEW_TABLE)).toEqual({ ready: [], waiting: [0, 1, 3], startsAt: null });
+    // Votes for another hand don't count here.
+    expect(nextHandWait(finished, seats, [0, 1, 3], { ...t, ready: { ...t.ready, hand: 2 } })).toEqual({ ready: [], waiting: [0, 1, 3], startsAt: null });
+  });
+
+  it('has nothing to say while a hand is being played', () => {
+    const t = { ...NEW_TABLE, ready: { hand: 3, userIds: ['u-amna'], dealAt: T0 } };
+    expect(nextHandWait({ ...finished, phase: 'turn' }, seats, [0, 1, 3], t)).toBeNull();
+    expect(nextHandWait({ ...finished, phase: 'claim' }, seats, [0, 1, 3], t)).toBeNull();
   });
 });

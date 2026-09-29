@@ -2,7 +2,9 @@ import type { Seat } from '@society/engine';
 // Relative rather than '@/': vitest runs without the path alias, and the tests load this.
 import { signed } from '../ledger';
 import type { Standing } from './final';
-import type { PublicGameOver } from './lifecycle';
+import type { NextHandWait, PublicGameOver } from './lifecycle';
+import type { SeatOffer } from './seating';
+import type { RoomSnapshot } from './snapshot';
 import { countOf, isolate, nameList } from './words';
 
 /**
@@ -71,6 +73,34 @@ export function endSheet(midHand: boolean, hands: number): { title: string; body
   return { title: midHand ? 'End the game now?' : 'End the game here?', body, confirmLabel: 'End the game', cancelLabel: 'Keep playing' };
 }
 
+/** Time left as the table's clocks show it, whole seconds rounded up: '0:14', '1:05'. Nothing left, or less, is '0:00'. */
+export function countdown(ms: number): string {
+  const s = Number.isFinite(ms) ? Math.max(0, Math.ceil(ms / 1000)) : 0;
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/**
+ * The result sheet's Next hand button and the line under it, while the table
+ * waits for everyone here to tap it (R15). `me` is the reader's seat, `names`
+ * who sits where, and `msLeft` how long until the next hand starts regardless
+ * (null when nobody has tapped yet, so nothing has set a start). Once the
+ * reader has tapped, the button says who it's waiting for and can't be
+ * tapped again (`ready`). The line appears only while a start time is set.
+ */
+export function waitCopy(wait: NextHandWait, me: Seat, names: Readonly<Record<Seat, string>>, msLeft: number | null): { button: string; line: string | null; ready: boolean } {
+  const listOf = (seats: readonly Seat[]) => nameList(seats.filter((s) => s !== me).map((s) => isolate(names[s])));
+  const tapped = wait.ready.includes(me);
+  const others = wait.waiting.filter((s) => s !== me);
+  const button = tapped && others.length > 0 ? `Waiting for ${listOf(others)}` : 'Next hand';
+  if (wait.startsAt === null || msLeft === null) return { button, line: null, ready: tapped };
+  const starts = `The next hand starts in ${countdown(msLeft)}, or as soon as`;
+  const ready = wait.ready.filter((s) => s !== me);
+  // Whoever tapped first may have gone since: with nobody here ready to name, it's the plain line.
+  if (tapped || ready.length === 0) return { button, line: `${starts} everyone's ready.`, ready: tapped };
+  const who = `${listOf(ready)}${ready.length === 1 ? "'s" : ' are'} ready.`;
+  return { button, line: `${who} ${starts} ${others.length === 0 ? 'you tap' : "everyone's ready"}.`, ready: false };
+}
+
 /** The host's Leave sheet, while the game is in play: leave (a bot takes the seat), end the game for everyone, or stay. */
 export const HOST_LEAVE = {
   title: 'Leave the table?',
@@ -79,3 +109,111 @@ export const HOST_LEAVE = {
   end: 'End the game for everyone',
   stay: 'Stay',
 } as const satisfies { title: string; body: string; leave: string; end: string; stay: string };
+
+/**
+ * The host's button in the lobby. Before the first game it's Start, and
+ * between games Play again; either says how many bots will sit down with
+ * everyone, counting every seat that's empty or a bot's, and every seat of
+ * someone not here yet, which a bot keeps for them. ("Dealing…", while the
+ * start is on its way, is the lobby's own.)
+ */
+export function startLabel(r: Pick<RoomSnapshot, 'status' | 'seats'>): string {
+  const bots = r.seats.filter((s) => s === null || s.kind === 'bot' || s.notHere).length;
+  if (r.status === 'finished') return bots === 0 ? 'Play again, same seats' : `Play again, with ${countOf(bots, 'bot')}`;
+  return bots === 0 ? 'Start' : `Start, with ${countOf(bots, 'bot')}`;
+}
+
+/** The small word beside a seat in the lobby: the reader's own, a bot's, someone not here yet, or whoever has the host's powers. */
+export function seatTag(r: RoomSnapshot, seat: number): string {
+  const s = r.seats[seat] ?? null;
+  if (s === null) return '';
+  if (seat === r.me) return 'you';
+  if (s.kind === 'bot') return 'bot';
+  if (s.notHere) return 'not here yet';
+  return seat === r.hostSeat ? 'host' : '';
+}
+
+/** What everyone but the host reads in place of the start button, naming whoever has the host's powers. */
+export function waitingForHost(r: RoomSnapshot): string {
+  const host = r.hostSeat === null ? null : (r.seats[r.hostSeat] ?? null);
+  const who = host ? isolate(host.name) : 'the host';
+  return r.status === 'finished' ? `That game's over. Waiting for ${who} to start the next one.` : `Waiting for ${who} to start.`;
+}
+
+/** The lobby's tally line: how many people are here, of the four seats, and the rules. Digits, as a count line has always had. */
+export function hereCount(r: RoomSnapshot, ruleset: string): string {
+  const here = r.seats.filter((s) => s?.kind === 'human' && !s.notHere).length;
+  return `${here} of 4 here · ${ruleset}`;
+}
+
+/** For the host, under their button, when anyone seated isn't here yet: what the start does about them. */
+export const NOT_HERE_HINT = 'Anyone not here yet gets a bot when you start, and can take their seat back when they arrive.';
+
+/** Everyone else's Leave sheet, while the game is in play: a bot keeps the seat, and the invite link sits them back down. */
+export const LEAVE = {
+  title: 'Leave the table?',
+  body: "A bot will play your seat so the others can carry on. If you change your mind, open the invite link again to sit back down. If you're the last person here, the game ends.",
+  confirmLabel: 'Leave',
+  cancelLabel: 'Stay',
+} as const satisfies { title: string; body: string; confirmLabel: string; cancelLabel: string };
+
+/**
+ * The quiet button in both Leave sheets: a bot plays the reader's tiles until they tap "I'm back". It needs no sheet of its
+ * own, since the away note that follows says what's happening (presence.ts awayTitle).
+ */
+export const TAKE_A_BREAK = 'Take a break';
+
+/**
+ * The take-over screen, for someone not seated at a game in play: their own
+ * seat back (`left`), the seat kept for them since the deal (`late`), or a
+ * bot's seat (`other`), with the running total they'd carry on with, unless
+ * it's nought.
+ */
+export function takeSeatCopy(o: SeatOffer): { title: string; body: string; confirmLabel: string; cancelLabel: string } {
+  const points = o.score === 0 ? null : signed(o.score);
+  const bot = isolate(o.botName);
+  switch (o.why) {
+    case 'left':
+      return {
+        title: 'Sit back down?',
+        body: `A bot's been playing your seat since you left. Sit down and you'll carry on with its tiles${points === null ? '' : `, and your points so far (${points})`}.`,
+        confirmLabel: 'Sit back down',
+        cancelLabel: 'Not now',
+      };
+    case 'late':
+      return {
+        title: 'Take your seat?',
+        body: `We kept your seat, and a bot's been playing it since the game started. Sit down and you'll carry on with its tiles${points === null ? '' : `, and its points so far (${points})`}.`,
+        confirmLabel: 'Take your seat',
+        cancelLabel: 'Not now',
+      };
+    case 'other':
+      return {
+        title: `Take over from ${bot}?`,
+        body: `This game's under way, and a bot called ${bot} is playing one of the seats. Take over and you'll play on with its tiles${points === null ? '' : ` and its points so far (${points})`}. The tutor's there if you want help.`,
+        confirmLabel: `Take over from ${bot}`,
+        cancelLabel: 'Not now',
+      };
+  }
+}
+
+/** For someone not seated at a game in play with no bot's seat to take over: every seat is a person's. */
+export const NO_SEAT = {
+  heading: 'All four seats are taken in this game.',
+  line: "When it's over, open the invite link again and you can play the next one.",
+  link: 'Back to the start',
+} as const satisfies { heading: string; line: string; link: string };
+
+/** For someone not seated at a game that has ended: the room is where the next one starts. */
+export const NO_SEAT_OVER = {
+  heading: "This game's over.",
+  line: 'Head back to the room for the next one.',
+  link: 'Back to the room',
+} as const satisfies { heading: string; line: string; link: string };
+
+/** The lobby's invitation: a line, and a button that shares the link, or copies it where a phone can't share. */
+export const SHARE = {
+  line: 'Send your friends the link, or read them the code.',
+  button: 'Send link',
+  copied: 'Link copied',
+} as const satisfies { line: string; button: string; copied: string };

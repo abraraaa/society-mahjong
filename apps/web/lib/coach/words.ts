@@ -83,7 +83,7 @@ export function myDiscardCount(view: Pick<PrivatePlayerView, 'me' | 'events'>): 
 }
 
 /** The player's own moves: after one of these, what went before is old news. */
-const MY_MOVES = new Set(['discarded', 'claimed', 'kong']);
+export const MY_MOVES: ReadonlySet<string> = new Set(['discarded', 'claimed', 'kong']);
 
 /** Whether the player has drawn a flower since their last discard, claim or kong (or since the deal, before their first). */
 export function flowerSinceMyLastMove(view: Pick<PrivatePlayerView, 'me' | 'events'>): boolean {

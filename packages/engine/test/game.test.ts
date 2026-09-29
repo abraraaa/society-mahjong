@@ -49,6 +49,20 @@ describe('startHand', () => {
     expect(s.phase).toBe('preplay');
     expect(legalActions(s, karachi, 0)).toEqual({ exchange: { count: 3 } });
   });
+  it('tells only the seat itself which tiles it has passed, until everyone has passed', () => {
+    let s = startHand(karachi, { seed: 'west', progress: { roundWind: 'W', roundIndex: 2, handInRound: 1, handIndex: 9 }, dealer: 1 });
+    expect(viewFor(s, karachi, 0).myExchange).toBeUndefined();
+    const mine = s.players[0].concealed.slice(0, 3);
+    s = reduce(s, { type: 'exchange', seat: 0, tiles: [...mine] }, karachi);
+    // Still in the hand, and still this pass, but recorded as going.
+    expect(viewFor(s, karachi, 0).myExchange).toEqual(mine);
+    expect(viewFor(s, karachi, 0).concealed.slice(0, 3)).toEqual(mine);
+    expect(viewFor(s, karachi, 1).myExchange).toBeUndefined();
+    expect(publicView(s)).not.toHaveProperty('myExchange');
+    for (const seat of [1, 2, 3] as const) s = reduce(s, { type: 'exchange', seat, tiles: s.players[seat].concealed.slice(0, 3) }, karachi);
+    expect(s.preplayStep).toBe(1);
+    expect(viewFor(s, karachi, 0).myExchange).toBeUndefined();
+  });
 });
 
 describe('a tile the player does not hold', () => {

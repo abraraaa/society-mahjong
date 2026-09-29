@@ -1,14 +1,17 @@
+import type { Seat } from '@society/engine';
+import { EVERYONE_HERE, isFresh, parseAbsence, sameAbsence } from './absence';
 import { STALE_GAME_MS } from './lifecycle';
-import type { Deadlines, GameEndHow, SeatEntry, Seats } from './types';
+import type { AwayReason, Deadlines, GameEndHow, Move, SeatEntry, Seats } from './types';
 
 /**
  * live_state.table_state: the table's own bookkeeping, as one JSON document
  * the app owns (docs/DATA-MODEL.md). It's saved by the same commit_table call
  * as the hand, so the two can never disagree.
  *
- * Each part arrives with the code that first uses it. Today that's the
- * running scores and how the game ended; who's away and the next-hand ready
- * check come later. Parsing is tolerant, and it keeps every top-level key it
+ * Each part arrives with the code that first uses it: the running scores,
+ * who's away, who's ready for the next hand, how the game ended, and who took
+ * a seat over from a bot mid-hand.
+ * Parsing is tolerant, and it keeps every top-level key it
  * doesn't know in `extra` and writes it back untouched, so an older deploy
  * never erases a newer one's bookkeeping. A row whose `v` is newer than this
  * code knows isn't saved over at all (service.ts).
@@ -40,21 +43,95 @@ export interface GameOver {
   readonly seats: Seats;
 }
 
+/** What a bot has done for an away seat since its person went: shown to them when they look again (presence.ts awaySummary). */
+export interface AwayPlayed {
+  readonly turns: number;
+  readonly sets: number;
+  readonly exchanges: number;
+  readonly wins: number;
+  readonly hands: number;
+}
+
+/**
+ * One seat's absence (absence.ts): whose it is (the person's id, and the
+ * `since` of the sitting), how many clocks in a row have run out on them,
+ * whether a bot is playing their tiles and why, the clock moves made for
+ * them (a count, and the last, for the notice), when they last tapped and
+ * which save of the table carried it (for the host's hand-over, R8), and what
+ * the bot has played for them while away.
+ */
+export interface SeatAbsence {
+  readonly userId: string | null;
+  readonly since: string | null;
+  readonly misses: number;
+  readonly away: AwayReason | null;
+  readonly clockMoves: number;
+  /** unstamped: the notice needs the move, not its version; it can hold the tiles passed, so only its own person ever sees it */
+  readonly lastClockMove: Move | null;
+  readonly lastTap: number | null;
+  /**
+   * the version of the table the last tap was saved as: the host's hand-over is judged by it, against the version of the table the
+   * host was looking at, since a tap's time is when its request began, not when it landed; null for a tap saved before it was kept
+   */
+  readonly tapVersion: number | null;
+  readonly played: AwayPlayed;
+}
+
+export type Absence = readonly [SeatAbsence, SeatAbsence, SeatAbsence, SeatAbsence];
+
+/**
+ * Who has tapped Next hand on a finished hand (R15): the hand's index, their
+ * ids, and when the next hand starts even if the rest haven't, NEXT_HAND_WAIT_MS
+ * after the first tap. That moment is also the turn clock (table.ts), so the
+ * page's tick, wake_at and the sweep start the hand with nothing new.
+ */
+export interface NextHandVotes {
+  readonly hand: number;
+  readonly userIds: readonly string[];
+  readonly dealAt: number;
+}
+
+/**
+ * Someone took this seat over from a bot while the game was being played
+ * (R21): who, and where the hand stood when their take-over was saved (its
+ * index, and the state's seq). Saved by a commit of its own after the seat
+ * write, so no bot moves for the seat after `seq`: a step that read the seats
+ * before the take-over either loses its commit to this one, or reads the room
+ * again once it sees this (service.ts applyStep). It's what the tutor's first
+ * look at a hand someone didn't see start goes by (snapshot.ts joinedAt).
+ */
+export interface TakeOver {
+  readonly userId: string;
+  readonly hand: number;
+  readonly seq: number;
+}
+
+export type TakeOvers = readonly [TakeOver | null, TakeOver | null, TakeOver | null, TakeOver | null];
+
+/** Nobody has taken a seat over in the hand being played. */
+export const NO_TAKEOVERS: TakeOvers = [null, null, null, null];
+
 export interface TableState {
   readonly v: number;
   /** the game's running totals, a finished hand's points already in; null only on a legacy row, whose totals are still in rooms.ledger */
   readonly scores: Scores4 | null;
   /** how the game ended; null while it's in play */
   readonly over: GameOver | null;
+  /** who's away, per seat; everyone here on a fresh or legacy table */
+  readonly absence: Absence;
+  /** who has tapped Next hand on the finished hand, and when the next one starts regardless; null when nobody has */
+  readonly ready: NextHandVotes | null;
+  /** per seat, who took it over from a bot in the hand being played, and when (TakeOver); left out when nobody has */
+  readonly took?: TakeOvers;
   /** top-level keys this code doesn't know, written back untouched */
   readonly extra: Readonly<Record<string, unknown>>;
 }
 
 /** A game that has just been dealt: nobody has any points yet, and it's in play. */
-export const NEW_TABLE: TableState = { v: TABLE_STATE_V, scores: [0, 0, 0, 0], over: null, extra: {} };
+export const NEW_TABLE: TableState = { v: TABLE_STATE_V, scores: [0, 0, 0, 0], over: null, absence: EVERYONE_HERE, ready: null, extra: {} };
 
-/** The keys this code reads. Everything else goes in `extra`, and so does an `over` it can't read (parseOver). */
-const KNOWN: readonly string[] = ['v', 'scores', 'over'];
+/** The keys this code reads. Everything else goes in `extra`, and so does an `over` it can't read (parseOver), and anything a legacy row holds besides. */
+const KNOWN: readonly string[] = ['v', 'scores', 'over', 'absence', 'ready', 'took'];
 
 const END_HOWS: readonly GameEndHow[] = ['complete', 'host', 'idle', 'abandoned'];
 
@@ -106,6 +183,34 @@ function parseOver(x: unknown, scores: Scores4): GameOver | null {
 }
 
 /**
+ * Who's ready for the next hand, read tolerantly: without a hand index and a
+ * start time there's no wait to speak of, so it's read as none (a wait is
+ * twenty seconds long, and the next tap starts a fresh one). Ids that aren't
+ * strings are dropped, and each id counts once.
+ */
+function parseReady(x: unknown): NextHandVotes | null {
+  if (!isRecord(x)) return null;
+  const { hand, dealAt, userIds } = x;
+  if (typeof hand !== 'number' || !Number.isInteger(hand) || hand < 0 || !isFiniteNumber(dealAt)) return null;
+  const ids = Array.isArray(userIds) ? [...new Set(userIds.filter((u): u is string => typeof u === 'string'))] : [];
+  return { hand, userIds: ids, dealAt };
+}
+
+/** Who took each seat over, read tolerantly: an entry without an id, a hand index and a seq is nobody, and so is anything else. Undefined for nobody at all. */
+function parseTook(x: unknown): TakeOvers | undefined {
+  if (!Array.isArray(x) || x.length !== 4) return undefined;
+  const one = (e: unknown): TakeOver | null => {
+    if (!isRecord(e)) return null;
+    const { userId, hand, seq } = e;
+    const whole = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0;
+    return typeof userId === 'string' && whole(hand) && whole(seq) ? { userId, hand, seq } : null;
+  };
+  const [a, b, c, d] = x as unknown[];
+  const took: TakeOvers = [one(a), one(b), one(c), one(d)];
+  return took.some((e) => e !== null) ? took : undefined;
+}
+
+/**
  * The document as stored, read tolerantly: it never throws, and whatever is
  * missing or unreadable gets its default. `legacy` means it has no `"v"`
  * (0005's default `'{}'`, or anything that isn't a document): a game dealt by
@@ -120,14 +225,36 @@ export function parseTableState(x: unknown): { readonly table: TableState; reado
   const scores = legacy ? null : (scores4(doc['scores']) ?? [0, 0, 0, 0]);
   // A legacy row is a game in play, whatever else it holds.
   const over = scores === null ? null : parseOver(doc['over'], scores);
-  const extra = Object.fromEntries(Object.entries(doc).filter(([key]) => !KNOWN.includes(key) || (key === 'over' && over === null)));
-  return { table: { v: legacy ? TABLE_STATE_V : (v as number), scores, over, extra }, legacy };
+  // So is everyone at it here, and nobody has tapped Next hand.
+  const absence = legacy ? EVERYONE_HERE : parseAbsence(doc['absence']);
+  const ready = legacy ? null : parseReady(doc['ready']);
+  const took = legacy ? undefined : parseTook(doc['took']);
+  const extra = Object.fromEntries(
+    Object.entries(doc).filter(([key]) => !KNOWN.includes(key) || (key === 'over' && over === null) || ((key === 'absence' || key === 'ready' || key === 'took') && legacy)),
+  );
+  return { table: { v: legacy ? TABLE_STATE_V : (v as number), scores, over, absence, ready, ...(took ? { took } : {}), extra }, legacy };
 }
 
-/** The document to store: written as this code's version, with the keys it doesn't know put back as they were. `over` is written only once it's set. */
+/**
+ * The document to store: written as this code's version, with the keys it
+ * doesn't know put back as they were. `absence` is written only once some
+ * seat has something in it, `took` only once someone has taken a seat over,
+ * and `ready` and `over` only once they're set.
+ */
 export function tableStateJson(t: TableState): Record<string, unknown> {
   const over = t.over && { ...t.over, by: t.over.by && { ...t.over.by }, scores: [...t.over.scores], seats: [...t.over.seats] };
-  return { ...t.extra, v: TABLE_STATE_V, scores: [...(t.scores ?? [0, 0, 0, 0])], ...(over ? { over } : {}) };
+  const absence = t.absence.every((e) => isFresh(e) && e.lastTap === null) ? null : t.absence.map((e) => ({ ...e, played: { ...e.played } }));
+  const ready = t.ready && { hand: t.ready.hand, userIds: [...t.ready.userIds], dealAt: t.ready.dealAt };
+  const took = t.took?.some((e) => e !== null) ? t.took.map((e) => e && { ...e }) : null;
+  return {
+    ...t.extra,
+    v: TABLE_STATE_V,
+    scores: [...(t.scores ?? [0, 0, 0, 0])],
+    ...(absence ? { absence } : {}),
+    ...(ready ? { ready } : {}),
+    ...(took ? { took } : {}),
+    ...(over ? { over } : {}),
+  };
 }
 
 /** JSON values compared by what they hold, whatever order an object's keys are in. */
@@ -139,9 +266,45 @@ function sameJson(a: unknown, b: unknown): boolean {
   return keys.length === Object.keys(b).length && keys.every((k) => Object.hasOwn(b, k) && sameJson(a[k], b[k]));
 }
 
-/** Whether two documents would store the same thing, so a step that changes neither the hand nor this writes nothing. */
+/**
+ * Whether two documents would tell the table the same thing, so a step that
+ * changes neither the hand nor this writes nothing. When each person last
+ * tapped isn't news by itself (sameAbsence): it's saved with whatever else is.
+ */
 export function sameTableState(a: TableState, b: TableState): boolean {
-  return a.v === b.v && sameJson(a.scores, b.scores) && sameJson(a.over, b.over) && sameJson(a.extra, b.extra);
+  return (
+    a.v === b.v &&
+    sameJson(a.scores, b.scores) &&
+    sameJson(a.over, b.over) &&
+    sameAbsence(a.absence, b.absence) &&
+    sameJson(a.ready, b.ready) &&
+    sameJson(a.took ?? NO_TAKEOVERS, b.took ?? NO_TAKEOVERS) &&
+    sameJson(a.extra, b.extra)
+  );
+}
+
+/**
+ * The take-overs still worth keeping: an entry whose seat isn't that person's
+ * any more (they've left it since), or whose hand has been played, is
+ * dropped, since a first look only ever applies to the hand someone took over
+ * in. The same reference when nothing is dropped; undefined once nobody's left.
+ */
+export function reconcileTook(took: TakeOvers | undefined, seats: Seats, hand: number): TakeOvers | undefined {
+  if (!took) return took;
+  const keep = (e: TakeOver | null, seat: number) => {
+    const s = seats[seat];
+    return e !== null && e.hand >= hand && s?.kind === 'human' && s.userId === e.userId;
+  };
+  if (took.every((e, seat) => e === null || keep(e, seat))) return took;
+  const [a, b, c, d] = took.map((e, seat) => (keep(e, seat) ? e : null));
+  const kept: TakeOvers = [a ?? null, b ?? null, c ?? null, d ?? null];
+  return kept.some((e) => e !== null) ? kept : undefined;
+}
+
+/** The take-overs with this seat's set to `entry`. */
+export function withTakeOver(took: TakeOvers | undefined, seat: Seat, entry: TakeOver): TakeOvers {
+  const [a, b, c, d] = (took ?? NO_TAKEOVERS).map((e, i) => (i === seat ? entry : e));
+  return [a ?? null, b ?? null, c ?? null, d ?? null];
 }
 
 /**
@@ -173,7 +336,8 @@ export function lastActed(row: { readonly legacy: boolean; readonly actedAt: num
 /**
  * live_state.wake_at, the one thing the sweep asks (R27): the next moment
  * the server has to act on this table unasked. That's the earliest of its two
- * clocks and the moment it ends as idle, STALE_GAME_MS after a person last
+ * clocks (on a finished hand, the turn clock is when the next one starts,
+ * NextHandVotes) and the moment it ends as idle, STALE_GAME_MS after a person last
  * moved it (`actedAt`, as lastActed reads it), so a table parked where no
  * clock runs is still found. Null once the game is over.
  */
