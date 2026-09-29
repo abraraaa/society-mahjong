@@ -410,3 +410,24 @@ begin
 end
 $$;
 drop table commit_payload;
+
+-- 0006: every account has a profile. One made before 0002's trigger, or whose row was deleted under 0001's policy, is given
+-- one as the trigger would have made it, and nobody's existing row changes. This runs the migration file itself.
+insert into auth.users (id, raw_user_meta_data, is_anonymous) values
+  ('00000000-0000-4000-8000-0000000006a1', '{"display_name":"Amna"}', true),
+  ('00000000-0000-4000-8000-0000000006a2', '{"display_name":""}', true),
+  ('00000000-0000-4000-8000-0000000006a3', '{}', false),
+  ('00000000-0000-4000-8000-0000000006a4', '{"display_name":"Zara"}', true);
+delete from public.profiles where id in ('00000000-0000-4000-8000-0000000006a1', '00000000-0000-4000-8000-0000000006a2', '00000000-0000-4000-8000-0000000006a3');
+update public.profiles set display_name = 'Zara K', stats = '{"hands": 3, "wins": 1}' where id = '00000000-0000-4000-8000-0000000006a4';
+\ir ../migrations/0006_profiles_backfill.sql
+do $$
+begin
+  assert (select display_name = 'Amna' and is_guest and stats = '{}' and onboarding_stage = 'new' from public.profiles where id = '00000000-0000-4000-8000-0000000006a1'), 'a missing profile is made with the name given at sign-up';
+  assert (select display_name ~ '^Guest [0-9]{4}$' and is_guest from public.profiles where id = '00000000-0000-4000-8000-0000000006a2'), 'a blank name becomes Guest and four digits';
+  assert (select display_name ~ '^Guest [0-9]{4}$' and not is_guest from public.profiles where id = '00000000-0000-4000-8000-0000000006a3'), 'a person with an email is not a guest';
+  assert (select display_name = 'Zara K' and stats->>'hands' = '3' from public.profiles where id = '00000000-0000-4000-8000-0000000006a4'), 'an existing profile is left as it was';
+  assert not exists (select 1 from auth.users u where not exists (select 1 from public.profiles p where p.id = u.id)), 'every account has a profile';
+  delete from auth.users where id::text like '00000000-0000-4000-8000-0000000006a_';
+end
+$$;
