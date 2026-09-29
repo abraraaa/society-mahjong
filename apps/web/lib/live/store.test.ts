@@ -18,6 +18,7 @@ interface Query {
 interface Result {
   readonly data: unknown;
   readonly error: { message: string; code?: string } | null;
+  readonly count?: number | null;
 }
 
 const supabase = vi.hoisted(() => ({
@@ -406,7 +407,7 @@ const WRITES: readonly Write[] = [
   {
     name: 'recountMemberGames',
     run: () => recountMemberGames('r-1', ['u-abrar', 'u-hana']),
-    labels: ['count the games played', 'count the games played', 'count the games played'],
+    labels: ['count the games played', 'count the games played', 'count the games played', 'count the games played'],
   },
   { name: 'countHand', run: () => countHand(GAME), labels: ['count the hand'] },
 ];
@@ -1106,19 +1107,26 @@ describe('who has been at a room (room_members)', () => {
     expect(await thrown(lastFinishedGame('r-1'))).toMatchObject({ what: 'read the last game' });
   });
 
-  it('counts each person’s finished games at the room from one read, then sets each member row, never making one', async () => {
-    answerAll(undefined, (q) => (is('game_players', 'select')(q) ? [{ user_id: 'u-abrar' }, { user_id: 'u-abrar' }, { user_id: 'u-hana' }, { user_id: null }] : null));
+  it('has the database count each person’s finished games at the room, then sets their member row, never making one', async () => {
+    // The count comes back in the answer's count, never as rows, so no row cap can cut it short.
+    const games: Record<string, number> = { 'u-abrar': 300, 'u-hana': 1 };
+    supabase.answer = (q) => {
+      if (!is('game_players', 'select')(q)) return ok();
+      const who = q.steps.find(([m, a]) => m === 'eq' && a[0] === 'user_id')![1][1] as string;
+      return { data: [], error: null, count: games[who] ?? 0 };
+    };
     await recountMemberGames('r-1', ['u-abrar', 'u-hana', 'u-zara', 'u-abrar']);
-    expect(ran()).toEqual(['game_players:select', 'room_members:update', 'room_members:update', 'room_members:update']);
+    expect(ran()).toEqual(['game_players:select', 'room_members:update', 'game_players:select', 'room_members:update', 'game_players:select', 'room_members:update']);
     expect(supabase.log[0]!.steps).toEqual([
-      ['select', ['user_id, games!inner(room_id, status)']],
-      ['in', ['user_id', ['u-abrar', 'u-hana', 'u-zara']]],
+      ['select', ['game_id, games!inner(room_id, status)', { count: 'exact' }]],
+      ['eq', ['user_id', 'u-abrar']],
       ['eq', ['games.room_id', 'r-1']],
       ['eq', ['games.status', 'finished']],
+      ['limit', [1]],
     ]);
-    expect(supabase.log.slice(1).map((q) => q.steps)).toEqual([
+    expect(supabase.log.filter(is('room_members', 'update')).map((q) => q.steps)).toEqual([
       [
-        ['update', [{ games_played: 2 }]],
+        ['update', [{ games_played: 300 }]],
         ['eq', ['room_id', 'r-1']],
         ['eq', ['user_id', 'u-abrar']],
       ],
