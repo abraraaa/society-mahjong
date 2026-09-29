@@ -51,8 +51,8 @@ export default function RulesPage() {
       <section>
         <h2 className="font-display">The table</h2>
         <p>
-          Four players sit at the winds: East, South, West, North. East is the <b>dealer</b> and plays first. Everyone starts with thirteen tiles; the rest form the <b>wall</b>, face down, that
-          you draw from.
+          Four players sit at the winds: East, South, West, North. East is the <b>dealer</b> and starts with fourteen tiles, discarding first; everyone else starts with thirteen.
+          The rest form the <b>wall</b>, face down, that you draw from.
         </p>
         <p>
           On your turn you <b>draw</b> a tile and <b>discard</b> one, face up, into the <b>river</b> in the middle. That is the whole rhythm: draw, discard, draw, discard, round and round, until

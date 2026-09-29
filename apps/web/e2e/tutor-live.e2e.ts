@@ -263,20 +263,23 @@ test.describe('the tutor at a live table', () => {
     await expect.poll(() => t.count('view')).toBe(2);
     const sheet = page.locator('[data-sheet="claim"]');
     await expect(sheet.getByRole('button', { name: 'Mahjong!' })).toBeVisible();
-    // The bar's drain, as the browser runs it: how long it lasts, how far in it started, and how far through it is.
+    // The bar's drain, as the browser runs it: how long it lasts, how far in it started, and how far through it is. A
+    // fresh table draws the bar again as a new element, so the one the locator found can be gone by the time it's read:
+    // that reads as no drain yet, and the polls look again.
     const drain = () =>
       sheet.locator('.timer > i').evaluate((e) => {
-        const timing = e.getAnimations()[0]!.effect!.getComputedTiming();
+        const timing = e.getAnimations()[0]?.effect?.getComputedTiming();
+        if (!timing) return null;
         return { duration: Number(timing.duration), delay: Number(timing.delay), through: (Number(timing.localTime) - Number(timing.delay)) / Number(timing.duration) };
       });
-    expect(await drain()).toMatchObject({ duration: 90_000, delay: 0 });
+    await expect.poll(drain).toMatchObject({ duration: 90_000, delay: 0 });
 
     // The slow poll brings a fresh table twelve seconds in. The bar is drawn again from where it stands, twelve seconds
     // through the ninety, with seventy-eight to run: it empties as the table's clock runs out, not early.
     await page.clock.runFor(POLL_MS);
     await expect.poll(() => t.count('view')).toBe(3);
-    await expect.poll(async () => (await drain()).delay).toBe(-POLL_MS);
-    const now = await drain();
+    await expect.poll(async () => (await drain())?.delay).toBe(-POLL_MS);
+    const now = (await drain())!;
     expect(now.duration + now.delay).toBe(90_000 - POLL_MS);
     expect(now.through).toBeGreaterThanOrEqual(POLL_MS / 90_000);
     expect(now.through).toBeLessThan((POLL_MS + 5_000) / 90_000);
@@ -506,6 +509,55 @@ test.describe('the tutor at a live table', () => {
     expect(held).toBeGreaterThan(suggested);
     await expect(sheet.locator(`button.tile[aria-label="${name}"]`)).toHaveCount(held);
     await expect(sheet.locator(`button.tile[aria-label="${name}"][data-coached="true"]`)).toHaveCount(suggested);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  test('(l-exchange-turned) the phone turned while she waits: the heading and Pass button stay where they are when the next pass comes', async ({ page }) => {
+    const { westSent, westWaiting, westLanded } = tutorFixtures();
+    let table = westSent;
+    await page.setViewportSize({ width: 393, height: 852 });
+    const t = await openTable(
+      page,
+      {
+        view: () => ok(table),
+        act: () => {
+          table = westWaiting;
+          return ok(westWaiting);
+        },
+      },
+      { clock: true },
+    );
+    const sheet = page.locator('.sheet[data-sheet="exchange"]');
+    const tiles = sheet.locator('button.tile');
+    await expect(sheet).toBeVisible();
+    await pauseClock(page);
+    await page.clock.runFor(500);
+
+    // The first pass, upright: the tutor's three, passed.
+    const view = westSent.view as PrivatePlayerView;
+    const tip = liveCoach(westSent).action;
+    if (tip.kind !== 'exchange') throw new Error('the fixture is an exchange');
+    const lit = exchangeGlow(view.concealed, tip.tiles).flatMap((on, i) => (on ? [i] : []));
+    await tapUntilLifted(tiles.nth(lit[0]!));
+    await tiles.nth(lit[1]!).click();
+    await tiles.nth(lit[2]!).click();
+    await sheet.getByRole('button', { name: 'Pass tiles' }).click();
+    await expect.poll(() => t.count('act')).toBe(1);
+    await page.clock.runFor(700);
+    await expect(sheet).toHaveAttribute('data-waiting', 'true');
+
+    // She turns the phone on its side while the short wait line shows.
+    await page.setViewportSize({ width: 852, height: 393 });
+    const at = await placesOf(sheet);
+
+    // The next pass, whose line is longer than the wait's, finds the sheet already tall enough for it.
+    table = westLanded;
+    const looks = t.count('view');
+    await page.clock.runFor(POLL_MS);
+    await expect.poll(() => t.count('view')).toBeGreaterThan(looks);
+    await expect(sheet.locator('h2')).toContainText('2 of 3');
+    await expect(sheet).not.toHaveAttribute('data-waiting');
+    expect(await placesOf(sheet)).toEqual(at);
     expect(t.pageErrors).toEqual([]);
   });
 

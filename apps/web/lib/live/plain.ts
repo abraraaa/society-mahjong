@@ -13,6 +13,8 @@ const NO_TABLE = "There's no table with that code. Check it with whoever sent yo
 const NOT_SEATED = "You're not in this game. Open the invite link again: if a bot's playing a seat, you can take over from it.";
 const FULL = 'All four seats are taken. If someone gets up, try again, or host a table of your own.';
 const LEFT = "You got up from it on another phone or tab. Sit back down if you'd still like to play.";
+const KEPT = "A bot's been keeping it warm for you. Sit back down when you'd like to play.";
+const GONE = "Someone else may have been given your seat. Find one if you'd still like to play.";
 const SEAT_TAKEN = 'Someone took that seat just as you did. Try again for another.';
 const NOT_FREE = "That seat isn't free. Open the invite link again to see where you can sit.";
 const CLOSED = "This table's been quiet for a while, so it's closed to new players. Ask someone who plays at this table to open the link, then try again.";
@@ -76,8 +78,11 @@ const BY_MESSAGE = new Map<string, string>(
     'this table has already started': UNDER_WAY,
     'no room with that code': NO_TABLE,
     'this table is full': FULL,
-    // The lobby's own rejoin, for someone who got up from the lobby on another phone or tab (joinTroubleTitle heads it).
+    // The lobby's own rejoin, for someone found without a seat between games, as far as the server can tell why (joinTroubleTitle
+    // heads each): they got up on another phone or tab; a bot's keeping their seat; or it can't say, and never claims they left.
     'you left this table': LEFT,
+    'a bot is keeping your seat': KEPT,
+    'no seat to give back': GONE,
     'this table has closed': CLOSED,
     'not at this table': NOT_SEATED,
     'not seated at this table': NOT_SEATED,
@@ -140,23 +145,39 @@ export function plainError(err: unknown): string {
 }
 
 /**
+ * The lobby's own ask turned down (the join route's rejoin), by its line: the
+ * heading over it, since nothing they tried "didn't work", and the button,
+ * which opens the link on purpose. Someone who got up did what they meant to;
+ * someone whose seat a bot is keeping has it waiting; someone the server
+ * can't say about is told only that they're not sitting here, never that
+ * they left.
+ */
+const REJOIN_REFUSED = new Map<string, { readonly title: string; readonly retry: string }>([
+  [LEFT, { title: "You've left this table.", retry: 'Sit back down' }],
+  [KEPT, { title: "Your seat's waiting.", retry: 'Sit back down' }],
+  [GONE, { title: "You're not sitting here any more.", retry: 'Find a seat' }],
+]);
+
+/**
  * The retry button's words when joining a table failed. A game under way or
  * a full table won't have changed a moment later, so the button offers to
  * check again rather than promising another go will work. A seat lost in the
  * same instant as someone else's is the one conflict worth another go at once,
- * and its line says so.
+ * and its line says so. The lobby's own ask, turned down, has its own
+ * (REJOIN_REFUSED).
  */
 export function joinRetryLabel(err: unknown): string {
   const status = typeof (err as { status?: unknown } | null)?.status === 'number' ? (err as { status: number }).status : 0;
-  if (plainError(err) === LEFT) return 'Sit back down';
+  const refused = REJOIN_REFUSED.get(plainError(err));
+  if (refused) return refused.retry;
   return status === 409 && plainError(err) !== SEAT_TAKEN ? 'Check again' : 'Try again';
 }
 
 /**
  * The heading over a join that didn't work, when "That didn't work." would be
- * wrong: someone who got up from the lobby on another phone or tab did what
- * they meant to. Undefined keeps the usual heading.
+ * wrong: the lobby's own ask, turned down (REJOIN_REFUSED). Undefined keeps
+ * the usual heading.
  */
 export function joinTroubleTitle(err: unknown): string | undefined {
-  return plainError(err) === LEFT ? "You've left this table." : undefined;
+  return REJOIN_REFUSED.get(plainError(err))?.title;
 }

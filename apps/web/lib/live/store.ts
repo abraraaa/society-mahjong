@@ -188,21 +188,26 @@ export async function lastFinishedGame(roomId: string): Promise<LastGameRow | nu
  * Each member's count of games played at the room (room_members.games_played),
  * worked out again from game_players: the finished games (complete, ended by
  * the host or idle; never abandoned) they sat at the end of. A recount rather
- * than an increment, so a finish run again counts nothing twice. One read,
- * then one update per person; a member row that doesn't exist isn't made.
+ * than an increment, so a finish run again counts nothing twice. Per person,
+ * the database counts (one row asked for, the total in the answer's count)
+ * and then their row is set, so the count never stops at the most rows the
+ * API will return in one answer. A member row that doesn't exist isn't made.
  */
 export async function recountMemberGames(roomId: string, userIds: readonly string[]): Promise<void> {
   const ids = [...new Set(userIds)];
   if (ids.length === 0) return;
   const client = db();
-  const data = must(
-    await client.from('game_players').select('user_id, games!inner(room_id, status)').in('user_id', ids).eq('games.room_id', roomId).eq('games.status', 'finished'),
-    'count the games played',
-  );
-  const counts = new Map(ids.map((id) => [id, 0]));
-  for (const r of (data ?? []) as { user_id: string | null }[]) if (r.user_id !== null && counts.has(r.user_id)) counts.set(r.user_id, counts.get(r.user_id)! + 1);
-  for (const [userId, n] of counts) {
-    must(await client.from('room_members').update({ games_played: n }).eq('room_id', roomId).eq('user_id', userId), 'count the games played');
+  for (const userId of ids) {
+    // A GET that asks for one row, not a HEAD, so a refusal comes back with the database's reason.
+    const { count, error } = await client
+      .from('game_players')
+      .select('game_id, games!inner(room_id, status)', { count: 'exact' })
+      .eq('user_id', userId)
+      .eq('games.room_id', roomId)
+      .eq('games.status', 'finished')
+      .limit(1);
+    must({ data: null, error }, 'count the games played');
+    must(await client.from('room_members').update({ games_played: count ?? 0 }).eq('room_id', roomId).eq('user_id', userId), 'count the games played');
   }
 }
 

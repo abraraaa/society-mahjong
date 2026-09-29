@@ -35,7 +35,8 @@ export const karachiGuards: Guards = {
 const GOULASH_SPEC: HandSpec = {
   kind: 'goulash',
   label: 'Goulash',
-  description: 'Pungs only. Honour pungs need two of: a dragon pung, a round-wind pung, your own wind pung.',
+  description:
+    'Four pungs and a pair, no runs. Honour pungs only count with two pungs among the dragons, the round wind and your own wind; one pung of a wind that is both is enough.',
   patterns: [GOULASH],
 };
 
@@ -47,7 +48,7 @@ export function karachiHandSpec(p: GameProgress): HandSpec {
       return {
         kind: 'honour',
         label: 'East: the honour hand',
-        description: 'Three chows or three pungs, all one suit or one per suit, plus five honours.',
+        description: 'Three runs or three pungs, one suit or one per suit, plus five honours (all four winds with one paired, or an honour pung and pair).',
         patterns: [...EAST_NAMED, ...EAST_GENERAL],
       };
     case 'S':
@@ -67,7 +68,7 @@ export function karachiHandSpec(p: GameProgress): HandSpec {
       return {
         kind: 'big',
         label: 'North: big hands only',
-        description: 'Long runs and the rare named hands.',
+        description: 'Only the named hands count: most are long runs in one suit, or full of winds and dragons.',
         patterns: NORTH,
       };
   }

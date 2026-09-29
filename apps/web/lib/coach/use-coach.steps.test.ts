@@ -118,29 +118,32 @@ describe('useCoach, view after view', () => {
     }
   });
 
+  /** East hand 2, as seat 0 sees it: her turn (`mine`), with these tiles and these kongs on offer, or someone else's. */
+  const at = (seq: number, tiles: readonly TileKind[], mine: boolean, kong?: readonly TileKind[]) =>
+    ({
+      progress: { roundWind: 'E', roundIndex: 0, handInRound: 1, handIndex: 1 },
+      me: 0,
+      seq,
+      concealed: tiles,
+      players: (['E', 'S', 'W', 'N'] as const).map((seatWind, seat) => ({ seat, seatWind, melds: [], discards: [], bonus: [] })),
+      phase: 'turn',
+      turn: mine ? 0 : 1,
+      discardCount: 4,
+      legal: mine ? { discard: tiles, ...(kong ? { kong } : {}) } : {},
+      lastDiscard: null,
+      result: null,
+      revealed: {},
+      events: [{ seq: 1, type: 'discarded', seat: 0, tile: 'p9' }],
+    }) as unknown as PrivatePlayerView;
+  /** Tiles that make Chow + 5 Honours, and tiles that make Pung + 5 Honours, whose four 2 Bamboo cost nothing to kong. */
+  const runs: TileKind[] = ['s2', 's2', 's2', 's2', 's3', 's4', 'p5', 'p6', 'p7', 'm7', 'm8', 'm9', 'WE'];
+  const pungs: TileKind[] = ['s2', 's2', 's2', 's2', 'p5', 'p5', 'p5', 'm7', 'm7', 'm7', 'WE', 'WE', 'DR', 'DG'];
+  const coachAt = (view: PrivatePlayerView) => hooks.render(() => useCoach({ view, ruleset: karachi, stage: 'learning', names: NAMES, game: 'E-2' }))!;
+
   it('keeps a switch due on a turn whose tip is a free kong for the next turn, and tells it there', () => {
-    // East hand 2. Someone else's turn, on Chow + 5 Honours; then her turn, whose tiles make Pung + 5 Honours with a
-    // kong of 2 Bamboo that costs nothing; then the replacement draw, with no kong on offer.
-    const at = (seq: number, tiles: readonly TileKind[], mine: boolean, kong?: readonly TileKind[]) =>
-      ({
-        progress: { roundWind: 'E', roundIndex: 0, handInRound: 1, handIndex: 1 },
-        me: 0,
-        seq,
-        concealed: tiles,
-        players: (['E', 'S', 'W', 'N'] as const).map((seatWind, seat) => ({ seat, seatWind, melds: [], discards: [], bonus: [] })),
-        phase: 'turn',
-        turn: mine ? 0 : 1,
-        discardCount: 4,
-        legal: mine ? { discard: tiles, ...(kong ? { kong } : {}) } : {},
-        lastDiscard: null,
-        result: null,
-        revealed: {},
-        events: [{ seq: 1, type: 'discarded', seat: 0, tile: 'p9' }],
-      }) as unknown as PrivatePlayerView;
-    const runs: TileKind[] = ['s2', 's2', 's2', 's2', 's3', 's4', 'p5', 'p6', 'p7', 'm7', 'm8', 'm9', 'WE'];
-    const pungs: TileKind[] = ['s2', 's2', 's2', 's2', 'p5', 'p5', 'p5', 'm7', 'm7', 'm7', 'WE', 'WE', 'DR', 'DG'];
+    // Someone else's turn, on Chow + 5 Honours; then her turn, whose tiles make Pung + 5 Honours with a kong of 2 Bamboo
+    // that costs nothing; then the replacement draw, with no kong on offer.
     hooks.unmount();
-    const coachAt = (view: PrivatePlayerView) => hooks.render(() => useCoach({ view, ruleset: karachi, stage: 'learning', names: NAMES, game: 'E-2' }))!;
     expect(coachAt(at(3, runs, false)).target?.title).toBe('Chow + 5 Honours');
     const kong = coachAt(at(5, pungs, true, ['s2']));
     expect(kong.target?.title).toBe('Pung + 5 Honours');
@@ -149,5 +152,24 @@ describe('useCoach, view after view', () => {
     const drawn = coachAt(at(6, pungs, true));
     expect(drawn.planSwitch?.from.title).toBe('Chow + 5 Honours');
     expect(textOf(drawn.say)).toMatch(/^Discard [^.]+\. Switching to Pung \+ 5 Honours/);
+  });
+
+  it("tells a switch held back by a kong tip on her next turn, when she turned the kong down and it's still the tip", () => {
+    // As above, but she discards instead of taking the kong. Someone else's turn, then hers again with the four 2 Bamboo
+    // still free to kong: the switch waits no longer, and the kong leads its line. The turn after says nothing of it.
+    const kept = pungs.filter((k) => k !== 'DG');
+    hooks.unmount();
+    expect(coachAt(at(3, runs, false)).target?.title).toBe('Chow + 5 Honours');
+    const kong = coachAt(at(5, pungs, true, ['s2']));
+    expect(kong.planSwitch).toBeNull();
+    expect(textOf(kong.say)).toMatch(/^Kong 2 Bamboo: with four of a kind/);
+    expect(coachAt(at(6, kept, false)).planSwitch).toBeNull();
+    const again = coachAt(at(9, [...kept, 'DR'], true, ['s2']));
+    expect(again.action).toMatchObject({ kind: 'kong', tile: 's2' });
+    expect(again.planSwitch?.from.title).toBe('Chow + 5 Honours');
+    expect(textOf(again.say)).toMatch(/^Kong 2 Bamboo\. Switching to Pung \+ 5 Honours/);
+    const after = coachAt(at(13, [...kept, 'DG'], true, ['s2']));
+    expect(after.planSwitch).toBeNull();
+    expect(textOf(after.say)).toMatch(/^Kong 2 Bamboo: with four of a kind/);
   });
 });

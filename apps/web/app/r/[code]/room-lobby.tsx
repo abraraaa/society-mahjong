@@ -81,11 +81,13 @@ export function RoomLobby({ code }: { code: string }) {
 
   // Live seat changes and the start signal, with a poll as the fallback: for someone seated. Someone looking at a seat to take
   // over has nothing to wait for, and the lobby's poll is for its own people.
-  // Someone found without a seat between games is asked about once, by the server, which knows why (joinRoom's rejoin). If a
-  // newcomer was given their seat (their join read them as not here a moment before their check-in landed), they're sat down in
-  // a free seat or a bot's, else shown the full line and a way to check again, which is opening the link. If they got up, on
-  // another phone or tab, or in a Leave that crossed this ask, it stays that way: "You've left this table", and a way to sit back
-  // down. The poll says they're unseated with a refusal (not at this table) or, for the host, a lobby without them.
+  // Someone found without a seat between games is asked about once, by the server, which says as much as it knows (joinRoom's
+  // rejoin). If a newcomer was given their seat (their join read them as not here a moment before their check-in landed), they're
+  // sat down in a free seat or a bot's, else shown the full line and a way to check again, which is opening the link. Otherwise
+  // nothing seats them by itself, and the refusal's heading and button say why: they got up, on another phone or tab or in a
+  // Leave that crossed this ask ("You've left this table."); a bot's keeping their seat ("Your seat's waiting."); or the server
+  // can't say ("You're not sitting here any more.", never that they left). The poll says they're unseated with a refusal (not at
+  // this table) or, for the host, a lobby without them.
   const seated = room !== null && room.me !== null;
   useEffect(() => {
     const supabase = supabaseRef.current;

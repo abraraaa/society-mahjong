@@ -111,17 +111,26 @@ creates it, and the server does everything else with the service role.
    they told the table is full. The newcomer's seat notes whose it was
    (`displaced` on their seat entry, dropped once that person is seated
    again or leaves, and at the deal), which is how the server tells a seat
-   taken from someone apart from a seat someone got up from. Someone who
-   still has the lobby open when their seat goes finds out from its poll,
-   and the lobby asks the server once (`POST .../join` with `rejoin: true`):
-   with that note it sits them in a free seat or a bot's, never anyone
-   else's, so two lobbies can't take each other's seats back and forth by
-   themselves; with nowhere free they're told the table is full, and
-   "Check again" is opening the link, which tries every step. Without the
-   note they got up themselves, on another phone or tab, or in a Leave that
-   crossed the ask (a Leave with no seat left to leave still drops the
-   note): the lobby says "You've left this table." and offers "Sit back
-   down", and nothing seats them by itself. Only what a newcomer's seat rests
+   taken from someone apart from a seat someone got up from. A Leave from
+   the lobby is noted too: every other seat entry, a person's or a bot's,
+   lists who got up (`leavers`, the latest eight), until they sit down again
+   or the game is dealt. Someone who still has the lobby open when their
+   seat goes finds out from its poll, and the lobby asks the server once
+   (`POST .../join` with `rejoin: true`): with a `displaced` note it sits
+   them in a free seat or a bot's, never anyone else's, so two lobbies can't
+   take each other's seats back and forth by themselves; with nowhere free
+   they're told the table is full, and "Check again" is opening the link,
+   which tries every step. Without that note nothing seats them by itself,
+   so a Leave on another phone or tab, or one that crossed the ask (a Leave
+   with no seat left to leave still drops the note), sticks. The lobby says
+   why only as far as the seats tell: "You've left this table." when a
+   `leavers` note names them, or a bot keeps the seat they got up from in a
+   game (`kept: 'left'`); "Your seat's waiting." when a bot has kept their
+   seat since a deal they weren't here for (it stays kept until they tap
+   "Sit back down", so a lobby waking up on a phone in a pocket doesn't
+   check them in for the next deal); and otherwise "You're not sitting here
+   any more." with "Find a seat". A note can go with the entry it was on,
+   or with the deal, so nobody is told they left on a guess. Only what a newcomer's seat rests
    on is read: who's been seen at the room only when its own writes say
    it's been quiet for six weeks, and who's here only when every other seat
    is a person's. Someone who opens the link once a game has started is
@@ -500,7 +509,9 @@ a quiet button in their Leave sheet, makes their seat away (reason
 `self`, noted in the hand's log as their own move), with no sheet of its
 own. The Leave sheet waits for the answer ("One moment…" on the break's
 button), then goes; if the table kept changing under it (three lost
-tries), or no answer came, it stays up for another tap. Their table then
+tries), or no answer came, it stays up for another tap, but turned down
+because they're not seated any more or the game is over, it goes at once,
+with the line saying why. Their table then
 shows the same panel, headed "You're taking a break, so a bot's playing
 your tiles for now.", and "I'm back" (or any move but a pass) ends it;
 everyone else sees them away, as above. Unlike the other reasons, the panel

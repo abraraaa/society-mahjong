@@ -29,6 +29,54 @@ function unmarked(entry: SeatEntry): SeatEntry {
   return rest;
 }
 
+/** How many people who got up from the lobby an entry notes at most (`leavers`): the latest, so a busy lobby's seats stay small. */
+export const LEAVERS_KEPT = 8;
+
+/** Who an entry notes as having got up from the lobby (`leavers`), read tolerantly: anything but a list of ids notes nobody. */
+function leaversOf(entry: SeatEntry): readonly string[] {
+  const list: unknown = entry?.leavers;
+  return Array.isArray(list) ? list.filter((id): id is string => typeof id === 'string') : [];
+}
+
+/** The entry noting exactly these people as having got up; with nobody to note, without the key. */
+function withLeavers<E extends NonNullable<SeatEntry>>(entry: E, leavers: readonly string[]): E {
+  const { leavers: _, ...rest } = entry;
+  return (leavers.length > 0 ? { ...rest, leavers } : rest) as E;
+}
+
+/** An entry without the notes that last only until the deal: whose seat it was (`displaced`), and who got up (`leavers`). */
+function withoutNotes(entry: NonNullable<SeatEntry>): NonNullable<SeatEntry> {
+  return withLeavers(unmarked(entry) ?? entry, []);
+}
+
+/**
+ * Whether someone got up from the lobby (rooms.ts leaveRoom) and hasn't sat
+ * down since, as any entry notes it (`leavers`): what lets the lobby's rejoin
+ * tell them they left, rather than guess. A note goes with the entry it's on,
+ * so no note doesn't mean they didn't.
+ */
+export function hasLeft(seats: Seats, userId: string): boolean {
+  return seats.some((s) => leaversOf(s).includes(userId));
+}
+
+/** The seats with every entry noting that `userId` got up, the latest last (LEAVERS_KEPT at most). */
+function noteLeaver(seats: Seats, userId: string): Seats {
+  return seats.map((s) => (s === null ? s : withLeavers(s, [...leaversOf(s).filter((id) => id !== userId), userId].slice(-LEAVERS_KEPT)))) as unknown as Seats;
+}
+
+/** The seats with no entry noting that `userId` got up. */
+function forgetLeaver(seats: Seats, userId: string): Seats {
+  return seats.map((s) => {
+    const leavers = leaversOf(s);
+    return s !== null && leavers.includes(userId)
+      ? withLeavers(
+          s,
+          leavers.filter((id) => id !== userId),
+        )
+      : s;
+  }) as unknown as Seats;
+}
+
 /**
  * Whether someone's seat went, between games, to a person who was given it
  * because they weren't here (R18's last step), and they haven't been seated
@@ -45,9 +93,14 @@ export function forgetDisplaced(seats: Seats, userId: string): Seats | null {
   return seats.map((s) => (s?.kind === 'human' && s.displaced === userId ? unmarked(s) : s)) as unknown as Seats;
 }
 
-/** The seats with a person sat down in `seat` (sitting), and any note that they were displaced dropped: they have a seat again. */
+/**
+ * The seats with a person sat down in `seat` (sitting), and any note that they
+ * were displaced, or got up, dropped: they have a seat again. Whoever else the
+ * seat's last entry noted as having got up, the new entry goes on noting.
+ */
 function seatPerson(seats: Seats, seat: number, entry: SeatEntry & { readonly kind: 'human' }): Seats {
-  return withSeat(forgetDisplaced(seats, entry.userId) ?? seats, seat, entry);
+  const cleared = forgetLeaver(forgetDisplaced(seats, entry.userId) ?? seats, entry.userId);
+  return withSeat(cleared, seat, withLeavers(entry, leaversOf(cleared[seat] ?? null)));
 }
 
 /** Whose seat a bot is keeping, or null for a bot keeping nobody's (or anything that isn't a bot). */
@@ -125,13 +178,40 @@ export function vacate(seats: Seats, seat: Seat): Seats {
  * Someone stands up from the lobby: their seat empties, and any note that
  * their seat was taken from them before goes too, so a rejoin from another
  * phone or tab, or one already on its way, can't sit them down again
- * (rooms.ts leaveRoom). Null when they're not seated and nothing notes them.
+ * (rooms.ts leaveRoom). Every other entry notes that they got up (hasLeft),
+ * so that rejoin can tell them why. Null when they're not seated and nothing
+ * notes that their seat was taken.
  */
 export function standUp(seats: Seats, userId: string): Seats | null {
   const at = seatOf(seats, userId);
   const forgotten = forgetDisplaced(seats, userId);
-  if (at === null) return forgotten;
-  return vacate(forgotten ?? seats, at);
+  if (at === null && forgotten === null) return null;
+  const up = forgotten ?? seats;
+  return noteLeaver(at === null ? up : vacate(up, at), userId);
+}
+
+/**
+ * Why someone found without a seat between games has none, as far as the
+ * seats tell (the lobby's rejoin, rooms.ts joinRoom):
+ * - `displaced`: a newcomer was given their seat because they weren't here
+ *   (wasDisplaced);
+ * - `left`: they got up, from the lobby (hasLeft), or from a game in play
+ *   whose bot still keeps their seat (`kept: 'left'`);
+ * - `kept`: a bot has kept their seat since a deal they weren't here for (or
+ *   for a reason it doesn't say, never read as a Leave);
+ * - `unknown`: nothing says. A note went with the entry it was on (its
+ *   person got up, or was given someone else's seat) or with the deal, or
+ *   the seat kept for them was taken. Most often their seat went to someone
+ *   else, but a Leave whose notes went the same way is possible too.
+ * Only `left` says they got up, so nobody who didn't is ever told they did.
+ */
+export type SeatLoss = 'displaced' | 'left' | 'kept' | 'unknown';
+
+export function seatLoss(seats: Seats, userId: string): SeatLoss {
+  if (wasDisplaced(seats, userId)) return 'displaced';
+  const kept = seats.find((s) => heldFor(s) === userId);
+  if (hasLeft(seats, userId) || (kept?.kind === 'bot' && kept.kept === 'left')) return 'left';
+  return kept ? 'kept' : 'unknown';
 }
 
 /** The names a bot is given, so the table reads like company. */
@@ -158,7 +238,9 @@ export function withBots(seats: Seats): Seats {
  * at the deal (`'late'`). Nobody's seat is given away. A bot keeping a seat is
  * never given its person's name, so the table can tell them apart. Notes of
  * whose seat someone was given between games (`displaced`) go: from the deal
- * on, someone without a seat is offered a bot's instead.
+ * on, someone without a seat is offered a bot's instead. So do notes of who
+ * got up from the lobby (`leavers`): the lobby asks nothing once the game is
+ * dealt, and the seats that carried them are the game's now.
  */
 export function seatsForDeal(seats: Seats, here: (seat: Seat) => boolean): Seats {
   const late = seats.flatMap((s, i) => (s?.kind === 'human' && !here(i as Seat) ? [s.name] : []));
@@ -167,8 +249,8 @@ export function seatsForDeal(seats: Seats, here: (seat: Seat) => boolean): Seats
   const next = () => names[n++] ?? `Bot ${n}`;
   return seats.map((s, i) => {
     if (s === null) return { kind: 'bot' as const, name: next() };
-    if (s.kind === 'human') return here(i as Seat) ? unmarked(s) : { kind: 'bot' as const, name: next(), heldFor: s.userId, keptName: s.name, kept: 'late' as const };
-    return heldFor(s) === null ? s : { ...s, kept: 'late' as const };
+    if (s.kind === 'human') return here(i as Seat) ? withoutNotes(s) : { kind: 'bot' as const, name: next(), heldFor: s.userId, keptName: s.name, kept: 'late' as const };
+    return withoutNotes(heldFor(s) === null ? s : { ...s, kept: 'late' as const });
   }) as unknown as Seats;
 }
 
@@ -249,17 +331,18 @@ export function takeSeat(seats: Seats, seat: Seat, joiner: Joiner, now: number):
  * for the next deal, as it does for anyone who leaves once the end is saved
  * (service.ts leaveGame). Only a bot's seat is given back, and only to someone
  * not sitting elsewhere, so a seat a person has taken since stays theirs.
- * Null when there's nothing to give back.
+ * Seated again, nobody given a seat back is noted as having got up from the
+ * lobby (hasLeft). Null when there's nothing to give back.
  */
 export function seatsBack(room: Seats, atEnd: Seats): Seats | null {
-  let given = false;
+  const given: string[] = [];
   const seats = room.map((s, i) => {
     const was = atEnd[i];
     if (s?.kind !== 'bot' || was?.kind !== 'human' || seatOf(room, was.userId) !== null) return s;
-    given = true;
+    given.push(was.userId);
     return was;
-  });
-  return given ? (seats as unknown as Seats) : null;
+  }) as unknown as Seats;
+  return given.length > 0 ? given.reduce(forgetLeaver, seats) : null;
 }
 
 /**

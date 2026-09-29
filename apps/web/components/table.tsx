@@ -226,7 +226,7 @@ function TableInner({
     <div className="mb-2 flex items-baseline justify-between gap-2">
       <p className="label">River</p>
       {/* One width for both wordings, so a pick changes the words and not the box. */}
-      <p className="label min-w-28 text-right whitespace-nowrap tabular-nums">{selected ? `${selectedOut} of ${COPIES} out` : `${riverTiles.length} discarded`}</p>
+      <p className="label min-w-32 text-right whitespace-nowrap tabular-nums">{selected ? `${selectedOut} of ${COPIES} in river` : `${riverTiles.length} discarded`}</p>
     </div>
   );
   const river = <River tiles={riverTiles} claimable={view.phase === 'claim'} highlight={selected} />;

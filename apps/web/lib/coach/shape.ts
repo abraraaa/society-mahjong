@@ -52,7 +52,7 @@ const SHAPES: Readonly<Record<string, string>> = {
   'karachi.south.dirtyGertiesGarter': '1 to 7 in two suits',
   'karachi.south.knitting': 'seven pairs, each the same number in the same two suits',
   'karachi.south.crochet': 'four trios, each one number in all three suits, plus a pair',
-  'karachi.south.crazyChows': 'four runs, each tile from a different suit, and two loose tiles',
+  'karachi.south.crazyChows': 'four runs, a tile from each suit, same suit order, plus two suit tiles',
 
   'karachi.north.lailas': '1s and 9s pungs in two suits, each dragon, four winds with one paired',
   'karachi.north.easyVirgin': '1-2-3 and 1-1-1 in one suit, each dragon, four winds with one paired',
@@ -157,7 +157,7 @@ export const TITLE_SHAPES: Readonly<Record<string, string>> = {
   'Chow + 5 Honours': 'three runs, one suit or one per suit, plus five winds and dragons',
   'Pung + 5 Honours': 'three pungs, one suit or one per suit, plus five winds and dragons',
   'Numbers Pungs': 'a pung of the same number in each suit, plus five winds and dragons',
-  'Apple Blossom': 'three runs, a white dragon pung and a green dragon pair',
+  'Apple Blossom': 'a run per suit or three across suits, white dragon pung, green pair',
 };
 
 /** A hand's footnote line: the shape every pattern with this title shares, or `TITLE_SHAPES[title]` where they differ. */

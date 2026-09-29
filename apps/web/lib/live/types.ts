@@ -22,10 +22,23 @@ export type RoomStatus = 'lobby' | 'playing' | 'finished';
  * again, leave, or the game is dealt: how the lobby tells someone whose seat
  * was taken from someone who got up (rooms.ts joinRoom's rejoin). It never
  * leaves the server.
+ *
+ * Every entry, a person's or a bot's, may also carry the ids of people who
+ * got up from the lobby and haven't sat down since (`leavers`), until the
+ * game is dealt: how that lobby, left open on another tab, can tell them
+ * they left, rather than guess (seating.ts seatLoss). The app never sends it
+ * to a phone either.
  */
 export type SeatEntry =
-  | { readonly kind: 'human'; readonly userId: string; readonly name: string; readonly since?: string; readonly displaced?: string }
-  | { readonly kind: 'bot'; readonly name: string; readonly heldFor?: string; readonly keptName?: string; readonly kept?: 'left' | 'late' }
+  | { readonly kind: 'human'; readonly userId: string; readonly name: string; readonly since?: string; readonly displaced?: string; readonly leavers?: readonly string[] }
+  | {
+      readonly kind: 'bot';
+      readonly name: string;
+      readonly heldFor?: string;
+      readonly keptName?: string;
+      readonly kept?: 'left' | 'late';
+      readonly leavers?: readonly string[];
+    }
   | null;
 export type Seats = readonly [SeatEntry, SeatEntry, SeatEntry, SeatEntry];
 

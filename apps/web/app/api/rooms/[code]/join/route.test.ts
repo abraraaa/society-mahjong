@@ -276,10 +276,21 @@ describe('POST /api/rooms/[code]/join, the lobby asking by itself (rejoin)', () 
   const lobby = (seats: RoomRow['seats']): RoomRow => ({ ...room, status: 'lobby', current_game_id: null, seats });
 
   it('refuses someone who got up, on another phone or tab, with no note that their seat was taken: nothing written, nothing counted', async () => {
-    db.room = lobby([room.seats[0], b, null, null]);
+    db.room = lobby([room.seats[0], { ...b, leavers: ['u-zara'] }, null, null]);
     const res = await join({ rejoin: true });
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ error: 'you left this table' });
+    expect(store.saveSeats).not.toHaveBeenCalled();
+    expect(events.recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('refuses someone with no note either way without saying they left: nothing written, nothing counted', async () => {
+    db.room = lobby([room.seats[0], b, null, null]);
+    const res = await join({ rejoin: true });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'no seat to give back' });
+    db.room = { ...lobby([room.seats[0], b, { kind: 'bot', name: 'Sana', heldFor: 'u-zara', keptName: 'Zara', kept: 'late' }, null]), status: 'finished' };
+    expect(await (await join({ rejoin: true })).json()).toEqual({ error: 'a bot is keeping your seat' });
     expect(store.saveSeats).not.toHaveBeenCalled();
     expect(events.recordEvent).not.toHaveBeenCalled();
   });

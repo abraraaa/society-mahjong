@@ -201,7 +201,7 @@ describe('who may see and change a profile', () => {
 });
 
 describe('what reads profiles', () => {
-  it('nothing in the schema but the two sign-up triggers and foreign keys touches profiles: no view, function or other policy', () => {
+  it('nothing in the schema but the two sign-up triggers, the one-off backfill and foreign keys touches profiles: no view, function or other policy', () => {
     const allowed = [
       /^create table public\.profiles \(/,
       /^alter table public\.profiles /,
@@ -215,6 +215,9 @@ describe('what reads profiles', () => {
       // Security definer: each writes only the row of the auth user that fired it (new.id).
       /^create or replace function public\.handle_new_user\(\) returns trigger language plpgsql security definer /,
       /^create or replace function public\.handle_user_updated\(\) returns trigger language plpgsql security definer /,
+      // 0006, run once by the migration's owner: a row for each account that has none, as handle_new_user makes it. It
+      // makes nothing a signed-in person can reach, and reads auth.users only for ids with no profile.
+      /^insert into public\.profiles \(id, display_name, is_guest\) select u\.id, .* from auth\.users u where not exists \(select 1 from public\.profiles p where p\.id = u\.id\) on conflict \(id\) do nothing$/,
     ];
     const touching = split(SCHEMA).filter((s) => /\bprofiles\b/.test(s));
     expect(touching.length).toBeGreaterThan(0);

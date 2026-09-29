@@ -118,7 +118,9 @@ const hand = (x: unknown): Shape => fields(x, { progress: typeOf, moves: (v) => 
 const commit = (x: unknown): Shape =>
   fields(x, {
     p_state: typeOf,
-    p_table_state: (v) => fields(v),
+    // The table's bookkeeping is stored whole, so nothing in the database would notice a key the code adds: each part's keys
+    // are pinned here instead.
+    p_table_state: (v) => fields(v, { absence: (a) => each(a, (e) => fields(e)), ready: (r) => fields(r), took: (t) => each(t, (e) => fields(e)), over: (o) => fields(o) }),
     p_claim_deadline: time,
     p_turn_deadline: time,
     p_wake_at: time,

@@ -19,8 +19,11 @@ export interface PlanMark {
   readonly hand: number;
   readonly patternId: string;
   readonly title: string;
-  /** the plan the player last saw on one of their turns, once the title has moved on from it; `toldAt` is the turn view that said so */
-  readonly switched: { readonly fromId: string; readonly fromTitle: string; readonly toldAt: number | null } | null;
+  /**
+   * the plan the player last saw on one of their turns, once the title has moved on from it; `toldAt` is the turn view
+   * that said so, and `heldAt` the turn view whose bubble couldn't (a kong tip), which it waited through
+   */
+  readonly switched: { readonly fromId: string; readonly fromTitle: string; readonly toldAt: number | null; readonly heldAt?: number } | null;
 }
 
 function sameHand(mark: PlanMark, game: string | number, view: PrivatePlayerView): boolean {
@@ -47,8 +50,10 @@ export function isTurnView(view: PrivatePlayerView): boolean {
  * - A new title records the switch from the plan the player last saw on a
  *   turn: while an earlier switch is still untold, its `from` stays, and a
  *   return to that plan clears it, since there's nothing to say.
- * - On a turn view, an untold switch is told there: `toldAt` is its seq. Not on one whose bubble can't say it
- *   (`tells` false, from the coach's `tellsSwitch`: a turn whose tip is a kong), so it waits for the next.
+ * - On a turn view, an untold switch is told there: `toldAt` is its seq. On one whose bubble can't say it (`tells`
+ *   false, from the coach's `tellsSwitch`: a turn whose tip is a kong), it waits, but only through that one view
+ *   (`heldAt`): the next turn view tells it whatever its tip, so a player who keeps turning the kong down still hears
+ *   it, measured against the plan they saw one turn ago rather than many.
  */
 export function nextPlanMark(
   mark: PlanMark | null,
@@ -73,7 +78,12 @@ export function nextPlanMark(
       next = { ...mark, patternId: leader.patternId, title, switched: { fromId: mark.patternId, fromTitle: mark.title, toldAt: null } };
     }
   }
-  if (next?.switched && next.switched.toldAt === null && tells && isTurnView(view)) next = { ...next, switched: { ...next.switched, toldAt: view.seq } };
+  const untold = next?.switched?.toldAt === null ? next.switched : null;
+  if (next && untold && isTurnView(view)) {
+    const waited = untold.heldAt !== undefined && untold.heldAt !== view.seq;
+    if (tells || waited) next = { ...next, switched: { ...untold, toldAt: view.seq } };
+    else if (untold.heldAt === undefined) next = { ...next, switched: { ...untold, heldAt: view.seq } };
+  }
   return next;
 }
 
@@ -81,5 +91,12 @@ export function nextPlanMark(
 export function samePlanMark(a: PlanMark | null, b: PlanMark | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
-  return a.game === b.game && a.hand === b.hand && a.patternId === b.patternId && a.switched?.fromId === b.switched?.fromId && a.switched?.toldAt === b.switched?.toldAt;
+  return (
+    a.game === b.game &&
+    a.hand === b.hand &&
+    a.patternId === b.patternId &&
+    a.switched?.fromId === b.switched?.fromId &&
+    a.switched?.toldAt === b.switched?.toldAt &&
+    a.switched?.heldAt === b.switched?.heldAt
+  );
 }

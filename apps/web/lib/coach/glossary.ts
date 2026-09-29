@@ -110,7 +110,7 @@ export const GLOSSARY: Readonly<Record<Term, TermEntry>> = {
   goulash: {
     label: 'Goulash',
     short: 'four pungs and a pair, no runs',
-    long: 'The Karachi table’s opening hand and the whole of the West round: four pungs (or kongs) and a pair, with no runs anywhere. Honour pungs are only allowed when you hold two of: a dragon pung, the round wind, your own wind.',
+    long: 'The Karachi table’s opening hand and the whole of the West round: four pungs (or kongs) and a pair, with no runs anywhere. Honour pungs only count with two pungs among the dragons, the round wind and your own wind; one pung of a wind that is both is enough.',
     aliases: ['goulash'],
   },
   wall: {
@@ -128,7 +128,7 @@ export const GLOSSARY: Readonly<Record<Term, TermEntry>> = {
   river: {
     label: 'River',
     short: 'the discards, in order',
-    long: 'Every tile thrown away so far, in the order it happened. Reading it tells you which tiles are already gone — tap a tile in your hand to see how many copies are out.',
+    long: 'Every tile thrown away so far, in the order it happened. Reading it tells you which tiles are already gone — tap a tile in your hand to see how many copies are in the river.',
     aliases: ['river'],
   },
   claim: {
@@ -152,7 +152,7 @@ export const GLOSSARY: Readonly<Record<Term, TermEntry>> = {
   dealer: {
     label: 'Dealer',
     short: 'East, who starts the hand',
-    long: 'The player in the East seat. The dealer draws first, and pays and receives double.',
+    long: 'The player in the East seat. The dealer starts with fourteen tiles and discards first, and pays and receives double, except in goulash hands.',
     aliases: ['dealer'],
   },
   roundWind: {

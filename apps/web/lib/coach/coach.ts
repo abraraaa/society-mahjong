@@ -22,6 +22,7 @@ import {
   type Seat,
   type SuitTile,
   type TileKind,
+  type Wind,
 } from '@society/engine';
 import { exchangeStep } from './exchange';
 import { GLOSSARY } from './glossary';
@@ -249,18 +250,43 @@ export interface Reason {
   readonly short: readonly Part[];
 }
 
+const WIND_WORD: Readonly<Record<Wind, string>> = { E: 'East', S: 'South', W: 'West', N: 'North' };
+
+/**
+ * The goulash's honour rule for this seat, exactly (the engine's
+ * karachi.goulashHonours guard): a hand with any wind or dragon pung needs two
+ * points, one for each dragon pung, one for a pung of the round's wind and one
+ * for a pung of the player's own wind. So where the two winds are the same,
+ * that one pung is enough on its own.
+ */
+export function honourGateReason(ctx: MatchCtx): Reason {
+  const round = WIND_WORD[ctx.roundWind];
+  if (ctx.seatWind === ctx.roundWind) {
+    const one = `${ctx.roundWind === 'E' ? 'an' : 'a'} ${round} pung`;
+    return {
+      full: [`honour pungs only count with ${one} or two dragon pungs`],
+      short: [`honour pungs need ${one} or two dragon pungs`],
+    };
+  }
+  const seat = WIND_WORD[ctx.seatWind];
+  return {
+    full: [`honour pungs only count with two pungs among dragons, ${round} and ${seat}`],
+    short: [`honour pungs need two among dragons, ${round} and ${seat}`],
+  };
+}
+
 /**
  * Why this tile is the one to let go: the clause after the bold action, in a
  * full and a short form so a long hand name can't push the action out of the
  * bubble. The commonest reason rotates with the player's own discards, since
  * the same words every turn stop being read.
  */
-function discardReason(analysis: HandAnalysis, goal: CoachGoal, target: CoachTarget | null, concealed: readonly TileKind[], tile: TileKind, r: number): Reason {
+function discardReason(analysis: HandAnalysis, goal: CoachGoal, target: CoachTarget | null, concealed: readonly TileKind[], tile: TileKind, r: number, ctx: MatchCtx): Reason {
   const same = (full: string): Reason => ({ full: [full], short: [full] });
   if (goal.honours === 'forbidden' && isHonourTile(tile)) return { full: ['no wind or dragon fits a hand this round'], short: ['this round has no use for it'] };
   const rating = analysis.ratings.find((x) => x.kind === tile);
   const serves = rating?.serves ?? [];
-  if (goal.honours === 'gated' && isHonourTile(tile) && serves.length === 0) return same('winds and dragons are fussy here');
+  if (goal.honours === 'gated' && isHonourTile(tile) && serves.length === 0) return honourGateReason(ctx);
   const title = target ? named(target.hand) : null;
   if (serves.length === 0 && isLoner(concealed, tile))
     return isHonourTile(tile) ? same("it's on its own") : { full: ["it's on its own, with no neighbours"], short: ["it's on its own"] };
@@ -422,7 +448,9 @@ export function kongTip(input: Pick<CoachInput, 'view' | 'ruleset' | 'analysis' 
 /**
  * Whether the tutor's bubble on this view can tell a plan switch (plan-mark.ts): a turn view (`isTurnView`) whose
  * tip is a discard. A turn whose tip is a kong says K1 and nothing else, so a switch due then waits for the next
- * turn view, the replacement draw's if the player takes the kong. The hook passes this to `nextPlanMark`.
+ * turn view, the replacement draw's if the player takes the kong. It waits no longer than that: if that view's tip is
+ * a kong too (she turned it down, and it's still free), the switch line takes K1's place there. The hook passes this
+ * to `nextPlanMark`.
  */
 export function tellsSwitch(input: Pick<CoachInput, 'view' | 'ruleset' | 'analysis' | 'stage' | 'firstLook'>): boolean {
   return isTurnView(input.view) && kongTip(input) === null;
@@ -680,9 +708,18 @@ function adviceFor(input: CoachInput): CoachState {
   if (action.kind === 'kong') {
     // K1: a kong that costs the hand nothing. Its button is lit, and the Discard button still offers a tile for
     // someone who'd rather not. The round, then a run tile gone past, as on any turn.
-    const say = line(act(`Kong ${tileName(action.tile)}`), ': with four of a kind you draw an extra tile, and it costs your hand nothing.');
+    const lead = act(`Kong ${tileName(action.tile)}`);
     const teach = [...firstTurn, ...(target ? missedRun(view, target, goal, names) : [])];
-    return { ...base, moment, action, say, reason: 'a kong that costs the hand nothing draws an extra tile', highlight, teach };
+    const reason = 'a kong that costs the hand nothing draws an extra tile';
+    // A switch that waited through her last turn, whose bubble was K1, is told here though the tip is a kong again:
+    // K1 has had its turn, so the switch line takes its place, led by the kong.
+    const planSwitch = target ? switchFor(input, spec, target) : null;
+    if (target && planSwitch) {
+      const say = switchLine(lead, target, planSwitch, goal, '', false);
+      return { ...base, moment, action, say, reason, highlight, teach, planSwitch: { from: planSwitch.from, closerBy: planSwitch.closerBy } };
+    }
+    const say = line(lead, ': with four of a kind you draw an extra tile, and it costs your hand nothing.');
+    return { ...base, moment, action, say, reason, highlight, teach };
   }
   if (!target) {
     return { ...base, moment, action, say: [], reason: null, highlight, teach: firstTurn };
@@ -695,29 +732,13 @@ function adviceFor(input: CoachInput): CoachState {
   if (action.kind !== 'discard') {
     return { ...base, moment, action, say: [seg("Every tile's pulling its weight. Pick the one you'd miss least.")], reason: null, highlight, teach };
   }
-  const reason = discardReason(analysis, goal, target, view.concealed, action.tile, myDiscardCount(view));
+  const reason = discardReason(analysis, goal, target, view.concealed, action.tile, myDiscardCount(view), ctxOf(view));
   const lead = act(`Discard ${tileName(action.tile)}`);
   const progress = progressAfter(input, spec, target, action.tile);
   const planSwitch = switchFor(input, spec, target);
   if (planSwitch) {
     // The turn that tells a switch: which hand the tutor moved to, and why, in place of the discard's reason.
-    const to = named(target.hand);
-    const from = named(planSwitch.from);
-    const approximate = target.approximate || planSwitch.approximate;
-    const why: Part[] | null =
-      planSwitch.closerBy === null
-        ? [': ', from, " can't be made now"]
-        : approximate
-          ? null
-          : planSwitch.closerBy > 0
-            ? [`: it's ${planSwitch.closerBy === 1 ? 'a tile' : tilesWord(planSwitch.closerBy)} closer than `, from]
-            : planSwitch.closerBy === 0 && goal.generalTitles.includes(target.title)
-              ? [": it's as close as ", from, ', and easier']
-              : null;
-    const said = (...rest: Part[]) => line(lead, '. Switching to ', to, ...rest);
-    const attempts = [...(why ? [said(...why, `.${progress}`), said(...why, '.')] : []), said(`.${progress}`), said('.')];
-    // K2 goes before anything else is dropped, as it does after a discard's reason.
-    const say = fitting(k2.length > 0 ? [...attempts.map((a) => line(...a, ...k2)), ...attempts] : attempts);
+    const say = switchLine(lead, target, planSwitch, goal, progress, k2.length > 0);
     return {
       ...base,
       moment,
@@ -731,6 +752,39 @@ function adviceFor(input: CoachInput): CoachState {
   }
   const say = discardLine(action.tile, reason, progress, k2.length > 0);
   return { ...base, moment, action, say, reason: textOf(line(...reason.full)), highlight, teach };
+}
+
+/**
+ * S1, S1t or S1g after `lead`, the first that fits of: why with `progress` (a discard's one-tile-to-go clause), why
+ * alone, then S2 with and without `progress`. `lead` is the discard, or the kong when a switch that waited through a
+ * kong turn meets another. With `warnKong`, each is tried with K2 first, before K2 itself is dropped, as after a
+ * discard's reason.
+ */
+function switchLine(
+  lead: CoachSegment,
+  target: CoachTarget,
+  planSwitch: { readonly from: CoachHandRef; readonly closerBy: number | null; readonly approximate: boolean },
+  goal: CoachGoal,
+  progress: string,
+  warnKong: boolean,
+): CoachSegment[] {
+  const to = named(target.hand);
+  const from = named(planSwitch.from);
+  const approximate = target.approximate || planSwitch.approximate;
+  const why: Part[] | null =
+    planSwitch.closerBy === null
+      ? [': ', from, " can't be made now"]
+      : approximate
+        ? null
+        : planSwitch.closerBy > 0
+          ? [`: it's ${planSwitch.closerBy === 1 ? 'a tile' : tilesWord(planSwitch.closerBy)} closer than `, from]
+          : planSwitch.closerBy === 0 && goal.generalTitles.includes(target.title)
+            ? [": it's as close as ", from, ', and easier']
+            : null;
+  const said = (...rest: Part[]) => line(lead, '. Switching to ', to, ...rest);
+  const tails = progress ? [`.${progress}`, '.'] : ['.'];
+  const attempts = [...(why ? tails.map((tail) => said(...why, tail)) : []), ...tails.map((tail) => said(tail))];
+  return fitting(warnKong ? [...attempts.map((a) => line(...a, KONG_SETS_BACK)), ...attempts] : attempts);
 }
 
 /**

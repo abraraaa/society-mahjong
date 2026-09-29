@@ -6,6 +6,7 @@ import {
   analysisBot,
   countOf,
   isDragonTile,
+  isHonourTile,
   isWindTile,
   karachi,
   reduce,
@@ -24,6 +25,7 @@ import {
   claimLine,
   coachFor,
   discardLine,
+  honourGateReason,
   kongTip,
   runNoteApplies,
   runTileFor,
@@ -371,7 +373,7 @@ const BANNED = [/\baway\b/, /coach/i, /\b(is not|cannot|do not|does not|it is|th
 
 describe('hand names, wherever the tutor says them', () => {
   it('names every hand as a tappable hand, keeps within the bubble, and speaks plainly, at every moment of seeded play', { timeout: 120_000 }, () => {
-    const seen = { exchange: 0, claimed: 0, otherWins: 0, washouts: 0, runs: 0 };
+    const seen = { exchange: 0, claimed: 0, otherWins: 0, washouts: 0, runs: 0, gate: 0 };
     for (const [round, progress] of Object.entries(ROUNDS)) {
       const spec = karachi.handSpec(progress);
       const ids = new Set(spec.patterns.map((p) => p.id));
@@ -438,6 +440,15 @@ describe('hand names, wherever the tutor says them', () => {
                   coach.teach.map((x) => `${x.key}:${x.place}`),
                   where,
                 ).toContain('rule:runs:said');
+              // The goulash's honour rule: said exactly, for this seat, and never as a word a newcomer can't act on.
+              expect(textOf(coach.say), where).not.toMatch(/fussy/i);
+              if (coach.reason?.startsWith('honour pungs only count with')) {
+                expect(coach.goal.honours, where).toBe('gated');
+                expect(coach.action.kind === 'discard' && isHonourTile(coach.action.tile), where).toBe(true);
+                const ctx = { seatWind: view.players[view.me].seatWind, roundWind: view.progress.roundWind };
+                expect(coach.reason, where).toBe(honourGateReason(ctx).full.join(''));
+                seen.gate++;
+              }
               const result = view.result;
               if (result?.type === 'win' && result.winner !== view.me) {
                 expect(named, where).toBe(coach.outcome?.hand?.ref);
@@ -458,9 +469,25 @@ describe('hand names, wherever the tutor says them', () => {
     // The corpus has to reach the lines it's checking: X1 and X2 in West, a claim, someone else's win, a washout, a run tile gone past.
     expect(seen.exchange).toBeGreaterThan(0);
     expect(seen.runs).toBeGreaterThan(0);
+    expect(seen.gate).toBeGreaterThan(0);
     expect(seen.claimed).toBeGreaterThan(0);
     expect(seen.otherWins).toBeGreaterThan(0);
     expect(seen.washouts).toBeGreaterThan(0);
+  });
+
+  it("words the goulash's honour rule for the seat, as the engine's guard counts it", () => {
+    // One point per dragon pung, one for a pung of the round's wind, one for a pung of your own: two are needed.
+    expect(honourGateReason({ seatWind: 'S', roundWind: 'E' }).full).toEqual(['honour pungs only count with two pungs among dragons, East and South']);
+    // Where your wind is the round's, that one pung scores both points, so it's enough on its own.
+    expect(honourGateReason({ seatWind: 'E', roundWind: 'E' }).full).toEqual(['honour pungs only count with an East pung or two dragon pungs']);
+    expect(honourGateReason({ seatWind: 'W', roundWind: 'W' }).full).toEqual(['honour pungs only count with a West pung or two dragon pungs']);
+    for (const seatWind of ROUND_WINDS)
+      for (const roundWind of ROUND_WINDS) {
+        const r = honourGateReason({ seatWind, roundWind });
+        // The longest dragon name with the full reason fits the bubble, so the rule is said whole before any progress line.
+        const longest = `Discard Green Dragon: ${r.full.join('')}.`;
+        expect(visibleLength(longest), longest).toBeLessThanOrEqual(SAY_BUDGET);
+      }
   });
 
   it('shows the hand a pung would make, with the pung laid face up', () => {
@@ -954,7 +981,8 @@ describe('a plan that holds steady, and says when it switches', () => {
             }
             seen.switches++;
             expect(view.phase === 'turn' && view.turn === view.me, where).toBe(true);
-            expect(textOf(coach.say), where).toMatch(new RegExp(`^Discard [^.]+\\. Switching to ${coach.target!.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+            // Led by the discard, or by the kong when a switch that waited through a kong turn meets another.
+            expect(textOf(coach.say), where).toMatch(new RegExp(`^(Discard|Kong) [^.]+\\. Switching to ${coach.target!.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
             expect(visibleLength(textOf(coach.say)), where).toBeLessThanOrEqual(SAY_BUDGET);
             expect(coach.planSwitch.from.title, where).not.toBe(coach.target!.title);
             expect(
@@ -1104,7 +1132,7 @@ describe('kongs: advised when they cost the hand nothing, and warned off when th
     expect(tellsSwitch({ view, ruleset: karachi, analysis, stage: 'learning', firstLook: false })).toBe(false);
     // The hook's order: the mark after the view, then the tutor's words on it.
     const onKong = nextPlanMark(before, 'g', view, lead, tellsSwitch({ view, ruleset: karachi, analysis, stage: 'learning', firstLook: false }));
-    expect(onKong?.switched).toEqual({ fromId: other.id, fromTitle: titleOf(other), toldAt: null });
+    expect(onKong?.switched).toEqual({ fromId: other.id, fromTitle: titleOf(other), toldAt: null, heldAt: 5 });
     const kong = coachAt(view, { mark: onKong!, analysis });
     expect(kong.action.kind).toBe('kong');
     expect(kong.planSwitch).toBeNull();
@@ -1123,6 +1151,38 @@ describe('kongs: advised when they cost the hand nothing, and warned off when th
     const next = coachAt(drawn, { mark: told!, analysis: drawnAnalysis });
     expect(next.planSwitch?.from.title).toBe(titleOf(other));
     expect(textOf(next.say)).toMatch(/^Discard [^.]+\. Switching to /);
+  });
+
+  it("tells a switch held back by a kong tip on her next turn though the kong is still the tip: the switch line takes K1's place", () => {
+    // As above, but she turns the kong down and discards, and on her next turn the four 2 Bamboo still cost nothing.
+    const view = kongView('E', 1, free, ['s2']);
+    const analysis = analyseFor(view, karachi);
+    const lead = analysis.candidates[0]!;
+    const other = karachi.handSpec(view.progress).patterns.find((p) => titleOf(p) !== titleOf(lead))!;
+    const before: PlanMark = { game: 'g', hand: view.progress.handIndex, patternId: other.id, title: titleOf(other), switched: null };
+    const tells = (v: PrivatePlayerView, a: ReturnType<typeof analyseFor>) => tellsSwitch({ view: v, ruleset: karachi, analysis: a, stage: 'learning', firstLook: false });
+    const onKong = nextPlanMark(before, 'g', view, lead, tells(view, analysis));
+    expect(textOf(coachAt(view, { mark: onKong!, analysis }).say)).toMatch(/^Kong 2 Bamboo: with four of a kind/);
+    const later = { ...view, seq: 12 } as unknown as PrivatePlayerView;
+    const laterAnalysis = analyseFor(later, karachi, lead.patternId);
+    expect(tells(later, laterAnalysis)).toBe(false);
+    const told = nextPlanMark(onKong, 'g', later, laterAnalysis.candidates[0], tells(later, laterAnalysis));
+    expect(told?.switched?.toldAt).toBe(12);
+    const coach = coachAt(later, { mark: told!, analysis: laterAnalysis });
+    expect(coach.action).toMatchObject({ kind: 'kong', tile: 's2' });
+    expect(coach.highlight).toEqual(['s2']);
+    expect(coach.planSwitch?.from.title).toBe(titleOf(other));
+    expect(textOf(coach.say)).toMatch(new RegExp(`^Kong 2 Bamboo\\. Switching to ${titleOf(lead).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[:.]`));
+    expect(coach.say.filter((x) => x.hand).map((x) => x.hand)).toEqual([coach.target!.hand, coach.planSwitch!.from]);
+    expect(visibleLength(textOf(coach.say))).toBeLessThanOrEqual(SAY_BUDGET);
+    // And only there: her turn after that is K1 again, with nothing more about the switch.
+    const after = { ...view, seq: 18 } as unknown as PrivatePlayerView;
+    const afterAnalysis = analyseFor(after, karachi, lead.patternId);
+    const kept = nextPlanMark(told, 'g', after, afterAnalysis.candidates[0], tells(after, afterAnalysis));
+    expect(kept).toBe(told);
+    const k1 = coachAt(after, { mark: kept!, analysis: afterAnalysis });
+    expect(k1.planSwitch).toBeNull();
+    expect(textOf(k1.say)).toMatch(/^Kong 2 Bamboo: with four of a kind/);
   });
 
   it("keeps a first look's aim, and its tile to let go, with a free kong on offer: a lit Kong with nothing said would only puzzle", () => {
