@@ -5,3 +5,12 @@ packages:
 # Nothing published in the last three days (in minutes) is installed: most hijacked releases are found and pulled
 # within that window. CLAUDE.md, "Dependencies".
 minimumReleaseAge: 4320
+
+# Peers are installed for us, and a peer range that doesn't quite match is a warning rather than a failed install.
+autoInstallPeers: true
+strictPeerDependencies: false
+
+# No dependency runs its install scripts. unrs-resolver's (reached through eslint-config-next) only checks that its
+# prebuilt binary arrived, which the matching optional dependency already brings.
+allowBuilds:
+  unrs-resolver: false

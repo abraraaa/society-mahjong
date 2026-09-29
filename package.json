@@ -1,7 +1,7 @@
 {
   "name": "society-mahjong",
   "private": true,
-  "packageManager": "pnpm@10.33.0",
+  "packageManager": "pnpm@12.7.0",
   "engines": {
     "node": ">=24"
   },
@@ -12,8 +12,5 @@
     "test:e2e": "pnpm --filter @society/web test:e2e",
     "typecheck": "pnpm -r typecheck",
     "lint": "pnpm -r lint"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": []
   }
 }
