@@ -40,7 +40,7 @@ jobs:
           if [ -n "$DB_URL" ]; then echo "ready=yes" >> "$GITHUB_OUTPUT"
           else echo "::notice::No SUPABASE_DB_URL secret yet, so nothing is migrated or deployed from here. Setup: docs/DATA-MODEL.md."; fi
       - if: steps.setup.outputs.ready == 'yes'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - if: steps.setup.outputs.ready == 'yes'
         uses: supabase/setup-cli@v1
         with:
