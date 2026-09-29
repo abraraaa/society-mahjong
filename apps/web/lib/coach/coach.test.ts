@@ -6,6 +6,7 @@ import {
   analysisBot,
   countOf,
   isDragonTile,
+  isHonourTile,
   isWindTile,
   karachi,
   reduce,
@@ -24,6 +25,7 @@ import {
   claimLine,
   coachFor,
   discardLine,
+  HONOUR_GATE_NOTE,
   kongTip,
   runNoteApplies,
   runTileFor,
@@ -371,7 +373,7 @@ const BANNED = [/\baway\b/, /coach/i, /\b(is not|cannot|do not|does not|it is|th
 
 describe('hand names, wherever the tutor says them', () => {
   it('names every hand as a tappable hand, keeps within the bubble, and speaks plainly, at every moment of seeded play', { timeout: 120_000 }, () => {
-    const seen = { exchange: 0, claimed: 0, otherWins: 0, washouts: 0, runs: 0 };
+    const seen = { exchange: 0, claimed: 0, otherWins: 0, washouts: 0, runs: 0, gate: 0 };
     for (const [round, progress] of Object.entries(ROUNDS)) {
       const spec = karachi.handSpec(progress);
       const ids = new Set(spec.patterns.map((p) => p.id));
@@ -438,6 +440,15 @@ describe('hand names, wherever the tutor says them', () => {
                   coach.teach.map((x) => `${x.key}:${x.place}`),
                   where,
                 ).toContain('rule:runs:said');
+              // The goulash's honour rule: said plainly on the line, and exactly in a footnote the line leans on.
+              expect(textOf(coach.say), where).not.toMatch(/fussy/i);
+              const gate = coach.teach.filter((x) => x.key === 'rule:honourGate');
+              if (coach.reason === 'winds and dragons only count this hand if you pung two of them') {
+                expect(coach.goal.honours, where).toBe('gated');
+                expect(coach.action.kind === 'discard' && isHonourTile(coach.action.tile), where).toBe(true);
+                expect(gate, where).toEqual([HONOUR_GATE_NOTE]);
+                seen.gate++;
+              } else expect(gate, where).toEqual([]);
               const result = view.result;
               if (result?.type === 'win' && result.winner !== view.me) {
                 expect(named, where).toBe(coach.outcome?.hand?.ref);
@@ -458,9 +469,16 @@ describe('hand names, wherever the tutor says them', () => {
     // The corpus has to reach the lines it's checking: X1 and X2 in West, a claim, someone else's win, a washout, a run tile gone past.
     expect(seen.exchange).toBeGreaterThan(0);
     expect(seen.runs).toBeGreaterThan(0);
+    expect(seen.gate).toBeGreaterThan(0);
     expect(seen.claimed).toBeGreaterThan(0);
     expect(seen.otherWins).toBeGreaterThan(0);
     expect(seen.washouts).toBeGreaterThan(0);
+  });
+
+  it("words the goulash's honour rule exactly, in a footnote that fits beside another", () => {
+    expect(visibleLength(noteText(HONOUR_GATE_NOTE))).toBeLessThanOrEqual(NOTE_BUDGET);
+    // The engine's guard: two conditions, a dragon pung counting once and a wind pung once each for the round's wind and the player's own.
+    expect(HONOUR_GATE_NOTE.text).toBe("you need two pungs of dragons, the round's wind or your own wind");
   });
 
   it('shows the hand a pung would make, with the pung laid face up', () => {

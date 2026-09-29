@@ -62,7 +62,7 @@ export interface CoachHandRef {
  * what this visit has already been taught.
  */
 export interface CoachTeach {
-  /** 'round:goulash' | 'round:honour' | 'round:noHonour' | 'round:big' | 'rule:runs' | 'rule:flowers' | 'firstLook' | `hand:${title}` | `term:${Term}` */
+  /** 'round:goulash' | 'round:honour' | 'round:noHonour' | 'round:big' | 'rule:runs' | 'rule:flowers' | 'rule:honourGate' | 'firstLook' | `hand:${title}` | `term:${Term}` */
   readonly key: string;
   /** note: draw it as a footnote; said: the bubble or a sheet already says it, so mark it taught and draw nothing */
   readonly place: 'note' | 'said';
