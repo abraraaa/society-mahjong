@@ -543,6 +543,9 @@ test.describe('the tutor at a live table', () => {
     await tiles.nth(lit[2]!).click();
     await sheet.getByRole('button', { name: 'Pass tiles' }).click();
     await expect.poll(() => t.count('act')).toBe(1);
+    // The table's answer has landed once the tutor's glow goes (it's off while she waits). Only then does the wait's
+    // timer start, so the clock is moved on after it, not while the answer may still be on its way.
+    await expect(sheet.locator('button.tile[data-coached="true"]')).toHaveCount(0);
     await page.clock.runFor(700);
     await expect(sheet).toHaveAttribute('data-waiting', 'true');
 

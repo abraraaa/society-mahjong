@@ -5,6 +5,7 @@
     "jsx": "preserve",
     "incremental": true,
     "allowJs": true,
+    "types": ["node"],
     "plugins": [{ "name": "next" }],
     "paths": { "@/*": ["./*"] }
   },

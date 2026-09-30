@@ -14,6 +14,10 @@ pnpm test          # engine tests
 pnpm dev           # web app on http://localhost:3000
 ```
 
+pnpm itself is pinned by `packageManager` in `package.json`: any pnpm from 10 on fetches that version and hands over
+to it. Its settings live in `pnpm-workspace.yaml`, the only place pnpm 11 and later read them from; an `.npmrc` would
+be for registry and auth alone.
+
 ## Licence
 
 Proprietary, all rights reserved. Public on GitHub for development convenience only; see `LICENSE`.
