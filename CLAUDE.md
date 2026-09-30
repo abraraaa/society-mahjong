@@ -18,3 +18,12 @@ keep.
   (`engines` and CI together), pnpm on its current major (`packageManager`).
 - The lockfile stays committed, so an install is reproducible. Stay current by updating it on purpose, not by
   loosening ranges.
+
+### Held back, and what to check before trying again
+- **TypeScript 7** (on 6 until then): typescript-eslint, which eslint-config-next brings in, needs TypeScript's JS
+  API, and 7.0 doesn't have one yet (typescript-eslint #12518, #12521). Next's build and vitest already work with 7,
+  and the code passes the TS 7 checker. When TypeScript ships the API and typescript-eslint's `typescript` peer range
+  includes 7, it's a version bump.
+- **ESLint 10** (on 9 until then): eslint-plugin-react, eslint-plugin-import and eslint-plugin-jsx-a11y don't support
+  it (react crashes on `context.getFilename`), and Next's bundled Babel parser lacks `addGlobals` (vercel/next.js
+  #89764). It needs stable releases of all three plugins and an eslint-config-next that ships an ESLint 10 parser.
