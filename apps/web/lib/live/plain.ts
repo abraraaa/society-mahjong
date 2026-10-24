@@ -36,6 +36,8 @@ const CHECK_CLOSED = 'The security check closed before it finished. Tap Sit down
 const OFFLINE = "We couldn't reach the table. Check your connection and try again.";
 const SLOW = "The table's taking too long to answer. Give it a moment, then try again if nothing's changed.";
 const NO_SETUP = "We couldn't set up that table. Head back to the start and host again.";
+const TUTOR_ANSWERED = 'Your tutor already has your answer from another phone or tab.';
+const TUTOR_RETRY = "That didn't reach us. Tap Just watch or Keep helping again.";
 const FALLBACK = 'Something went wrong at our end. Give it another go.';
 
 /**
@@ -109,6 +111,9 @@ const BY_MESSAGE = new Map<string, string>(
     'a bot already plays that seat': BOT_ALREADY,
     'that player has just played': JUST_PLAYED,
     'sign in first': SIGNED_OUT,
+    // The tutor's offer to just watch, answered twice, or by a request the sheet never sends.
+    'nothing to answer': TUTOR_ANSWERED,
+    'say whether to watch': TUTOR_RETRY,
     'something went wrong': FALLBACK,
     // hCaptcha: the guest closed the puzzle, or left it until it lapsed.
     'challenge-closed': CHECK_CLOSED,

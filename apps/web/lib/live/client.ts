@@ -70,6 +70,10 @@ export const api = {
   leaveRoom: (code: string) => call<RoomSnapshot>(`/api/rooms/${encodeURIComponent(code)}/leave`, { method: 'POST' }),
   /** Take over a bot's seat at the game in play (the take-over screen's offer), or, if the game has ended since, join the room. */
   sit: (code: string, seat: number, name: string) => call<RoomSnapshot>(`/api/rooms/${encodeURIComponent(code)}/sit`, { method: 'POST', body: JSON.stringify({ seat, name }) }),
+  /** the tutor's offer to just watch, read once a hand has been tallied */
+  watchOffer: () => call<{ ask: boolean; wins: number }>('/api/me/tutor'),
+  /** the answer to it: "just watch" (true) or "keep helping" (false) */
+  answerWatch: (watch: boolean) => call<{ stage: string }>('/api/me/tutor', { method: 'POST', body: JSON.stringify({ watch }) }),
 };
 
 /** The channel's own news: SUBSCRIBED each time it joins, including every rejoin after a dropped connection, and CLOSED, TIMED_OUT or CHANNEL_ERROR when it goes. */

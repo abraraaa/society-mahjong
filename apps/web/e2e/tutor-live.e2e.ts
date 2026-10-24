@@ -7,7 +7,9 @@ import { cardCaption } from '../lib/coach/hand-card';
 import { TAUGHT_KEY, handNote, noteText } from '../lib/coach/teach';
 import { isolate, textOf } from '../lib/coach/words';
 import { CLAIM_PASS_MARGIN_MS } from '../lib/live/timing';
+import { plainError } from '../lib/live/plain';
 import type { GameSnapshot } from '../lib/live/snapshot';
+import { WATCH_LINE, watchHeading } from '../lib/coach/stage';
 import { riverOrder } from '../lib/river';
 import { POLL_MS } from '../lib/table-sync';
 import { flush, ok, openTable, pauseClock, tapUntilLifted, type LiveTable } from './live';
@@ -616,6 +618,55 @@ test.describe('the tutor at a live table', () => {
     await expect(sheet.locator('h2')).toContainText('2 of 3');
     await expect(sheet.getByRole('button', { name: 'Pass tiles' })).toBeDisabled();
     await expect(selected).toHaveCount(0);
+    expect(t.pageErrors).toEqual([]);
+  });
+
+  for (const watch of [true, false]) {
+    const answer = watch ? 'Just watch' : 'Keep helping';
+    test(`(l-watch) three wins in, the result sheet asks whether the tutor should just watch, once a hand, and "${answer}" puts it away`, async ({ page }) => {
+      const fx = tutorFixtures();
+      const t = await openTable(page, {
+        view: () => ok(fx.otherWin),
+        tutor: (method) => (method === 'GET' ? { status: 200, body: { ask: true, wins: 3 } } : { status: 200, body: { stage: watch ? 'solid' : 'learning' } }),
+      });
+      const offer = page.locator('.sheet .watch-offer');
+      await expect(offer.locator('h3')).toHaveText(watchHeading(3));
+      await expect(offer.locator('p')).toHaveText(WATCH_LINE.live);
+      // Next hand stays the sheet's lit button; neither answer is pushed.
+      await expect(page.locator('.sheet .btn-primary')).toHaveText('Next hand');
+      await offer.getByRole('button', { name: answer }).click();
+      await expect(offer).toBeHidden();
+      // Asked once for the hand, however often the table is looked at, and answered once.
+      const looks = t.count('view');
+      await expect.poll(() => t.count('view'), { timeout: POLL_MS * 3 }).toBeGreaterThan(looks);
+      expect(t.of('tutor').map((c) => [c.route.request().method(), c.sent ?? null])).toEqual([
+        ['GET', null],
+        ['POST', { watch }],
+      ]);
+      await expect(offer).toBeHidden();
+      expect(t.pageErrors).toEqual([]);
+    });
+  }
+
+  test("(l-watch-fail) an answer that doesn't take says so and leaves the offer up; one already given elsewhere just closes it", async ({ page }) => {
+    const fx = tutorFixtures();
+    let post = 0;
+    const t = await openTable(page, {
+      view: () => ok(fx.otherWin),
+      tutor: (method) =>
+        method === 'GET'
+          ? { status: 200, body: { ask: true, wins: 6 } }
+          : ++post === 1
+            ? { status: 500, body: { error: 'something went wrong' } }
+            : { status: 409, body: { error: 'nothing to answer' } },
+    });
+    const offer = page.locator('.sheet .watch-offer');
+    await expect(offer.locator('h3')).toHaveText(watchHeading(6));
+    await offer.getByRole('button', { name: 'Just watch' }).click();
+    await expect(offer.getByRole('alert')).toHaveText(plainError({ status: 500, message: 'something went wrong' }));
+    await expect(offer.getByRole('button', { name: 'Just watch' })).toBeEnabled();
+    await offer.getByRole('button', { name: 'Just watch' }).click();
+    await expect(offer).toBeHidden();
     expect(t.pageErrors).toEqual([]);
   });
 });

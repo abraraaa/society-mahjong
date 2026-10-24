@@ -288,8 +288,10 @@ Three layers, cheapest first:
    offers a 30-second debrief at the end of each hand. Personality: warm,
    direct, a bit of a Karachi auntie.
 
-Progression: tutor intensity drops as the player wins hands unaided; the app
-notices ("You've won three on your own, want me to just watch?").
+Progression: the app notices three wins and asks ("Three wins. Want me to just
+watch?"), and only a yes quiets the tutor: a win with every tip taken is the
+tutor's win too, so wins alone never decide it. "Keep helping" is asked again
+three wins later.
 
 ### Social
 

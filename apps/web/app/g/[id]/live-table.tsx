@@ -26,6 +26,7 @@ import { useGuestName } from '@/lib/supabase/use-guest-name';
 import { liveStage } from '@/lib/live/level';
 import { claimMsLeft } from '@/lib/live/timing';
 import { useTutorOn } from '@/lib/live/tutor-toggle';
+import { useWatchOffer } from '@/lib/live/watch-offer';
 import { scoresFrom } from '@/lib/ledger';
 import { canDiscard, discardRefusal } from '@/lib/table-flow';
 import { POLL_MS, afterFailedLook, sendMove, shouldPoll, singleFlight, type LookQueue } from '@/lib/table-sync';
@@ -263,6 +264,8 @@ export function LiveTable({ gameId }: { gameId: string }) {
   const stage = view ? liveStage(snap?.stage, view) : 'new';
   // Someone who has just taken a bot's seat over mid-hand gets the round's aim first, until they make a move of their own.
   const coach = useCoach(view && ruleset ? { view, ruleset, stage, names, game: gameId, firstLook: firstLookFor(view, joinedAtOf(snap)) } : null);
+  // The tutor's offer to just watch, on the result sheet of a hand the reader played themselves, with the tutor on.
+  const watchOffer = useWatchOffer(view?.phase === 'finished' && tutorOn && !snap?.mine?.away ? `${gameId}:${view.progress.handIndex}` : null);
 
   // One move at a time: a second tap while one is on its way is ignored.
   // A 409 means the table changed under us. The newer table it carries is
@@ -532,6 +535,7 @@ export function LiveTable({ gameId }: { gameId: string }) {
         seatActions={seatActions}
         awayNote={awayNote}
         wait={wait}
+        watchOffer={watchOffer}
         {...(ending !== undefined ? { endLine: ending } : {})}
       />
       {/* Each question opens on the top layer (ConfirmSheet), over the result sheet or whatever other sheet the table has up. */}

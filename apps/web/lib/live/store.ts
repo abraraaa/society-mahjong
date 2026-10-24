@@ -8,7 +8,7 @@ import { finalPlayers, type LastGameRow } from './final';
 import { commitArgs, type TableWrite } from './hand-log';
 import { presentAtEnd } from './lifecycle';
 import { SEAT_ATTEMPTS, SEEN_REFRESH_MS, seatsBack } from './seating';
-import { stageFromStats, tallyHand, type ProfileStats } from './stage';
+import { answerWatch, asksFromStats, stageFromStats, tallyHand, winsOf, type ProfileStats } from './stage';
 import { NEW_TABLE, parseTableState, tableStateJson, wakeAt, type Absence, type GameOver, type TableState } from './table-state';
 import type { Deadlines, GameEndHow, LiveGame, LoggedMove, RoomStatus, SeatEntry, Seats } from './types';
 import { logError } from './log';
@@ -463,6 +463,29 @@ export async function recordHand(seats: Seats, state: HandState, away: readonly 
       if (e) console.error('recordHand: could not write profile', id, e.message);
     }),
   );
+}
+
+/** The tutor's offer to just watch, for one player: whether it's on, and at how many wins. A player with no profile row is never asked. */
+export async function watchOffer(userId: string): Promise<{ readonly ask: boolean; readonly wins: number }> {
+  const row = must(await db().from('profiles').select('stats').eq('id', userId).maybeSingle(), 'read the tally') as { stats: ProfileStats | null } | null;
+  const stats = row?.stats ?? {};
+  return { ask: asksFromStats(stats), wins: winsOf(stats) };
+}
+
+/**
+ * The player's answer to the offer, written to their tally with the level it
+ * makes. Only while the offer is on: nobody makes themselves `solid` (and the
+ * table's clocks quicker) before three wins. Returns the level, or null when
+ * there was nothing to answer.
+ */
+export async function answerWatchOffer(userId: string, watch: boolean): Promise<CoachStage | null> {
+  const row = must(await db().from('profiles').select('stats').eq('id', userId).maybeSingle(), 'read the tally') as { stats: ProfileStats | null } | null;
+  const stats = row?.stats ?? {};
+  if (!row || !asksFromStats(stats)) return null;
+  const next = answerWatch(stats, watch);
+  const stage = stageFromStats(next);
+  must(await db().from('profiles').update({ stats: next, onboarding_stage: stage }).eq('id', userId), 'save the answer');
+  return stage;
 }
 
 /**

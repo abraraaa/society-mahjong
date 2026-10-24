@@ -31,7 +31,7 @@ export interface ActBody {
 }
 
 export interface Call {
-  readonly kind: 'view' | 'act' | 'tick' | 'end' | 'back' | 'away' | 'join' | 'room' | 'start' | 'sit';
+  readonly kind: 'view' | 'act' | 'tick' | 'end' | 'back' | 'away' | 'join' | 'room' | 'start' | 'sit' | 'tutor';
   /** 1-based, per kind */
   readonly n: number;
   readonly body: ActBody | null;
@@ -51,6 +51,8 @@ export interface GameRoutes {
   readonly away?: (sent: unknown, n: number) => Reply;
   /** taking a bot's seat over from the take-over screen (the room's sit route), with what the page sent; a 500 when the test gives none */
   readonly sit?: (sent: unknown, n: number) => Reply;
+  /** the tutor's offer to just watch: GET reads it (no offer when the test gives none), POST answers it (a 500 when the test gives none) */
+  readonly tutor?: (method: string, sent: unknown, n: number) => Reply;
 }
 
 const b64url = (s: string) => Buffer.from(s).toString('base64url');
@@ -255,6 +257,14 @@ export async function openTable(page: Page, routes: GameRoutes, opts: { holdGame
     const sent = JSON.parse(route.request().postData() ?? 'null') as unknown;
     const call = log('away', route, null, sent);
     const reply = t.routes.away ? t.routes.away(sent, call.n) : { status: 500, body: { error: 'something went wrong' } };
+    if (reply !== 'hold') await answer(route, reply);
+  });
+  await page.route('**/api/me/tutor', async (route) => {
+    const method = route.request().method();
+    const sent = JSON.parse(route.request().postData() ?? 'null') as unknown;
+    const call = log('tutor', route, null, sent);
+    const fallback: Answer = method === 'GET' ? { status: 200, body: { ask: false, wins: 0 } } : { status: 500, body: { error: 'something went wrong' } };
+    const reply = t.routes.tutor ? t.routes.tutor(method, sent, call.n) : fallback;
     if (reply !== 'hold') await answer(route, reply);
   });
 

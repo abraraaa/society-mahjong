@@ -6,7 +6,7 @@ import { SEATS, analysisBot, initialProgress, karachi, nextHand, startHand, view
 import { NO_SCORES, applyResult, type Scores } from '@/lib/ledger';
 import { Table } from '@/components/table';
 import { playFor, refusalMessage, tableFlow, tryReduce, type Refusal } from '@/lib/table-flow';
-import { stageFor } from '@/lib/coach';
+import { WATCH_LINE, asksToWatch, stageFor, watchHeading, type Tally } from '@/lib/coach';
 import { useCoach } from '@/lib/coach/use-coach';
 import { reportBody } from '@/lib/client-errors';
 import { onceOnly } from '@/lib/report-error';
@@ -16,12 +16,8 @@ const ruleset = karachi;
 /** Local flavour only — the engine knows seats, not names. */
 const NAMES: Record<Seat, string> = { 0: 'You', 1: 'Bilal', 2: 'Sana', 3: 'Ayesha' };
 
-/** What the coach has watched this player do, which is how it decides how much to say. */
-interface Progress {
-  readonly handsFinished: number;
-  readonly wins: number;
-  readonly discardsMade: number;
-}
+/** What the coach has watched this player do, and what they told it, which is how it decides how much to say. */
+type Progress = Tally;
 const NO_PROGRESS: Progress = { handsFinished: 0, wins: 0, discardsMade: 0 };
 
 const BOT_SEATS = SEATS.filter((seat) => seat !== ME);
@@ -86,6 +82,18 @@ export function SoloTable({ seed }: { seed: string }) {
   const settled = useMemo(() => (state.phase === 'finished' ? applyResult(scores, state.result) : scores), [state, scores]);
   const over = state.phase === 'finished' && nextHand(state, ruleset) === null;
 
+  // The tutor's offer to step back, on the result sheet: the wins counted with the hand that just ended, which
+  // onNextHand only adds once the sheet is gone.
+  const winsNow = progress.wins + (state.phase === 'finished' && state.result?.type === 'win' && state.result.winner === ME ? 1 : 0);
+  const watchOffer =
+    tutorOn && state.phase === 'finished' && asksToWatch({ ...progress, wins: winsNow })
+      ? {
+          heading: watchHeading(winsNow),
+          line: WATCH_LINE.solo,
+          onAnswer: (watch: boolean) => setProgress((p) => (watch ? { ...p, watching: true } : { ...p, keptHelpingAt: winsNow })),
+        }
+      : null;
+
   const onNextHand = () => {
     // Only a finished hand has a next one; nextHand() throws on any other.
     if (state.phase !== 'finished') return;
@@ -129,6 +137,7 @@ export function SoloTable({ seed }: { seed: string }) {
         scores={settled}
         handsPerRound={ruleset.handsPerRound}
         gameOver={over}
+        watchOffer={watchOffer}
       />
     </>
   );
