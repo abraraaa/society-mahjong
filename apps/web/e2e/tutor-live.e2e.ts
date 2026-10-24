@@ -669,6 +669,29 @@ test.describe('the tutor at a live table', () => {
     await expect(offer).toBeHidden();
     expect(t.pageErrors).toEqual([]);
   });
+
+  test("(l-watch-next) a failed answer's message stays with its hand: the next hand's offer starts clean", async ({ page }) => {
+    const fx = tutorFixtures();
+    const first = fx.otherWin;
+    const view = first.view as PrivatePlayerView;
+    const next: GameSnapshot = { ...first, version: first.version + 1, view: { ...view, progress: { ...view.progress, handIndex: view.progress.handIndex + 1 } } };
+    let table = first;
+    const t = await openTable(page, {
+      view: () => ok(table),
+      tutor: (method) => (method === 'GET' ? { status: 200, body: { ask: true, wins: 3 } } : { status: 500, body: { error: 'something went wrong' } }),
+    });
+    const offer = page.locator('.sheet .watch-offer');
+    await offer.getByRole('button', { name: 'Keep helping' }).click();
+    await expect(offer.getByRole('alert')).toBeVisible();
+
+    // The player lets it be, and the next hand ends: asked again, with nothing left over from the last answer.
+    table = next;
+    await expect.poll(() => t.of('tutor').filter((c) => c.route.request().method() === 'GET').length, { timeout: POLL_MS * 3 }).toBe(2);
+    await expect(offer.locator('h3')).toHaveText(watchHeading(3));
+    await expect(offer.getByRole('alert')).toHaveCount(0);
+    await expect(offer.getByRole('button', { name: 'Just watch' })).toBeEnabled();
+    expect(t.pageErrors).toEqual([]);
+  });
 });
 
 /** Where the exchange sheet's heading and Pass button are on the screen, once the sheet has finished sliding in. */

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { initialProgress, karachi, viewFor } from '@society/engine';
 import { WATCH_EVERY, asksToWatch, stageFor, watchHeading } from './stage';
+import { coachOf, playHand } from './test-games';
 
 describe('stageFor', () => {
   it('walks a newcomer from new to learning', () => {
@@ -42,5 +44,21 @@ describe('watchHeading', () => {
     expect(watchHeading(3)).toBe('Three wins. Want me to just watch?');
     expect(watchHeading(6)).toBe('Six wins. Want me to just watch?');
     expect(watchHeading(12)).toBe('12 wins. Want me to just watch?');
+  });
+});
+
+describe('answering "just watch" on the result sheet', () => {
+  it('leaves the debrief for the hand just played as it was', () => {
+    let checked = 0;
+    for (const seed of ['watch-1', 'watch-2', 'watch-3', 'watch-4', 'watch-5', 'watch-6']) {
+      const end = playHand({ seed, progress: initialProgress });
+      if (end.phase !== 'finished') continue;
+      const view = viewFor(end, karachi, 0);
+      const { stage: _l, ...learning } = coachOf(view, 'learning');
+      const { stage: _s, ...solid } = coachOf(view, 'solid');
+      expect(solid).toEqual(learning);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(3);
   });
 });

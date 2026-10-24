@@ -15,8 +15,9 @@ import { plainError } from './plain';
 export function useWatchOffer(hand: string | null): WatchOffer | null {
   const [asked, setAsked] = useState<{ readonly hand: string; readonly wins: number } | null>(null);
   const [answered, setAnswered] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Both kept with the hand they were for, so a failed answer on one hand isn't still showing when the offer comes back.
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<{ readonly hand: string; readonly text: string } | null>(null);
 
   useEffect(() => {
     if (hand === null) return;
@@ -36,19 +37,19 @@ export function useWatchOffer(hand: string | null): WatchOffer | null {
   return {
     heading: watchHeading(asked.wins),
     line: WATCH_LINE.live,
-    busy,
-    error,
+    busy: busy === hand,
+    error: error?.hand === hand ? error.text : null,
     onAnswer: (watch) => {
-      setBusy(true);
+      setBusy(hand);
       setError(null);
       api.answerWatch(watch).then(
         () => setAnswered(hand),
         (err: unknown) => {
           // Answered already, on another phone or tab: there's nothing left to ask.
           if (err instanceof ApiError && err.status === 409) setAnswered(hand);
-          else setError(plainError(err));
+          else setError({ hand, text: plainError(err) });
         },
-      ).finally(() => setBusy(false));
+      ).finally(() => setBusy(null));
     },
   };
 }
