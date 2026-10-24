@@ -3,7 +3,7 @@
 ## Dependencies: stay current
 
 The policy is to run the newest stable release of everything, so the app can use what's new in each: the framework,
-React, Supabase, motion, the toolchain, the CI actions, Node and pnpm. Being behind is a defect to fix, not a state to
+React, Supabase, the toolchain, the CI actions, Node and pnpm. Being behind is a defect to fix, not a state to
 keep.
 
 - **Stable releases only.** No canary, beta, rc or next tags in what ships.
