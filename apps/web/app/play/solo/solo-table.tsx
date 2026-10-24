@@ -82,11 +82,12 @@ export function SoloTable({ seed }: { seed: string }) {
   const settled = useMemo(() => (state.phase === 'finished' ? applyResult(scores, state.result) : scores), [state, scores]);
   const over = state.phase === 'finished' && nextHand(state, ruleset) === null;
 
-  // The tutor's offer to step back, on the result sheet: the wins counted with the hand that just ended, which
-  // onNextHand only adds once the sheet is gone.
-  const winsNow = progress.wins + (state.phase === 'finished' && state.result?.type === 'win' && state.result.winner === ME ? 1 : 0);
+  // The tutor's offer to step back, on the result sheet of a hand the player won: the wins counted with that one,
+  // which onNextHand only adds once the sheet is gone. Let be, it asks again at their next win.
+  const wonThisHand = state.phase === 'finished' && state.result?.type === 'win' && state.result.winner === ME;
+  const winsNow = progress.wins + (wonThisHand ? 1 : 0);
   const watchOffer =
-    tutorOn && state.phase === 'finished' && asksToWatch({ ...progress, wins: winsNow })
+    tutorOn && wonThisHand && asksToWatch({ ...progress, wins: winsNow })
       ? {
           heading: watchHeading(winsNow),
           line: WATCH_LINE.solo,

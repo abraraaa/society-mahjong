@@ -30,7 +30,11 @@ export function stageFor({ handsFinished, discardsMade, watching }: Tally): Coac
   return 'new';
 }
 
-/** Whether the tutor should offer to just watch: three wins in, and three more after each "keep helping". */
+/**
+ * Whether the tutor should offer to just watch: three wins in, and three more
+ * after each "keep helping". The tables ask only on the result sheet of a hand
+ * the player won, so an offer let be comes back at their next win, not every hand.
+ */
 export function asksToWatch({ wins, watching, keptHelpingAt }: Pick<Tally, 'wins' | 'watching' | 'keptHelpingAt'>): boolean {
   if (watching) return false;
   return wins >= (keptHelpingAt ?? 0) + WATCH_EVERY;

@@ -6,11 +6,11 @@ import { ApiError, api } from './client';
 import { plainError } from './plain';
 
 /**
- * The tutor's offer to just watch at a live table, asked once a hand: `hand`
- * names the finished hand the result sheet is showing (null while there isn't
- * one, or it isn't the reader's to answer). The server tallies a hand before
- * it answers the move that ended it, so asking when the sheet comes up sees
- * that hand's win. A failed read says nothing: the next hand asks again.
+ * The tutor's offer to just watch at a live table, asked on the result sheet
+ * of a hand the reader won: `hand` names that hand (null on any other sheet,
+ * or none). The server tallies a hand before it answers the move that ended
+ * it, so asking when the sheet comes up sees that hand's win. A failed read,
+ * or an offer let be, says nothing more: their next win asks again.
  */
 export function useWatchOffer(hand: string | null): WatchOffer | null {
   const [asked, setAsked] = useState<{ readonly hand: string; readonly wins: number } | null>(null);

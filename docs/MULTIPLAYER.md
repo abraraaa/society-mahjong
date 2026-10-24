@@ -322,9 +322,10 @@ countdown from frightening anyone:
    The level is worked out from `profiles.stats`, which the server tallies
    at the end of every hand for each human seat (`hands`, `wins`), on the
    solo table's thresholds: one finished hand is `learning`. Wins alone never
-   make `solid`: from three wins the result sheet asks "want me to just
-   watch?", and only the player's yes (`watch`) does it. "Keep helping"
-   (`keptHelpingAt`) is asked again three wins on (`lib/coach/stage.ts`,
+   make `solid`: from three wins, the result sheet of a hand they win asks
+   "want me to just watch?", and only the player's yes (`watch`) does it. Let
+   be, it asks at their next win; "keep helping" (`keptHelpingAt`) waits three
+   wins (`lib/coach/stage.ts`,
    `lib/live/stage.ts`, `/api/me/tutor`). `onboarding_stage` is written alongside
    as a mirror for anything else that reads the profile; the timers do not
    read it, so a stage nothing advanced cannot pin the clocks.

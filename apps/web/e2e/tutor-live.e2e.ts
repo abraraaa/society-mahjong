@@ -626,7 +626,7 @@ test.describe('the tutor at a live table', () => {
     test(`(l-watch) three wins in, the result sheet asks whether the tutor should just watch, once a hand, and "${answer}" puts it away`, async ({ page }) => {
       const fx = tutorFixtures();
       const t = await openTable(page, {
-        view: () => ok(fx.otherWin),
+        view: () => ok(fx.winClaim.won),
         tutor: (method) => (method === 'GET' ? { status: 200, body: { ask: true, wins: 3 } } : { status: 200, body: { stage: watch ? 'solid' : 'learning' } }),
       });
       const offer = page.locator('.sheet .watch-offer');
@@ -648,11 +648,25 @@ test.describe('the tutor at a live table', () => {
     });
   }
 
+  test("(l-watch-theirs) on the sheet of a hand someone else won, nothing is asked, however many wins the player has", async ({ page }) => {
+    const fx = tutorFixtures();
+    const t = await openTable(page, {
+      view: () => ok(fx.otherWin),
+      tutor: (method) => (method === 'GET' ? { status: 200, body: { ask: true, wins: 5 } } : { status: 200, body: { stage: 'solid' } }),
+    });
+    await expect(page.locator('.sheet h2')).toBeVisible();
+    const looks = t.count('view');
+    await expect.poll(() => t.count('view'), { timeout: POLL_MS * 3 }).toBeGreaterThan(looks);
+    await expect(page.locator('.sheet .watch-offer')).toHaveCount(0);
+    expect(t.of('tutor')).toEqual([]);
+    expect(t.pageErrors).toEqual([]);
+  });
+
   test("(l-watch-fail) an answer that doesn't take says so and leaves the offer up; one already given elsewhere just closes it", async ({ page }) => {
     const fx = tutorFixtures();
     let post = 0;
     const t = await openTable(page, {
-      view: () => ok(fx.otherWin),
+      view: () => ok(fx.winClaim.won),
       tutor: (method) =>
         method === 'GET'
           ? { status: 200, body: { ask: true, wins: 6 } }
@@ -670,9 +684,9 @@ test.describe('the tutor at a live table', () => {
     expect(t.pageErrors).toEqual([]);
   });
 
-  test("(l-watch-next) a failed answer's message stays with its hand: the next hand's offer starts clean", async ({ page }) => {
+  test("(l-watch-next) a failed answer's message stays with its hand: the next win's offer starts clean", async ({ page }) => {
     const fx = tutorFixtures();
-    const first = fx.otherWin;
+    const first = fx.winClaim.won;
     const view = first.view as PrivatePlayerView;
     const next: GameSnapshot = { ...first, version: first.version + 1, view: { ...view, progress: { ...view.progress, handIndex: view.progress.handIndex + 1 } } };
     let table = first;
@@ -684,7 +698,7 @@ test.describe('the tutor at a live table', () => {
     await offer.getByRole('button', { name: 'Keep helping' }).click();
     await expect(offer.getByRole('alert')).toBeVisible();
 
-    // The player lets it be, and the next hand ends: asked again, with nothing left over from the last answer.
+    // The player lets it be, and wins again: asked again, with nothing left over from the last answer.
     table = next;
     await expect.poll(() => t.of('tutor').filter((c) => c.route.request().method() === 'GET').length, { timeout: POLL_MS * 3 }).toBe(2);
     await expect(offer.locator('h3')).toHaveText(watchHeading(3));

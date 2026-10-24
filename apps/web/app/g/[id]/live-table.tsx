@@ -264,8 +264,9 @@ export function LiveTable({ gameId }: { gameId: string }) {
   const stage = view ? liveStage(snap?.stage, view) : 'new';
   // Someone who has just taken a bot's seat over mid-hand gets the round's aim first, until they make a move of their own.
   const coach = useCoach(view && ruleset ? { view, ruleset, stage, names, game: gameId, firstLook: firstLookFor(view, joinedAtOf(snap)) } : null);
-  // The tutor's offer to just watch, on the result sheet of a hand the reader played themselves, with the tutor on.
-  const watchOffer = useWatchOffer(view?.phase === 'finished' && tutorOn && !snap?.mine?.away ? `${gameId}:${view.progress.handIndex}` : null);
+  // The tutor's offer to just watch, on the result sheet of a hand the reader won themselves, with the tutor on.
+  const wonThisHand = view?.phase === 'finished' && view.result?.type === 'win' && view.result.winner === view.me;
+  const watchOffer = useWatchOffer(wonThisHand && tutorOn && !snap?.mine?.away ? `${gameId}:${view.progress.handIndex}` : null);
 
   // One move at a time: a second tap while one is on its way is ignored.
   // A 409 means the table changed under us. The newer table it carries is
