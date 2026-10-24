@@ -24,6 +24,9 @@ const nextConfig: NextConfig = {
   transpilePackages: ['@society/engine'],
   reactStrictMode: true,
   poweredByHeader: false,
+  // Nothing uses next/image: tiles and icons are plain files. Off, /_next/image answers 404, so a flaw in the image
+  // optimiser (two this October, one an RCE through SVGs) has nothing to reach.
+  images: { unoptimized: true },
   headers: async () => [
     { source: '/(.*)', headers: SECURITY_HEADERS },
     { source: '/tiles/:path*', headers: IMMUTABLE },
