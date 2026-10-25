@@ -96,7 +96,7 @@ Safari being killed.
 | Data + auth + realtime | **Supabase** (Postgres, Auth, Realtime Broadcast/Presence) | One vendor covers all three. Neon would need Ably/Pusher and Auth.js bolted on |
 | Rules engine | Pure TypeScript package `packages/engine`, zero deps | Runs on server (authoritative) and in the browser (instant legality hints, optimistic UI) |
 | Styling | Tailwind v4 + CSS custom properties for tokens | Same approach as the workout app |
-| Motion | Motion (framer-motion) | Tile dealing, claims, wins deserve real choreography |
+| Motion | CSS transitions today; Motion (framer-motion) added back with the first animation CSS can't do | Tile dealing, claims, wins deserve real choreography |
 | State (client) | Zustand store fed by realtime events + engine reducer | Small, testable, no Redux ceremony |
 | Tutor LLM | Claude via Vercel AI SDK, grounded in engine analysis | Only for "why" and debriefs; never decides legality |
 | Testing | Vitest for engine (property tests on hand validation), Playwright for table flows | Engine correctness is the product |
