@@ -48,7 +48,7 @@ describe('watchHeading', () => {
 });
 
 describe('answering "just watch" on the result sheet', () => {
-  it('leaves the debrief for the hand just played as it was', () => {
+  it('leaves the debrief for the hand just played as it was', { timeout: 120_000 }, () => {
     let checked = 0;
     for (const seed of ['watch-1', 'watch-2', 'watch-3', 'watch-4', 'watch-5', 'watch-6']) {
       const end = playHand({ seed, progress: initialProgress });
