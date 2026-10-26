@@ -43,5 +43,5 @@ keep.
   rules would ride on JS plugins that are still alpha. Revisit when any of these happens: an advisory lands against
   ESLint 9 or a plugin it loads (`pnpm audit` shows it; ESLint 9 itself won't get a fix); Oxlint's JS plugins
   leave alpha; either hold above is still in place at the next major of Next.js. Biome can't run the React
-  Compiler rules, so it isn't the alternative. TypeScript 7.1 (in beta) gives the JS API its stable paths; typescript-eslint still has to
-  adopt it, and a beta doesn't ship here.
+  Compiler rules, so it isn't the alternative. TypeScript 7.1 (in beta) gives the JS API its stable paths;
+  typescript-eslint still has to adopt it, and a beta doesn't ship here.
