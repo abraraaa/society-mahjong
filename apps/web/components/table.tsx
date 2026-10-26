@@ -94,6 +94,19 @@ export interface TableProps {
   readonly onEndGame?: () => void;
   /** the wait for the next hand at a live table: what Next hand says, the line under it, and whether the reader has tapped it already (then it can't be again) */
   readonly wait?: { readonly button: string; readonly line: string | null; readonly ready: boolean } | null;
+  /** the tutor's offer to just watch, on the result sheet, from three wins on (coach/stage.ts asksToWatch) */
+  readonly watchOffer?: WatchOffer | null;
+}
+
+/** The tutor offering to step back: what it says, and what each answer does. */
+export interface WatchOffer {
+  readonly heading: string;
+  readonly line: string;
+  readonly onAnswer: (watch: boolean) => void;
+  /** the answer is on its way */
+  readonly busy?: boolean;
+  /** the answer didn't take, in the player's words */
+  readonly error?: string | null;
 }
 
 /** Under this much time left, the clock turns brass and pulses. */
@@ -142,6 +155,7 @@ function TableInner({
   endLine,
   onEndGame,
   wait,
+  watchOffer,
 }: TableProps) {
   const ME = view.me;
   const openTerm = useOpenTerm();
@@ -504,6 +518,7 @@ function TableInner({
           endLine={endLine}
           onEndGame={gameOver ? undefined : onEndGame}
           wait={gameOver ? null : wait}
+          watchOffer={watchOffer}
         />
       )}
 
@@ -639,6 +654,34 @@ function ExchangeSheet({
 }
 
 /**
+ * The tutor offering to step back. Neither answer is the lit one: Next hand
+ * is the sheet's button, and the player owes the tutor nothing.
+ */
+function WatchOfferCard({ offer }: { offer: WatchOffer }) {
+  return (
+    <section className="watch-offer mt-4" aria-labelledby="watch-offer-heading">
+      <h3 id="watch-offer-heading" className="font-display text-base">
+        {offer.heading}
+      </h3>
+      <p className="text-ivory-200/70 mt-1 text-sm">{offer.line}</p>
+      <div className="mt-3 flex gap-2">
+        <button className="btn btn-ghost flex-1" disabled={offer.busy} onClick={() => offer.onAnswer(true)}>
+          Just watch
+        </button>
+        <button className="btn btn-ghost flex-1" disabled={offer.busy} onClick={() => offer.onAnswer(false)}>
+          Keep helping
+        </button>
+      </div>
+      {offer.error && (
+        <p className="text-ivory-200/70 mt-2 text-sm" role="alert">
+          {offer.error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/**
  * The debrief. A beginner learns more here than anywhere else in the hand, so it
  * shows the winning tiles laid out, names the hand the way players name it —
  * never the engine's pattern id — and says what it cost or paid. When the game
@@ -659,6 +702,7 @@ function ResultSheet({
   endLine,
   onEndGame,
   wait,
+  watchOffer,
 }: {
   coach: CoachState;
   lesson: Lesson | null;
@@ -673,6 +717,7 @@ function ResultSheet({
   endLine?: string | undefined;
   onEndGame?: (() => void) | undefined;
   wait?: TableProps['wait'];
+  watchOffer?: WatchOffer | null | undefined;
 }) {
   const outcome = coach.outcome;
   const deltas = handDeltas(view.result);
@@ -705,6 +750,7 @@ function ResultSheet({
               <CoachLine say={coach.say} origin="result" />
             </p>
             <CoachNotes coach={coach} lesson={lesson} where="sheet" />
+            {watchOffer && <WatchOfferCard offer={watchOffer} />}
           </>
         )}
         {gameOver ? (

@@ -742,6 +742,14 @@ h3 {
   width: 100%;
 }
 
+/* The tutor's offer to just watch, on the result sheet */
+.watch-offer {
+  padding: 14px 16px 16px;
+  border: 1px solid rgb(251 247 238 / 0.12);
+  border-radius: var(--radius-card);
+  background: rgb(251 247 238 / 0.04);
+}
+
 /* Chips / labels */
 .eyebrow {
   font: 500 12px var(--font-sans);

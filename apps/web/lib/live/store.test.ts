@@ -82,6 +82,8 @@ import {
   stagesBySeat,
   startGame,
   touchMember,
+  answerWatchOffer,
+  watchOffer,
   type RoomRow,
 } from './store';
 import { commitArgs, type TableWrite } from './hand-log';
@@ -272,7 +274,7 @@ describe('reads', () => {
   it("give each seat its own player's level, matching the rows to the seats by id whatever order they come back in", async () => {
     const mixed: Seats = [{ kind: 'bot', name: 'Bilal' }, { kind: 'human', userId: 'u-abrar', name: 'Abrar' }, null, { kind: 'human', userId: 'u-hana', name: 'Hana' }];
     answerAll(undefined, () => [
-      { id: 'u-hana', stats: { hands: 30, wins: 4 } },
+      { id: 'u-hana', stats: { hands: 30, wins: 4, watch: true } },
       { id: 'u-abrar', stats: { hands: 2, wins: 0 } },
     ]);
     expect(await stagesBySeat(mixed)).toEqual([null, 'learning', null, 'solid']);
@@ -963,6 +965,69 @@ describe('after a hand ends', () => {
     ];
     await recordHand(bots, wonHand);
     expect(supabase.log).toHaveLength(0);
+  });
+
+  it('keeps the answer to the tutor’s offer when it tallies the next hand', async () => {
+    answerAll(undefined, (q) => (q.target === 'profiles' && q.steps[0]?.[0] === 'select' ? [{ id: 'u-abrar', stats: { hands: 9, wins: 3, watch: true } }] : null));
+    await recordHand(seats, wonHand, [false, true, true, true]);
+    const tallies = supabase.log.filter(is('profiles', 'update')).map((q) => q.steps[0]![1][0]);
+    expect(tallies).toEqual([{ stats: { hands: 10, wins: 3, watch: true }, onboarding_stage: 'solid' }]);
+  });
+});
+
+describe('the tutor’s offer to just watch', () => {
+  const tally = (stats: unknown) => answerAll(undefined, (q) => (q.target === 'profiles' && q.steps[0]?.[0] === 'select' ? (stats === undefined ? null : { stats }) : null));
+
+  it('reads the offer from the player’s own tally', async () => {
+    tally({ hands: 9, wins: 3 });
+    expect(await watchOffer('u-abrar')).toEqual({ ask: true, wins: 3 });
+    expect(supabase.log[0]!.steps).toEqual([
+      ['select', ['stats']],
+      ['eq', ['id', 'u-abrar']],
+      ['maybeSingle', []],
+    ]);
+    tally({ hands: 9, wins: 2 });
+    expect(await watchOffer('u-abrar')).toEqual({ ask: false, wins: 2 });
+    tally(undefined);
+    expect(await watchOffer('u-abrar')).toEqual({ ask: false, wins: 0 });
+  });
+
+  it('writes "just watch" with the level it makes', async () => {
+    tally({ hands: 9, wins: 3 });
+    expect(await answerWatchOffer('u-abrar', true)).toBe('solid');
+    expect(ran()).toEqual(['profiles:select', 'profiles:update']);
+    const write = supabase.log.find(is('profiles', 'update'))!;
+    expect(write.steps).toEqual([
+      ['update', [{ stats: { hands: 9, wins: 3, watch: true }, onboarding_stage: 'solid' }]],
+      ['eq', ['id', 'u-abrar']],
+    ]);
+  });
+
+  it('writes "keep helping" with the wins it was said at', async () => {
+    tally({ hands: 9, wins: 3 });
+    expect(await answerWatchOffer('u-abrar', false)).toBe('learning');
+    const write = supabase.log.find(is('profiles', 'update'))!;
+    expect(write.steps[0]).toEqual(['update', [{ stats: { hands: 9, wins: 3, keptHelpingAt: 3 }, onboarding_stage: 'learning' }]]);
+  });
+
+  it('writes nothing when there is no offer to answer: nobody makes themselves solid early', async () => {
+    for (const stats of [{ hands: 9, wins: 2 }, { hands: 9, wins: 3, watch: true }, { hands: 9, wins: 4, keptHelpingAt: 3 }]) {
+      supabase.log.length = 0;
+      tally(stats);
+      expect(await answerWatchOffer('u-abrar', true)).toBeNull();
+      expect(ran()).toEqual(['profiles:select']);
+    }
+    supabase.log.length = 0;
+    tally(undefined);
+    expect(await answerWatchOffer('u-abrar', true)).toBeNull();
+    expect(ran()).toEqual(['profiles:select']);
+  });
+
+  it('throws when the tally cannot be read or written, so the sheet can say it didn’t take', async () => {
+    answerAll(is('profiles', 'select'));
+    await expect(watchOffer('u-abrar')).rejects.toBeInstanceOf(SupabaseError);
+    answerAll(is('profiles', 'update'), (q) => (q.steps[0]?.[0] === 'select' ? { stats: { hands: 9, wins: 3 } } : null));
+    await expect(answerWatchOffer('u-abrar', true)).rejects.toBeInstanceOf(SupabaseError);
   });
 });
 
