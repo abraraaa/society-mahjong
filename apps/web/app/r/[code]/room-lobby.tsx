@@ -39,6 +39,8 @@ export function RoomLobby({ code }: { code: string }) {
   const [starting, setStarting] = useState(false);
   // How sending the link went, when the button should say so: copied, a tap the phone didn't count, or no way to send.
   const [shareNote, setShareNote] = useState<'copied' | 'again' | 'failed' | null>(null);
+  // The share sheet failed in a way another go won't mend: from then on the button copies the link instead.
+  const skipShareRef = useRef(false);
   // Taking a bot's seat over is on its way, and why it didn't work if it didn't.
   const [taking, setTaking] = useState(false);
   const [takeError, setTakeError] = useState<string | null>(null);
@@ -197,9 +199,11 @@ export function RoomLobby({ code }: { code: string }) {
   }
 
   const share = async () => {
-    const outcome = await shareLink(navigator, { title: 'Mahjong?', text: `Join my table: ${code}`, url: `${window.location.origin}/r/${code}` });
-    // Shared or dismissed: the button goes back to its own words.
-    setShareNote(outcome === 'shared' || outcome === 'cancelled' ? null : outcome);
+    const data = { title: 'Mahjong?', text: `Join my table: ${code}`, url: `${window.location.origin}/r/${code}` };
+    const outcome = await shareLink(navigator, data, { skipShare: skipShareRef.current });
+    if (outcome === 'copyNext') skipShareRef.current = true;
+    // Shared or dismissed: the button goes back to its own words. A sheet that failed asks for the tap that copies.
+    setShareNote(outcome === 'shared' || outcome === 'cancelled' ? null : outcome === 'copyNext' ? 'again' : outcome);
   };
 
   const leave = async () => {

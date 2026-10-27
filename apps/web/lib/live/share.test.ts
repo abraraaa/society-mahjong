@@ -29,13 +29,28 @@ describe('shareLink', () => {
     expect(writeText).not.toHaveBeenCalled();
   });
 
-  it('copies the link when the sheet fails for any other reason, or will not take it', async () => {
+  it('asks for another tap when the sheet fails after using this one up, and that tap copies without trying the sheet', async () => {
     const writeText = vi.fn(async () => {});
-    expect(await shareLink({ share: () => refused('DataError'), clipboard: { writeText } }, DATA)).toBe('copied');
+    const share = vi.fn(() => refused('DataError'));
+    const nav: ShareNavigator = { share, clipboard: { writeText } };
+    // The sheet took the tap (Web Share consumes user activation) before failing, so the clipboard isn't tried on it.
+    expect(await shareLink(nav, DATA)).toBe('copyNext');
+    expect(writeText).not.toHaveBeenCalled();
+    expect(await shareLink(nav, DATA, { skipShare: true })).toBe('copied');
+    expect(share).toHaveBeenCalledTimes(1);
     expect(writeText).toHaveBeenCalledWith(DATA.url);
+  });
+
+  it('gives up when the sheet fails that way on a phone with no clipboard to fall back on', async () => {
+    expect(await shareLink({ share: () => refused('TypeError') }, DATA)).toBe('failed');
+  });
+
+  it('copies straight away when the sheet says up front it will not take the link, which leaves the tap unused', async () => {
+    const writeText = vi.fn(async () => {});
     const share = vi.fn(async () => {});
     expect(await shareLink({ share, canShare: () => false, clipboard: { writeText } }, DATA)).toBe('copied');
     expect(share).not.toHaveBeenCalled();
+    expect(writeText).toHaveBeenCalledWith(DATA.url);
   });
 
   it('copies the link on a phone with no share sheet', async () => {

@@ -47,6 +47,13 @@ export function RoomWaiting({
     );
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-between gap-8 px-6 pt-[84px] pb-10">
+      {/* How sending the link went, said aloud: VoiceOver doesn't read a focused button's new name. Always present, so the
+          change is announced. */}
+      {onShare && (
+        <p className="sr-only" role="status">
+          {shareNote ? SHARE[shareNote] : ''}
+        </p>
+      )}
       <div className="flex flex-col gap-7">
         <div className="flex flex-col gap-2">
           <p className="eyebrow">Room code</p>

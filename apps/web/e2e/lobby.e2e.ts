@@ -112,6 +112,8 @@ test.describe('sending the link', () => {
     await page.getByRole('button', { name: SHARE.button }).click();
     const again = page.getByRole('button', { name: SHARE.again });
     await expect(again).toBeVisible();
+    // Said aloud too: a screen reader doesn't read out the button's new name.
+    await expect(page.getByRole('status')).toHaveText(SHARE.again);
     await again.click();
     await expect(page.getByRole('button', { name: SHARE.button })).toBeVisible();
     const shared = await page.evaluate(() => (window as unknown as { shared: { url: string; text: string }[] }).shared);
@@ -133,6 +135,31 @@ test.describe('sending the link', () => {
     expect(lobby.pageErrors).toEqual([]);
   });
 
+  test('(e) a share sheet that won’t take the link asks for another tap, which copies it, and the sheet isn’t tried again', async ({ page }) => {
+    await page.addInitScript(() => {
+      const w = window as unknown as { shares: number; copied: string[] };
+      w.shares = 0;
+      w.copied = [];
+      Object.defineProperty(navigator, 'canShare', { configurable: true, value: () => true });
+      Object.defineProperty(navigator, 'share', { configurable: true, value: () => (w.shares++, Promise.reject(new TypeError('cannot share that'))) });
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: (text: string) => (w.copied.push(text), Promise.resolve()) },
+      });
+    });
+    const lobby = await openLobby(page, { join: () => room(fresh()) });
+    await page.getByRole('button', { name: SHARE.button }).click();
+    await page.getByRole('button', { name: SHARE.again }).click();
+    await expect(page.getByRole('button', { name: SHARE.copied })).toBeVisible();
+    const seen = await page.evaluate(() => {
+      const w = window as unknown as { shares: number; copied: string[] };
+      return { shares: w.shares, copied: w.copied };
+    });
+    expect(seen.shares).toBe(1);
+    expect(seen.copied).toEqual([expect.stringMatching(new RegExp(`/r/${ROOM_CODE}$`))]);
+    expect(lobby.pageErrors).toEqual([]);
+  });
+
   test('(e) a phone with no share sheet copies the link and says so', async ({ page }) => {
     await page.addInitScript(() => {
       const w = window as unknown as { copied: string[] };
@@ -146,6 +173,7 @@ test.describe('sending the link', () => {
     const lobby = await openLobby(page, { join: () => room(fresh()) });
     await page.getByRole('button', { name: SHARE.button }).click();
     await expect(page.getByRole('button', { name: SHARE.copied })).toBeVisible();
+    await expect(page.getByRole('status')).toHaveText(SHARE.copied);
     const copied = await page.evaluate(() => (window as unknown as { copied: string[] }).copied);
     expect(copied).toEqual([expect.stringMatching(new RegExp(`/r/${ROOM_CODE}$`))]);
     expect(lobby.pageErrors).toEqual([]);
