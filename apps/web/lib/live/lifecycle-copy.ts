@@ -211,9 +211,14 @@ export const NO_SEAT_OVER = {
   link: 'Back to the room',
 } as const satisfies { heading: string; line: string; link: string };
 
-/** The lobby's invitation: a line, and a button that shares the link, or copies it where a phone can't share. */
+/**
+ * The lobby's invitation: a line, and a button that shares the link, or copies it where a phone can't share. The
+ * button then says how that went (share.ts): the link copied, a tap the phone didn't count, or neither possible.
+ */
 export const SHARE = {
   line: 'Send your friends the link, or read them the code.',
   button: 'Send link',
   copied: 'Link copied',
-} as const satisfies { line: string; button: string; copied: string };
+  again: 'Tap again to send',
+  failed: 'Read them the code instead',
+} as const satisfies { line: string; button: string; copied: string; again: string; failed: string };

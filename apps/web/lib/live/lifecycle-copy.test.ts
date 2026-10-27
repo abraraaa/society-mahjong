@@ -233,8 +233,14 @@ describe('the lobby', () => {
     { kind: 'human', name: 'Zara' },
   ] as const;
 
-  it('invites with a line and a button that says when the link went to the clipboard', () => {
-    expect(SHARE).toEqual({ line: 'Send your friends the link, or read them the code.', button: 'Send link', copied: 'Link copied' });
+  it('invites with a line and a button that says how sending the link went', () => {
+    expect(SHARE).toEqual({
+      line: 'Send your friends the link, or read them the code.',
+      button: 'Send link',
+      copied: 'Link copied',
+      again: 'Tap again to send',
+      failed: 'Read them the code instead',
+    });
   });
 
   it('labels the host’s button by the bots that will sit down, counting empty seats, bots and anyone not here yet', () => {
