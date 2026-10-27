@@ -9,6 +9,7 @@ import { Trouble, Waiting } from '@/components/trouble';
 import { retryCanHelp } from '@/lib/front-door';
 import { ApiError, api, listen, type RoomSnapshot } from '@/lib/live/client';
 import { joinRetryLabel, joinTroubleTitle, plainError } from '@/lib/live/plain';
+import { shareLink } from '@/lib/live/share';
 import { NeedsCaptcha, ensureSession } from '@/lib/supabase/session';
 import { useGuestName } from '@/lib/supabase/use-guest-name';
 
@@ -36,8 +37,8 @@ export function RoomLobby({ code }: { code: string }) {
   const [troubleTitle, setTroubleTitle] = useState<string | undefined>(undefined);
   const [attempt, setAttempt] = useState(0);
   const [starting, setStarting] = useState(false);
-  // The link went to the clipboard, on a phone with no share sheet: the button says so.
-  const [copied, setCopied] = useState(false);
+  // How sending the link went, when the button should say so: copied, a tap the phone didn't count, or no way to send.
+  const [shareNote, setShareNote] = useState<'copied' | 'again' | 'failed' | null>(null);
   // Taking a bot's seat over is on its way, and why it didn't work if it didn't.
   const [taking, setTaking] = useState(false);
   const [takeError, setTakeError] = useState<string | null>(null);
@@ -196,16 +197,9 @@ export function RoomLobby({ code }: { code: string }) {
   }
 
   const share = async () => {
-    const url = `${window.location.origin}/r/${code}`;
-    try {
-      if (navigator.share) await navigator.share({ title: 'Mahjong?', text: `Join my table: ${code}`, url });
-      else {
-        await navigator.clipboard.writeText(url);
-        setCopied(true);
-      }
-    } catch {
-      // the user dismissed the share sheet
-    }
+    const outcome = await shareLink(navigator, { title: 'Mahjong?', text: `Join my table: ${code}`, url: `${window.location.origin}/r/${code}` });
+    // Shared or dismissed: the button goes back to its own words.
+    setShareNote(outcome === 'shared' || outcome === 'cancelled' ? null : outcome);
   };
 
   const leave = async () => {
@@ -242,7 +236,7 @@ export function RoomLobby({ code }: { code: string }) {
       onLeave={leave}
       starting={starting}
       error={error}
-      copied={copied}
+      shareNote={shareNote}
       onStart={start}
       onShare={share}
     />

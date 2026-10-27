@@ -16,7 +16,7 @@ export function RoomWaiting({
   ruleset,
   starting,
   error,
-  copied,
+  shareNote,
   onStart,
   onShare,
   onLeave,
@@ -25,15 +25,15 @@ export function RoomWaiting({
   ruleset: string;
   starting?: boolean;
   error?: string | null;
-  /** the link went to the clipboard (a phone that can't share): the button says so */
-  copied?: boolean;
+  /** how sending the link went, when the button should say so (share.ts): copied, tap again, or read them the code */
+  shareNote?: 'copied' | 'again' | 'failed' | null;
   onStart?: () => void;
   onShare?: () => void;
   onLeave?: () => void;
 }) {
   // Before the first game, with a seat still empty, sending the link is the thing to do; Start steps back until it's needed.
   const shareFirst = room.status === 'lobby' && room.seats.some((s) => s === null);
-  const shareLabel = copied ? SHARE.copied : SHARE.button;
+  const shareLabel = shareNote ? SHARE[shareNote] : SHARE.button;
   const last = room.lastGame ?? null;
   const lastLine =
     last &&

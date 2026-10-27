@@ -6,7 +6,7 @@ import { joinTroubleTitle, plainError } from '../lib/live/plain';
 import type { RoomSnapshot } from '../lib/live/snapshot';
 import { fixtures } from './fixtures';
 import { GAME_ID, USER_NAME } from './fixtures';
-import { flush, openLobby, pauseClock, room } from './live';
+import { ROOM_CODE, flush, openLobby, pauseClock, room } from './live';
 
 /**
  * The lobby between games: who's here and who isn't yet, how the last game
@@ -84,6 +84,70 @@ test.describe('the lobby between games', () => {
     await expect(start).toHaveClass(/btn-ghost/);
     await expect(page.getByText('Last game', { exact: true })).toHaveCount(0);
     await expect(page.getByText(NOT_HERE_HINT)).toHaveCount(0);
+    expect(lobby.pageErrors).toEqual([]);
+  });
+});
+
+test.describe('sending the link', () => {
+  /** Before the first game, with seats still empty: the link is the lobby's first button. */
+  function fresh(): RoomSnapshot {
+    const { lobbyAgain } = fixtures();
+    return { ...lobbyAgain, status: 'lobby', gameId: null, lastGame: null, seats: [lobbyAgain.seats[0]!, null, null, null] };
+  }
+
+  test("(e) a tap the phone didn't count (iOS 27.0 and 27.1) asks for another, and the next one sends the link", async ({ page }) => {
+    await page.addInitScript(() => {
+      const w = window as unknown as { shared: unknown[] };
+      w.shared = [];
+      Object.defineProperty(navigator, 'canShare', { configurable: true, value: () => true });
+      Object.defineProperty(navigator, 'share', {
+        configurable: true,
+        value: (data: unknown) => {
+          w.shared.push(data);
+          return w.shared.length === 1 ? Promise.reject(new DOMException('not allowed', 'NotAllowedError')) : Promise.resolve();
+        },
+      });
+    });
+    const lobby = await openLobby(page, { join: () => room(fresh()) });
+    await page.getByRole('button', { name: SHARE.button }).click();
+    const again = page.getByRole('button', { name: SHARE.again });
+    await expect(again).toBeVisible();
+    await again.click();
+    await expect(page.getByRole('button', { name: SHARE.button })).toBeVisible();
+    const shared = await page.evaluate(() => (window as unknown as { shared: { url: string; text: string }[] }).shared);
+    expect(shared).toHaveLength(2);
+    expect(shared[1]!.url).toMatch(new RegExp(`/r/${ROOM_CODE}$`));
+    expect(shared[1]!.text).toBe(`Join my table: ${ROOM_CODE}`);
+    expect(lobby.pageErrors).toEqual([]);
+  });
+
+  test('(e) a dismissed share sheet leaves the button as it was', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'share', { configurable: true, value: () => Promise.reject(new DOMException('dismissed', 'AbortError')) });
+    });
+    const lobby = await openLobby(page, { join: () => room(fresh()) });
+    const button = page.getByRole('button', { name: SHARE.button });
+    await button.click();
+    await flush(page);
+    await expect(button).toBeVisible();
+    expect(lobby.pageErrors).toEqual([]);
+  });
+
+  test('(e) a phone with no share sheet copies the link and says so', async ({ page }) => {
+    await page.addInitScript(() => {
+      const w = window as unknown as { copied: string[] };
+      w.copied = [];
+      Object.defineProperty(navigator, 'share', { configurable: true, value: undefined });
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: (text: string) => (w.copied.push(text), Promise.resolve()) },
+      });
+    });
+    const lobby = await openLobby(page, { join: () => room(fresh()) });
+    await page.getByRole('button', { name: SHARE.button }).click();
+    await expect(page.getByRole('button', { name: SHARE.copied })).toBeVisible();
+    const copied = await page.evaluate(() => (window as unknown as { copied: string[] }).copied);
+    expect(copied).toEqual([expect.stringMatching(new RegExp(`/r/${ROOM_CODE}$`))]);
     expect(lobby.pageErrors).toEqual([]);
   });
 });
