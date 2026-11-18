@@ -26,7 +26,8 @@ vi.mock('../../../../../lib/live/store', () => ({
   gameById: vi.fn(async () => db.game),
   liveMeta: vi.fn(async () => db.meta),
   finishGame: vi.fn(async () => {}),
-  saveSeats: vi.fn(async () => '2026-09-24T00:06:00Z'),
+  // Relative stamp so a joined room's updated_at never ages past ROOM_OPEN_MS.
+  saveSeats: vi.fn(async () => new Date().toISOString()),
   roomMembers: vi.fn(async () => db.members),
   touchMember: vi.fn(async () => true),
   lastGameOf: vi.fn(async () => db.lastGame),
