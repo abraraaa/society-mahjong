@@ -26,7 +26,10 @@ vi.mock('./store', () => ({
   liveMeta: vi.fn(async () => db.meta),
   followSeat: vi.fn(async () => {}),
   gameById: vi.fn(async () => db.game),
-  saveSeats: vi.fn(async () => '2026-09-24T00:00:01Z'),
+  // Fresh stamp each call: leaveRoom writes this into updated_at, and a later
+  // joinRoom asks isClosedRoom (ROOM_OPEN_MS). A fixed calendar day ages past
+  // the six-week window and turns a 409 "you left" into a 410 "closed".
+  saveSeats: vi.fn(async () => new Date().toISOString()),
   roomMembers: vi.fn(async () => db.members),
   lastGameOf: vi.fn(async () => db.current),
   lastFinishedGame: vi.fn(async () => db.lastFinished),
